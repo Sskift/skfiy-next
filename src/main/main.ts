@@ -224,6 +224,7 @@ import { readTaskRecoveryPathStatus } from "./task-recovery-stage-runtime.js";
 import { createStopTaskEventDecision } from "./main-stop-task.js";
 import { createSmokeAssistantAgentTaskTurn } from "./main-smoke-assistant-turn.js";
 import {
+  createTaskEvent,
   readTurnReplayTaskEvent,
   withRouteTaskEventMetadata,
   type ComputerUseTaskEvent,
@@ -1465,17 +1466,27 @@ async function continueComputerUseTask({
         }
 
         turnReplayStore.recordComputerUseEvent(taskEvent);
-        dispatchComputerUseTaskEvent({
-          actionApproved,
-          chromeSubmitApproved,
-          command,
-          finderPlanApproved,
-          mode,
-          route,
-          taskEvent,
-          toolIdentity,
-          window
-        });
+        try {
+          dispatchComputerUseTaskEvent({
+            actionApproved,
+            chromeSubmitApproved,
+            command,
+            finderPlanApproved,
+            mode,
+            route,
+            taskEvent,
+            toolIdentity,
+            window
+          });
+        } catch (error) {
+          // The task-control phase machine can reject late events (e.g. a
+          // second approval gate after side effects began). Fall back to a
+          // plain task event so the renderer still sees the outcome.
+          emitTaskEvent(window, withRouteTaskEventMetadata(
+            createTaskEvent(taskEvent, mode),
+            route
+          ));
+        }
       }
       return;
     }

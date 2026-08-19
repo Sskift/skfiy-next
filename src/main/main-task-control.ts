@@ -8,7 +8,8 @@ import {
   type TaskControlSnapshot
 } from "../shared/task-control.js";
 import {
-  createTaskControlStore
+  createTaskControlStore,
+  TaskControlStoreError
 } from "./task-control-store.js";
 import type { AssistantComputerUseToolIdentity } from "./assistant-computer-use-executor.js";
 import type { ComputerUseTaskEvent, TaskEvent } from "./task-event-view.js";
@@ -71,16 +72,30 @@ export function advanceComputerUseTaskControl({
 
   const requestedPhase = readActiveTaskControlPhase(event);
   const phase = preserveForwardPhase(current, requestedPhase);
-  return store.transition({
-    executionId,
-    phase,
-    message: readTaskControlEventMessage(event, current),
-    sideEffectState: sideEffectState ?? current.sideEffectState,
-    ...(phase === "approval" && approval ? { approval } : {}),
-    replayAvailable: current.replayAvailable
-      || phase === "executing"
-      || phase === "verifying"
-  });
+  try {
+    return store.transition({
+      executionId,
+      phase,
+      message: readTaskControlEventMessage(event, current),
+      sideEffectState: sideEffectState ?? current.sideEffectState,
+      ...(phase === "approval" && approval ? { approval } : {}),
+      replayAvailable: current.replayAvailable
+        || phase === "executing"
+        || phase === "verifying"
+    });
+  } catch (error) {
+    // A second approval gate (e.g. Chrome action-plan after app-policy
+    // approval) can arrive while the store is already executing with
+    // possible side effects. The phase machine rejects executing→approval
+    // in that state — keep the current snapshot and let the event flow.
+    if (
+      error instanceof TaskControlStoreError
+      && error.code === "invalid-transition"
+    ) {
+      return current;
+    }
+    throw error;
+  }
 }
 
 export function decorateTaskEventWithTaskControl(

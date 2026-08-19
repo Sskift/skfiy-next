@@ -815,24 +815,89 @@ async function createCdpClient(webSocketDebuggerUrl) {
 
 async function runChromeProductCommand(cdp, command, options) {
   const startIndex = cdp.events.length;
-  await cdp.send("Runtime.evaluate", {
+
+  // Fire the command without awaiting — Chrome tasks require a second
+  // approval (action-plan gate) after the app-policy gate, and awaiting
+  // the runCommand promise would deadlock against that approval.
+  cdp.send("Runtime.evaluate", {
     expression:
       `window.skfiy.runCommand(${JSON.stringify(command)}, { mode: "active" })`,
+    awaitPromise: false,
+    returnByValue: true
+  }).catch(() => undefined);
+
+  // Wait for the first approval gate (app policy) or terminal state.
+  await waitForNewEvent(cdp, startIndex, options.timeoutMs,
+    (event) => event.status === "approval_required" || isTerminalStatus(event.status));
+
+  let cursor = cdp.events.length;
+  if (cdp.events.at(-1)?.status === "approval_required") {
+    await approveCurrentTask(cdp);
+  }
+
+  // Wait for the Chrome action-plan approval (second gate) or completion.
+  await waitForNewEvent(cdp, cursor, options.timeoutMs,
+    (event) => event.status === "approval_required"
+      || event.status === "needs_confirmation"
+      || isTerminalStatus(event.status));
+
+  // Chrome action-plan approval (second gate).
+  if (cdp.events.at(-1)?.status === "approval_required") {
+    await approveCurrentTask(cdp);
+    cursor = cdp.events.length;
+    await waitForNewEvent(cdp, cursor, options.timeoutMs,
+      (event) => event.status === "needs_confirmation" || isTerminalStatus(event.status));
+  }
+
+  // Chrome submit confirmation (form fills).
+  if (cdp.events.at(-1)?.status === "needs_confirmation") {
+    await approveCurrentTask(cdp);
+    cursor = cdp.events.length;
+    await waitForNewEvent(cdp, cursor, options.timeoutMs,
+      (event) => isTerminalStatus(event.status));
+  }
+
+  return cdp.events.slice(startIndex);
+}
+
+function isTerminalStatus(status) {
+  return status === "completed"
+    || status === "failed"
+    || status === "needs_confirmation"
+    || status === "idle"
+    || status === "denied"
+    || status === "blocked"
+    || status === "cancelled";
+}
+
+async function waitForNewEvent(cdp, startIndex, timeoutMs, predicate) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cdp.events.slice(startIndex).some(predicate)) {
+      return;
+    }
+    await sleep(250);
+  }
+}
+
+async function approveCurrentTask(cdp) {
+  const taskControl = await cdp.send("Runtime.evaluate", {
+    expression: "window.skfiy.getTaskControl()",
     awaitPromise: true,
     returnByValue: true
   });
-  await sleep(options.settleMs);
-
-  if (cdp.events.at(-1)?.status === "approval_required") {
-    await cdp.send("Runtime.evaluate", {
-      expression: "window.skfiy.approveTask()",
-      awaitPromise: true,
-      returnByValue: true
-    });
+  const snapshot = taskControl.result?.value;
+  if (!snapshot?.executionId || !snapshot.plan?.planId) {
+    return;
   }
-
-  await waitForTerminalTaskEvent(cdp, options.timeoutMs);
-  return cdp.events.slice(startIndex);
+  await cdp.send("Runtime.evaluate", {
+    expression: `window.skfiy.approveTask(${JSON.stringify({
+      executionId: snapshot.executionId,
+      planId: snapshot.plan.planId
+    })})`,
+    awaitPromise: true,
+    returnByValue: true
+  });
 }
 
 function installEventSinkExpression() {
@@ -850,24 +915,6 @@ function installEventSinkExpression() {
 
     return true;
   })()`;
-}
-
-async function waitForTerminalTaskEvent(cdp, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const status = cdp.events.at(-1)?.status;
-    if (
-      status === "completed"
-      || status === "failed"
-      || status === "needs_confirmation"
-      || status === "idle"
-    ) {
-      return;
-    }
-
-    await sleep(250);
-  }
 }
 
 function extractCompletedChromeText(events) {
