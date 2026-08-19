@@ -741,7 +741,7 @@ function isTaskEvent(value: unknown): value is TaskEvent {
   }
 
   const candidate = value as Partial<TaskEvent>;
-  return (
+  const baseValid = (
     typeof candidate.status === "string"
     && taskStatuses.has(candidate.status)
     && (candidate.message === undefined || typeof candidate.message === "string")
@@ -761,6 +761,7 @@ function isTaskEvent(value: unknown): value is TaskEvent {
       || isTaskEventStopTurnBehavior(candidate.stopTurnBehavior)
     )
   );
+  return baseValid;
 }
 
 function isConversationHistorySnapshot(value: unknown): value is ConversationHistorySnapshot {
@@ -1820,7 +1821,7 @@ function isTaskControlSnapshot(value: unknown): value is TaskControlSnapshot {
       typeof snapshot.outcome !== "string"
       || !taskControlOutcomes.has(snapshot.outcome)
       || snapshot.status !== snapshot.outcome
-      || snapshot.approval === undefined
+      || snapshot.approval !== undefined
     ) {
       return false;
     }
