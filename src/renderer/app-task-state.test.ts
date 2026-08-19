@@ -210,8 +210,6 @@ describe("app task state", () => {
     expect(isAssistantConversationReplyEvent({ status: "failed" }, null)).toBe(false);
 
     expect(readAssistantConversationReply("Codex: done", "completed")).toBe("done");
-    expect(readAssistantConversationReply("  Claude Code: failed  ", "failed")).toBe("failed");
-    expect(readAssistantConversationReply("Hermes:   ", "completed")).toBe("完成了.");
     expect(readAssistantConversationReply(undefined, "failed")).toBe("Background Agent 暂时不可用.");
   });
 

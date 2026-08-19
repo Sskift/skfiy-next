@@ -123,16 +123,7 @@ describe("CLI product smoke script", () => {
       ...passedEvidence,
       realTurnIdentityContract: {
         ...createPassingRealTurnIdentityContract(),
-        providers: createPassingRealTurnIdentityContract().providers.map((provider) => provider.mode === "claude-code"
-          ? { ...provider, identityChannel: "query-prompt" }
-          : provider)
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      realTurnIdentityContract: {
-        ...createPassingRealTurnIdentityContract(),
-        providers: createPassingRealTurnIdentityContract().providers.map((provider) => provider.mode === "hermes"
+        providers: createPassingRealTurnIdentityContract().providers.map((provider) => provider.mode === "codex"
           ? { ...provider, runnerSawSkfiyIdentity: false }
           : provider)
       }
@@ -141,7 +132,7 @@ describe("CLI product smoke script", () => {
       ...passedEvidence,
       providerPromptContract: {
         ...createPassingProviderPromptContract(),
-        providers: createPassingProviderPromptContract().providers.map((provider) => provider.mode === "hermes"
+        providers: createPassingProviderPromptContract().providers.map((provider) => provider.mode === "codex"
           ? { ...provider, providerIdentityInternalized: false }
           : provider)
       }
@@ -168,7 +159,7 @@ describe("CLI product smoke script", () => {
       ...passedEvidence,
       realTurnIdentityContract: {
         ...createPassingRealTurnIdentityContract(),
-        providers: createPassingRealTurnIdentityContract().providers.map((provider) => provider.mode === "claude-code"
+        providers: createPassingRealTurnIdentityContract().providers.map((provider) => provider.mode === "codex"
           ? { ...provider, replyPrefixBlocked: false }
           : provider)
       }
@@ -177,7 +168,7 @@ describe("CLI product smoke script", () => {
       ...passedEvidence,
       providerPromptContract: {
         ...createPassingProviderPromptContract(),
-        providers: createPassingProviderPromptContract().providers.map((provider) => provider.mode === "hermes"
+        providers: createPassingProviderPromptContract().providers.map((provider) => provider.mode === "codex"
           ? { ...provider, sessionRecallBeforeBrowserContext: false }
           : provider)
       }
@@ -204,7 +195,7 @@ describe("CLI product smoke script", () => {
       ...passedEvidence,
       providerPromptContract: {
         ...createPassingProviderPromptContract(),
-        providers: createPassingProviderPromptContract().providers.map((provider) => provider.mode === "hermes"
+        providers: createPassingProviderPromptContract().providers.map((provider) => provider.mode === "codex"
           ? { ...provider, personalSkillBeforeWorkingProfile: false }
           : provider)
       }
@@ -270,55 +261,6 @@ function createPassingProviderPromptContract() {
         usesReadOnlySandbox: true,
         rejectsDirectDesktopControl: true,
         dangerousFlagsAbsent: true
-      },
-      {
-        mode: "claude-code",
-        label: "Claude Code",
-        commandBasename: "claude",
-        skfiyIdentityBeforeUser: true,
-        memoryBeforeBrowserContext: true,
-        sessionRecallAfterMemory: true,
-        sessionRecallBeforeBrowserContext: true,
-        sessionRecallBasisPresent: true,
-        workingProfileBeforeBrowserContext: true,
-        workingProfileBeforeUser: true,
-        personalSkillBeforeWorkingProfile: true,
-        workingProfileRedactsToken: true,
-        sessionRecallRedactsToken: true,
-        browserContextBeforeUser: true,
-        providerIdentityInternalized: true,
-        identitySelfAcceptancePresent: true,
-        providerDefaultOverridePresent: true,
-        replyPrefixBlocked: true,
-        providerBoundaryPresent: true,
-        usesSystemIdentityPrompt: true,
-        disallowsMutatingTools: true,
-        rejectsDirectDesktopControl: true,
-        dangerousFlagsAbsent: true
-      },
-      {
-        mode: "hermes",
-        label: "Hermes",
-        commandBasename: "hermes",
-        skfiyIdentityBeforeUser: true,
-        memoryBeforeBrowserContext: true,
-        sessionRecallAfterMemory: true,
-        sessionRecallBeforeBrowserContext: true,
-        sessionRecallBasisPresent: true,
-        workingProfileBeforeBrowserContext: true,
-        workingProfileBeforeUser: true,
-        personalSkillBeforeWorkingProfile: true,
-        workingProfileRedactsToken: true,
-        sessionRecallRedactsToken: true,
-        browserContextBeforeUser: true,
-        providerIdentityInternalized: true,
-        identitySelfAcceptancePresent: true,
-        providerDefaultOverridePresent: true,
-        replyPrefixBlocked: true,
-        providerBoundaryPresent: true,
-        usesBoundedChatToolset: true,
-        rejectsDirectDesktopControl: true,
-        dangerousFlagsAbsent: true
       }
     ]
   };
@@ -343,36 +285,6 @@ function createPassingRealTurnIdentityContract() {
         providerDefaultOverridePresent: true,
         replyPrefixBlocked: true,
         responseProviderLabel: "Codex",
-        responseMessage: "我是 skfiy。"
-      },
-      {
-        mode: "claude-code",
-        label: "Claude Code",
-        commandBasename: "claude",
-        status: "completed",
-        identityChannel: "system-prompt",
-        runnerSawSkfiyIdentity: true,
-        runnerSawUserPrompt: true,
-        userPromptHasNoDuplicateIdentity: true,
-        providerBoundaryPresent: true,
-        providerDefaultOverridePresent: true,
-        replyPrefixBlocked: true,
-        responseProviderLabel: "Claude Code",
-        responseMessage: "我是 skfiy。"
-      },
-      {
-        mode: "hermes",
-        label: "Hermes",
-        commandBasename: "hermes",
-        status: "completed",
-        identityChannel: "query-prompt",
-        runnerSawSkfiyIdentity: true,
-        runnerSawUserPrompt: true,
-        skfiyIdentityBeforeUser: true,
-        providerBoundaryPresent: true,
-        providerDefaultOverridePresent: true,
-        replyPrefixBlocked: true,
-        responseProviderLabel: "Hermes",
         responseMessage: "我是 skfiy。"
       }
     ]

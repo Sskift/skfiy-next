@@ -39,12 +39,12 @@ describe("app view model", () => {
     expect(getAssistantInputPanelViewModel({
       input: "organize Downloads",
       provider: {
-        label: "Claude Code",
+        label: "Codex",
         readiness: "unavailable"
       },
       submitting: false
     })).toEqual({
-      statusLabel: "Claude Code · unavailable",
+      statusLabel: "Codex · unavailable",
       submitDisabled: false,
       submitLabel: "发送"
     });
@@ -207,21 +207,19 @@ describe("app view model", () => {
     const fallbackProvider = { id: "codex", label: "Codex" };
     const providers = [
       fallbackProvider,
-      { id: "claude-code", label: "Claude Code" },
-      { id: "hermes", label: "Hermes", selected: true }
+      { id: "codex", label: "Codex", selected: true }
     ];
 
-    expect(readSelectedAssistantAgentProvider(providers, "claude-code", fallbackProvider))
-      .toEqual({ id: "hermes", label: "Hermes", selected: true });
-    expect(readSelectedAssistantAgentProvider(providers.slice(0, 2), "claude-code", fallbackProvider))
-      .toEqual({ id: "claude-code", label: "Claude Code" });
-    expect(readSelectedAssistantAgentProvider(providers.slice(0, 1), "hermes", fallbackProvider))
+    expect(readSelectedAssistantAgentProvider(providers, "codex", fallbackProvider))
+      .toEqual({ id: "codex", label: "Codex", selected: true });
+    expect(readSelectedAssistantAgentProvider(providers.slice(0, 1), "codex", fallbackProvider))
+      .toBe(fallbackProvider);
+    expect(readSelectedAssistantAgentProvider([], "codex", fallbackProvider))
       .toBe(fallbackProvider);
   });
 
   it("derives the app root view model from renderer state", () => {
     const fallbackProvider = { id: "codex", label: "Codex" };
-    const claudeProvider = { id: "claude-code", label: "Claude Code" };
     const startupWarning = {
       title: "Launch warning",
       message: "Started outside bundle"
@@ -229,8 +227,8 @@ describe("app view model", () => {
 
     expect(getAppRootViewModel({
       assistantAgentSettings: {
-        providers: [fallbackProvider, claudeProvider],
-        settings: { mode: "claude-code" }
+        providers: [fallbackProvider],
+        settings: { mode: "codex" }
       },
       fallbackAssistantAgentProvider: fallbackProvider,
       panelState: {
@@ -255,7 +253,7 @@ describe("app view model", () => {
         { key: "accessibility", settingsTarget: "accessibility", label: "辅助功能" }
       ],
       petState: "idle",
-      selectedAssistantAgentProvider: claudeProvider,
+      selectedAssistantAgentProvider: fallbackProvider,
       startupWarning,
       status: {
         label: "Idle",
@@ -271,16 +269,11 @@ describe("app view model", () => {
       label: "Codex",
       readiness: "chat-ready" as const
     };
-    const claudeProvider = {
-      id: "claude-code",
-      label: "Claude Code",
-      readiness: "unavailable" as const
-    };
 
     expect(getAppShellViewModel({
       assistantAgentSettings: {
-        providers: [fallbackProvider, claudeProvider],
-        settings: { mode: "claude-code" }
+        providers: [fallbackProvider],
+        settings: { mode: "codex" }
       },
       assistantInput: "organize Downloads",
       assistantInputSubmitting: false,
@@ -307,7 +300,7 @@ describe("app view model", () => {
       taskStatus: "idle"
     })).toMatchObject({
       assistantInputPanel: {
-        statusLabel: "Claude Code · unavailable",
+        statusLabel: "Codex · chat ready",
         submitDisabled: false,
         submitLabel: "发送"
       },
@@ -347,7 +340,7 @@ describe("app view model", () => {
         settingsHeading: "External CUA",
         showExternalStatus: true
       },
-      selectedAssistantAgentProvider: claudeProvider,
+      selectedAssistantAgentProvider: fallbackProvider,
       status: {
         label: "Idle",
         message: "待命中.",

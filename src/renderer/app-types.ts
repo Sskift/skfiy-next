@@ -35,7 +35,7 @@ export type PermissionSettingsTarget =
   | "accessibility";
 export type StartupWarningId = "tmux-launch" | "dev-server" | "unbundled-electron";
 export type AppPolicy = "allow" | "ask" | "deny";
-export type AssistantAgentMode = "codex" | "claude-code" | "hermes";
+export type AssistantAgentMode = "codex";
 export type AssistantAgentProviderReadiness =
   | "chat-ready"
   | "version-ok"
@@ -71,10 +71,6 @@ export interface AssistantAgentSettings {
   mode: AssistantAgentMode;
   codexBinary: string;
   codexBinarySource: "default" | "env";
-  claudeCodeBinary: string;
-  claudeCodeBinarySource: "default" | "env";
-  hermesBinary: string;
-  hermesBinarySource: "default" | "env";
   cwd: string;
   timeoutMs: number;
 }
@@ -82,7 +78,7 @@ export interface AssistantAgentSettings {
 export interface AssistantAgentProviderState {
   provider: "assistant";
   id: AssistantAgentMode;
-  label: "Codex" | "Claude Code" | "Hermes";
+  label: "Codex";
   selected: boolean;
   configured: boolean;
   executablePath?: string;

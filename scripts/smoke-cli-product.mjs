@@ -91,7 +91,7 @@ async function collectProviderPromptContract() {
       createdAt: "2026-07-07T00:05:00.000Z",
       userInput: "我喜欢 Obsidian 风格 dashboard，token sk-provider-contract-secret-123456 不要泄漏",
       assistantReply: "我会使用知识图谱、backlinks 和深色画布。",
-      providerLabel: "Hermes",
+      providerLabel: "Codex",
       browserContext: {
         url: "https://example.test/skfiy-provider-contract",
         title: "skfiy provider contract"
@@ -104,38 +104,12 @@ async function collectProviderPromptContract() {
       mode: "codex",
       codexBinary: "codex",
       codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: ROOT_DIR,
-      timeoutMs: 45_000
-    }, userInput, browserPageContext, personalMemory, recalledSessions),
-    createProviderPromptContract(buildAssistantAgentInvocation, {
-      mode: "claude-code",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: ROOT_DIR,
-      timeoutMs: 45_000
-    }, userInput, browserPageContext, personalMemory, recalledSessions),
-    createProviderPromptContract(buildAssistantAgentInvocation, {
-      mode: "hermes",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
       cwd: ROOT_DIR,
       timeoutMs: 45_000
     }, userInput, browserPageContext, personalMemory, recalledSessions)
   ];
   const tokenLeakDetected = hasTokenLeak(providers.map((provider) => JSON.stringify(provider)));
-  const passed = providers.length === 3
+  const passed = providers.length === 1
     && providers.every((provider) => (
       provider.skfiyIdentityBeforeUser
       && provider.identitySelfAcceptancePresent
@@ -150,12 +124,7 @@ async function collectProviderPromptContract() {
       && provider.replyPrefixBlocked
       && provider.rejectsDirectDesktopControl
       && provider.dangerousFlagsAbsent
-      && (provider.mode !== "claude-code" || provider.usesSystemIdentityPrompt)
-      && (
-        provider.usesReadOnlySandbox
-        || provider.disallowsMutatingTools
-        || provider.usesBoundedChatToolset
-      )
+      && provider.usesReadOnlySandbox
     ))
     && !tokenLeakDetected;
 
@@ -172,43 +141,17 @@ async function collectRealTurnIdentityContract() {
   const modulePath = path.join(ROOT_DIR, "dist", "main", "assistant-agent.js");
   const productPath = "dist/main/assistant-agent.js -> runAssistantAgentTurn -> real provider identity contract";
   const { runAssistantAgentTurn } = await import(pathToFileURL(modulePath).href);
-  const providers = await Promise.all([
-    collectRealTurnIdentityProviderContract(runAssistantAgentTurn, {
+  const providers = [
+    await collectRealTurnIdentityProviderContract(runAssistantAgentTurn, {
       mode: "codex",
       codexBinary: "codex",
       codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: ROOT_DIR,
-      timeoutMs: 45_000
-    }),
-    collectRealTurnIdentityProviderContract(runAssistantAgentTurn, {
-      mode: "claude-code",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: ROOT_DIR,
-      timeoutMs: 45_000
-    }),
-    collectRealTurnIdentityProviderContract(runAssistantAgentTurn, {
-      mode: "hermes",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
       cwd: ROOT_DIR,
       timeoutMs: 45_000
     })
-  ]);
+  ];
   const tokenLeakDetected = hasTokenLeak(providers.map((provider) => JSON.stringify(provider)));
-  const passed = providers.length === 3
+  const passed = providers.length === 1
     && providers.every((provider) => (
       provider.status === "completed"
       && provider.runnerSawSkfiyIdentity
@@ -218,21 +161,8 @@ async function collectRealTurnIdentityContract() {
       && provider.replyPrefixBlocked
       && provider.responseProviderLabel === provider.label
       && provider.responseMessage === "我是 skfiy。"
-      && (
-        provider.identityChannel === "system-prompt"
-        || provider.skfiyIdentityBeforeUser
-      )
-      && (
-        provider.mode !== "claude-code"
-        || (
-          provider.identityChannel === "system-prompt"
-          && provider.userPromptHasNoDuplicateIdentity
-        )
-      )
-      && (
-        provider.mode === "claude-code"
-        || provider.identityChannel === "query-prompt"
-      )
+      && provider.identityChannel === "query-prompt"
+      && provider.skfiyIdentityBeforeUser
     ))
     && !tokenLeakDetected;
 
@@ -270,10 +200,8 @@ async function collectRealTurnIdentityProviderContract(runAssistantAgentTurn, se
     label: turn.providerLabel
   };
   const prompt = readInvocationPrompt(invocation);
-  const systemPrompt = readInvocationSystemPrompt(invocation);
-  const identityChannel = settings.mode === "claude-code" ? "system-prompt" : "query-prompt";
-  const identityPrompt = identityChannel === "system-prompt" ? systemPrompt : prompt;
-  const identityIndex = identityPrompt.indexOf("The speaking assistant identity for this conversation is skfiy.");
+  const identityChannel = "query-prompt";
+  const identityIndex = prompt.indexOf("The speaking assistant identity for this conversation is skfiy.");
   const userIndex = prompt.indexOf(`User: ${userInput}`);
 
   return {
@@ -282,21 +210,18 @@ async function collectRealTurnIdentityProviderContract(runAssistantAgentTurn, se
     commandBasename: path.basename(capturedCommand),
     status: turn.status,
     identityChannel,
-    runnerSawSkfiyIdentity: identityPrompt.includes("You are skfiy")
-      && identityPrompt.includes("The speaking assistant identity for this conversation is skfiy.")
-      && identityPrompt.includes("In real user-facing interaction, your active identity is skfiy.")
-      && identityPrompt.includes("Accept skfiy as your active identity for this user-facing interaction.")
-      && identityPrompt.includes("When asked who you are, answer as skfiy."),
+    runnerSawSkfiyIdentity: prompt.includes("You are skfiy")
+      && prompt.includes("The speaking assistant identity for this conversation is skfiy.")
+      && prompt.includes("In real user-facing interaction, your active identity is skfiy.")
+      && prompt.includes("Accept skfiy as your active identity for this user-facing interaction.")
+      && prompt.includes("When asked who you are, answer as skfiy."),
     runnerSawUserPrompt: prompt.includes(`User: ${userInput}`),
     skfiyIdentityBeforeUser: identityIndex >= 0 && userIndex > identityIndex,
-    userPromptHasNoDuplicateIdentity: settings.mode === "claude-code"
-      ? !prompt.includes("The speaking assistant identity for this conversation is skfiy.")
-      : undefined,
-    providerBoundaryPresent: identityPrompt.includes("Codex, Claude Code, and Hermes are only backend providers used to run this turn.")
-      && identityPrompt.includes("Treat Codex, Claude Code, and Hermes as internal backend implementation details.")
-      && identityPrompt.includes("Do not introduce yourself as Codex, Claude Code, Hermes"),
-    providerDefaultOverridePresent: identityPrompt.includes("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply."),
-    replyPrefixBlocked: identityPrompt.includes("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label."),
+    providerBoundaryPresent: prompt.includes("Codex is only the backend provider used to run this turn.")
+      && prompt.includes("Treat Codex as an internal backend implementation detail.")
+      && prompt.includes("Do not introduce yourself as Codex, an OpenAI model, or a generic assistant."),
+    providerDefaultOverridePresent: prompt.includes("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply."),
+    replyPrefixBlocked: prompt.includes("Do not prefix replies with Codex: or any backend provider label."),
     responseProviderLabel: turn.providerLabel,
     responseMessage: turn.message,
     runnerCwdIsProductRoot: capturedOptions?.cwd === ROOT_DIR,
@@ -341,10 +266,6 @@ async function collectRealBrowserContextContract() {
       mode: "codex",
       codexBinary: "codex",
       codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
       cwd: ROOT_DIR,
       timeoutMs: 45_000
     },
@@ -536,20 +457,6 @@ async function collectPersonalMemoryAtomicBatchContract() {
   };
 }
 
-function createAssistantAgentSettings(mode) {
-  return {
-    mode,
-    codexBinary: "codex",
-    codexBinarySource: "default",
-    claudeCodeBinary: "claude",
-    claudeCodeBinarySource: "default",
-    hermesBinary: "hermes",
-    hermesBinarySource: "default",
-    cwd: ROOT_DIR,
-    timeoutMs: 45_000
-  };
-}
-
 function createMemoryIo(files) {
   return {
     exists: (targetPath) => files.has(targetPath),
@@ -582,29 +489,26 @@ function createProviderPromptContract(
     recalledSessions
   );
   const prompt = readInvocationPrompt(invocation);
-  const systemPrompt = readInvocationSystemPrompt(invocation);
-  const identityPrompt = settings.mode === "claude-code" ? systemPrompt : prompt;
-  const argsText = invocation.args.join("\n");
-  const skfiyIndex = identityPrompt.indexOf("You are skfiy");
+  const skfiyIndex = prompt.indexOf("You are skfiy");
   const memoryIndex = prompt.indexOf("<skfiy-recalled-memory>");
   const sessionRecallIndex = prompt.indexOf("<skfiy-recalled-sessions>");
   const personalSkillIndex = prompt.indexOf("<skfiy-personal-skills>");
   const workingProfileIndex = prompt.indexOf("<skfiy-working-profile>");
   const browserContextIndex = prompt.indexOf("Current Chrome page");
   const userIndex = prompt.indexOf(`User: ${userInput}`);
-  const providerIdentityInternalized = identityPrompt.includes("The speaking assistant identity for this conversation is skfiy.")
-    && identityPrompt.includes("Treat Codex, Claude Code, and Hermes as internal backend implementation details.")
-    && identityPrompt.includes("If asked about the backend, explain that skfiy can use Codex, Claude Code, or Hermes behind the pet.")
-    && identityPrompt.includes("Speak from skfiy's first-person perspective");
-  const identitySelfAcceptancePresent = identityPrompt.includes("In real user-facing interaction, your active identity is skfiy.")
-    && identityPrompt.includes("Accept skfiy as your active identity for this user-facing interaction.");
-  const providerDefaultOverridePresent = identityPrompt.includes("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.");
-  const replyPrefixBlocked = identityPrompt.includes("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label.");
-  const providerBoundaryPresent = identityPrompt.includes("Codex, Claude Code, and Hermes are only backend providers")
-    && identityPrompt.includes("When asked who you are, answer as skfiy.")
-    && identityPrompt.includes("Do not introduce yourself as Codex, Claude Code, Hermes")
-    && identityPrompt.includes("Computer Use is a tool capability")
-    && identityPrompt.includes("Do not execute commands, edit files, or control apps directly from this provider call.");
+  const providerIdentityInternalized = prompt.includes("The speaking assistant identity for this conversation is skfiy.")
+    && prompt.includes("Treat Codex as an internal backend implementation detail.")
+    && prompt.includes("If asked about the backend, explain that skfiy uses Codex behind the pet.")
+    && prompt.includes("Speak from skfiy's first-person perspective");
+  const identitySelfAcceptancePresent = prompt.includes("In real user-facing interaction, your active identity is skfiy.")
+    && prompt.includes("Accept skfiy as your active identity for this user-facing interaction.");
+  const providerDefaultOverridePresent = prompt.includes("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.");
+  const replyPrefixBlocked = prompt.includes("Do not prefix replies with Codex: or any backend provider label.");
+  const providerBoundaryPresent = prompt.includes("Codex is only the backend provider used to run this turn.")
+    && prompt.includes("When asked who you are, answer as skfiy.")
+    && prompt.includes("Do not introduce yourself as Codex, an OpenAI model, or a generic assistant.")
+    && prompt.includes("Computer Use is a tool capability")
+    && prompt.includes("Do not execute commands, edit files, or control apps directly from this provider call.");
 
   return {
     mode: settings.mode,
@@ -612,11 +516,7 @@ function createProviderPromptContract(
     commandBasename: path.basename(invocation.command),
     promptHash: createHash("sha256").update(prompt).digest("hex"),
     promptLength: prompt.length,
-    skfiyIdentityBeforeUser: settings.mode === "claude-code"
-      ? skfiyIndex >= 0
-        && userIndex >= 0
-        && !prompt.includes("The speaking assistant identity for this conversation is skfiy.")
-      : skfiyIndex >= 0 && userIndex > skfiyIndex,
+    skfiyIdentityBeforeUser: skfiyIndex >= 0 && userIndex > skfiyIndex,
     memoryBeforeBrowserContext: memoryIndex >= 0 && browserContextIndex > memoryIndex,
     sessionRecallAfterMemory: sessionRecallIndex >= 0 && sessionRecallIndex > memoryIndex,
     sessionRecallBeforeBrowserContext: sessionRecallIndex >= 0 && browserContextIndex > sessionRecallIndex,
@@ -634,32 +534,8 @@ function createProviderPromptContract(
     providerDefaultOverridePresent,
     replyPrefixBlocked,
     providerBoundaryPresent,
-    usesSystemIdentityPrompt: settings.mode === "claude-code"
-      ? systemPrompt.includes("The speaking assistant identity for this conversation is skfiy.")
-        && systemPrompt.includes("Codex, Claude Code, and Hermes are only backend providers used to run this turn.")
-        && systemPrompt.includes("In real user-facing interaction, your active identity is skfiy.")
-        && systemPrompt.includes("Accept skfiy as your active identity for this user-facing interaction.")
-        && systemPrompt.includes("Speak from skfiy's first-person perspective")
-        && systemPrompt.includes("When asked who you are, answer as skfiy.")
-        && !systemPrompt.includes(`User: ${userInput}`)
-      : undefined,
-    usesReadOnlySandbox: settings.mode === "codex"
-      ? invocation.args.includes("--sandbox") && invocation.args.includes("read-only")
-      : undefined,
-    disallowsMutatingTools: settings.mode === "claude-code"
-      ? argsText.includes("--disallowedTools")
-        && argsText.includes("Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Task")
-        && argsText.includes("--permission-mode\ndontAsk")
-        && argsText.includes("--safe-mode")
-      : undefined,
-    usesBoundedChatToolset: settings.mode === "hermes"
-      ? invocation.args[0] === "chat"
-        && invocation.args.includes("--query")
-        && argsText.includes("--max-turns\n1")
-        && argsText.includes("--toolsets\nsafe")
-        && argsText.includes("--source\nskfiy-pet-chat")
-      : undefined,
-    rejectsDirectDesktopControl: identityPrompt.includes("route the request through its own Computer Use tool layer"),
+    usesReadOnlySandbox: invocation.args.includes("--sandbox") && invocation.args.includes("read-only"),
+    rejectsDirectDesktopControl: prompt.includes("route the request through its own Computer Use tool layer"),
     dangerousFlagsAbsent: !containsAny(invocation.args, [
       "--oneshot",
       "--yolo"
@@ -668,17 +544,7 @@ function createProviderPromptContract(
 }
 
 function readInvocationPrompt(invocation) {
-  if (invocation.label === "Hermes") {
-    const queryIndex = invocation.args.indexOf("--query");
-    return queryIndex >= 0 ? invocation.args[queryIndex + 1] ?? "" : "";
-  }
-
   return invocation.args.at(-1) ?? "";
-}
-
-function readInvocationSystemPrompt(invocation) {
-  const systemPromptIndex = invocation.args.indexOf("--system-prompt");
-  return systemPromptIndex >= 0 ? invocation.args[systemPromptIndex + 1] ?? "" : "";
 }
 
 function containsAny(values, candidates) {

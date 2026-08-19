@@ -25,7 +25,7 @@ describe("personal memory store", () => {
     expect(createPersonalMemoryPromptBlock(store.read())).toContain("Agent operating notes");
   });
 
-  it("reports Hermes-style character usage and prompt budget headers", () => {
+  it("reports character usage and prompt budget headers", () => {
     const files = new Map<string, string>();
     const store = createPersonalMemoryStore({
       baseDir: "/tmp/skfiy-memory",

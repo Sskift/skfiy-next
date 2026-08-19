@@ -23,7 +23,7 @@ describe("working profile", () => {
           createdAt: "2026-06-24T08:00:00.000Z",
           userInput: "以后 dashboard 做得像 Obsidian，有知识图谱和双链",
           assistantReply: "我会做成本地知识画布。",
-          providerLabel: "Hermes"
+          providerLabel: "Codex"
         },
         {
           turnId: "turn-2",

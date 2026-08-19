@@ -42,10 +42,6 @@ function createAssistantAgentFixture(mode: AssistantAgentMode): AssistantAgentSe
       mode,
       codexBinary: "codex",
       codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
       cwd: "/repo",
       timeoutMs: 45_000
     },
@@ -54,33 +50,11 @@ function createAssistantAgentFixture(mode: AssistantAgentMode): AssistantAgentSe
         provider: "assistant",
         id: "codex",
         label: "Codex",
-        selected: mode === "codex",
+        selected: true,
         configured: true,
         executablePath: "codex",
         executableSource: "default",
         resolvedExecutablePath: "/opt/homebrew/bin/codex",
-        readiness: "chat-ready"
-      },
-      {
-        provider: "assistant",
-        id: "claude-code",
-        label: "Claude Code",
-        selected: mode === "claude-code",
-        configured: true,
-        executablePath: "claude",
-        executableSource: "default",
-        resolvedExecutablePath: "/opt/homebrew/bin/claude",
-        readiness: "chat-ready"
-      },
-      {
-        provider: "assistant",
-        id: "hermes",
-        label: "Hermes",
-        selected: mode === "hermes",
-        configured: true,
-        executablePath: "hermes",
-        executableSource: "default",
-        resolvedExecutablePath: "/Users/tester/.local/bin/hermes",
         readiness: "chat-ready"
       }
     ]
@@ -597,8 +571,6 @@ describe("App", () => {
 
     expect(await screen.findByText("Background Agent")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "选择 Codex background agent" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "选择 Claude Code background agent" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "选择 Hermes background agent" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("诊断/高级"));
     expect(await screen.findByText("Computer Use Planner")).toBeInTheDocument();
@@ -615,25 +587,6 @@ describe("App", () => {
       expect(api.setAssistantAgentSettings).toHaveBeenCalledWith({ mode: "codex" });
     });
     expect(screen.getByRole("button", { name: "选择 Codex background agent" })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
-  });
-
-  it("selects Hermes as the background agent provider", async () => {
-    const api = window.skfiy as DesktopApi;
-    api.getAssistantAgentSettings = vi
-      .fn<DesktopApi["getAssistantAgentSettings"]>()
-      .mockResolvedValue(createAssistantAgentFixture("hermes"));
-    render(<App />);
-
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
-    fireEvent.click(await screen.findByRole("button", { name: "选择 Hermes background agent" }));
-
-    await waitFor(() => {
-      expect(api.setAssistantAgentSettings).toHaveBeenCalledWith({ mode: "hermes" });
-    });
-    expect(screen.getByRole("button", { name: "选择 Hermes background agent" })).toHaveAttribute(
       "aria-pressed",
       "true"
     );

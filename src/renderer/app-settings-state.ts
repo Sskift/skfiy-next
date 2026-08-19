@@ -15,9 +15,7 @@ export const APP_POLICY_OPTIONS: Array<{ policy: AppPolicy; label: string }> = [
 ];
 
 export const ASSISTANT_AGENT_OPTIONS: Array<{ mode: AssistantAgentMode; label: string; aria: string }> = [
-  { mode: "codex", label: "Codex", aria: "选择 Codex background agent" },
-  { mode: "claude-code", label: "Claude Code", aria: "选择 Claude Code background agent" },
-  { mode: "hermes", label: "Hermes", aria: "选择 Hermes background agent" }
+  { mode: "codex", label: "Codex", aria: "选择 Codex background agent" }
 ];
 
 export const PLANNER_PROVIDER_OPTIONS: Array<{ mode: PlannerProviderMode; label: string; aria: string }> = [
@@ -39,10 +37,6 @@ export const DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE: AssistantAgentSettingsRe
     mode: "codex",
     codexBinary: "codex",
     codexBinarySource: "default",
-    claudeCodeBinary: "claude",
-    claudeCodeBinarySource: "default",
-    hermesBinary: "hermes",
-    hermesBinarySource: "default",
     cwd: "",
     timeoutMs: 45_000
   },
@@ -54,26 +48,6 @@ export const DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE: AssistantAgentSettingsRe
       selected: true,
       configured: true,
       executablePath: "codex",
-      executableSource: "default",
-      readiness: "unavailable"
-    },
-    {
-      provider: "assistant",
-      id: "claude-code",
-      label: "Claude Code",
-      selected: false,
-      configured: true,
-      executablePath: "claude",
-      executableSource: "default",
-      readiness: "unavailable"
-    },
-    {
-      provider: "assistant",
-      id: "hermes",
-      label: "Hermes",
-      selected: false,
-      configured: true,
-      executablePath: "hermes",
       executableSource: "default",
       readiness: "unavailable"
     }

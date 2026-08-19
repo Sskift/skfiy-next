@@ -24,7 +24,7 @@ describe("personal skill cards", () => {
           createdAt: "2026-07-07T10:00:00.000Z",
           userInput: "以后进度更新短一点，先给结论",
           assistantReply: "我会用更短的中文更新。",
-          providerLabel: "Hermes"
+          providerLabel: "Codex"
         },
         {
           turnId: "turn-2",

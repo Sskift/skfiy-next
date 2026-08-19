@@ -5,15 +5,15 @@ import {
 } from "./assistant-agent-settings";
 
 describe("assistant agent settings store", () => {
-  it("defaults to codex and accepts Codex, Claude Code, or Hermes", () => {
+  it("defaults to codex and keeps codex as the only mode", () => {
     const store = createAssistantAgentSettingsStore(
       readInitialAssistantAgentSettingsFromConfig({}, { cwd: "/repo" })
     );
 
     expect(store.get().mode).toBe("codex");
     expect(store.set({ mode: "codex" }).mode).toBe("codex");
-    expect(store.set({ mode: "claude-code" }).mode).toBe("claude-code");
-    expect(store.set({ mode: "hermes" }).mode).toBe("hermes");
+    expect(store.set({ mode: "claude-code" }).mode).toBe("codex");
+    expect(store.set({ mode: "hermes" }).mode).toBe("codex");
   });
 
   it("ignores invalid modes", () => {
@@ -29,8 +29,6 @@ describe("assistant agent settings store", () => {
     const store = createAssistantAgentSettingsStore(
       readInitialAssistantAgentSettingsFromConfig({
         SKFIY_CODEX_BIN: "/opt/bin/codex",
-        SKFIY_CLAUDE_CODE_BIN: "/opt/bin/claude",
-        SKFIY_HERMES_BIN: "/opt/bin/hermes",
         SKFIY_ASSISTANT_AGENT_CWD: "/workspace",
         SKFIY_ASSISTANT_AGENT_TIMEOUT_MS: "120000"
       }, { cwd: "/repo" })
@@ -40,10 +38,6 @@ describe("assistant agent settings store", () => {
       mode: "codex",
       codexBinary: "/opt/bin/codex",
       codexBinarySource: "env",
-      claudeCodeBinary: "/opt/bin/claude",
-      claudeCodeBinarySource: "env",
-      hermesBinary: "/opt/bin/hermes",
-      hermesBinarySource: "env",
       cwd: "/workspace",
       timeoutMs: 120_000
     });

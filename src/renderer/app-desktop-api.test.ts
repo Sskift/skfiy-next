@@ -51,13 +51,11 @@ describe("app desktop api", () => {
         { bundleId: "com.apple.finder", policy: "deny" }
       ]
     });
-    await expect(api.setAssistantAgentSettings({ mode: "hermes" }))
+    await expect(api.setAssistantAgentSettings({ mode: "codex" }))
       .resolves.toMatchObject({
-        settings: { mode: "hermes" },
+        settings: { mode: "codex" },
         providers: [
-          { id: "codex", selected: false },
-          { id: "claude-code", selected: false },
-          { id: "hermes", selected: true }
+          { id: "codex", selected: true }
         ]
       });
     await expect(api.setPlannerProviderSettings({ mode: "disabled" }))

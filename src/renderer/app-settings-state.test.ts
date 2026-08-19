@@ -20,9 +20,7 @@ describe("app settings state", () => {
       { policy: "deny", label: "拒绝" }
     ]);
     expect(ASSISTANT_AGENT_OPTIONS.map((option) => option.mode)).toEqual([
-      "codex",
-      "claude-code",
-      "hermes"
+      "codex"
     ]);
     expect(PLANNER_PROVIDER_OPTIONS.map((option) => option.mode)).toEqual([
       "local-deterministic",
@@ -47,15 +45,13 @@ describe("app settings state", () => {
   it("updates Background Agent mode and selected provider together", () => {
     expect(reduceAssistantAgentSettingsResponse(
       DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE,
-      { mode: "hermes" }
+      { mode: "codex" }
     )).toMatchObject({
       settings: {
-        mode: "hermes"
+        mode: "codex"
       },
       providers: [
-        { id: "codex", selected: false },
-        { id: "claude-code", selected: false },
-        { id: "hermes", selected: true }
+        { id: "codex", selected: true }
       ]
     });
   });
@@ -65,9 +61,7 @@ describe("app settings state", () => {
       DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE,
       {}
     ).providers.map((provider) => [provider.id, provider.selected])).toEqual([
-      ["codex", true],
-      ["claude-code", false],
-      ["hermes", false]
+      ["codex", true]
     ]);
   });
 

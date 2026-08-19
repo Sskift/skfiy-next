@@ -128,7 +128,7 @@ export function isAssistantConversationReplyEvent(
 export function readAssistantConversationReply(message: string | undefined, status: TaskStatus): string {
   const fallback = status === "failed" ? "Background Agent 暂时不可用." : STATUS_COPY.completed.message;
   const text = message?.trim() || fallback;
-  return text.replace(/^(?:Codex|Claude Code|Hermes):\s*/u, "").trim() || fallback;
+  return text.replace(/^Codex:\s*/u, "").trim() || fallback;
 }
 
 export function appendAssistantConversationReply(

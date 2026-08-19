@@ -27,8 +27,12 @@ import {
   createWorkingProfilePromptBlock
 } from "./working-profile.js";
 
-export type AssistantAgentMode = "codex" | "claude-code" | "hermes";
+// The Background Agent backend is intentionally a single provider until the core
+// ships. The union is kept (rather than a bare string alias) so a future provider
+// can be re-added without churning the settings surface.
+export type AssistantAgentMode = "codex";
 export type AssistantAgentProviderId = AssistantAgentMode;
+export type AssistantAgentProviderLabel = "Codex";
 export type AssistantAgentCliBinarySource = "default" | "env";
 export type AssistantAgentExecutableSource = AssistantAgentCliBinarySource;
 export type AssistantAgentProviderReadiness =
@@ -45,10 +49,6 @@ export interface AssistantAgentSettings {
   mode: AssistantAgentMode;
   codexBinary: string;
   codexBinarySource: AssistantAgentCliBinarySource;
-  claudeCodeBinary: string;
-  claudeCodeBinarySource: AssistantAgentCliBinarySource;
-  hermesBinary: string;
-  hermesBinarySource: AssistantAgentCliBinarySource;
   cwd: string;
   timeoutMs: number;
 }
@@ -56,7 +56,7 @@ export interface AssistantAgentSettings {
 export interface AssistantAgentInvocation {
   command: string;
   args: string[];
-  label: "Codex" | "Claude Code" | "Hermes";
+  label: AssistantAgentProviderLabel;
 }
 
 export interface AssistantAgentProcessResult {
@@ -67,7 +67,7 @@ export interface AssistantAgentProcessResult {
 export interface AssistantAgentProviderState {
   provider: "assistant";
   id: AssistantAgentProviderId;
-  label: "Codex" | "Claude Code" | "Hermes";
+  label: AssistantAgentProviderLabel;
   selected: boolean;
   configured: boolean;
   executablePath?: string;
@@ -125,7 +125,7 @@ export interface AssistantAgentTurnResult {
   id: string;
   createdAt: string;
   status: AssistantAgentTurnStatus;
-  providerLabel: "Codex" | "Claude Code" | "Hermes";
+  providerLabel: AssistantAgentProviderLabel;
   message: string;
   error?: AssistantAgentTurnError | undefined;
   route: CommandRoute;
@@ -147,7 +147,6 @@ const DEFAULT_ASSISTANT_AGENT_TIMEOUT_MS = 45_000;
 const READINESS_PROBE_TIMEOUT_MS = 5_000;
 const CODEX_PET_CHAT_MODEL = "gpt-5.5";
 const CODEX_PET_CHAT_REASONING_EFFORT = "low";
-const CLAUDE_CODE_DISALLOWED_TOOLS = "Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Task";
 const ASSISTANT_CHAT_ROUTE_REASON = "Background Agent answered without requesting Computer Use.";
 const COMPUTER_USE_INTENT_START_TAG = "<skfiy-computer-use-intent>";
 const COMPUTER_USE_INTENT_END_TAG = "</skfiy-computer-use-intent>";
@@ -159,11 +158,11 @@ const ASSISTANT_AGENT_IDENTITY_PROMPT = [
   "Accept skfiy as your active identity for this user-facing interaction.",
   "在面向用户的回答中，始终以 skfiy 的身份理解和表达。",
   "If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.",
-  "Codex, Claude Code, and Hermes are only backend providers used to run this turn.",
-  "Treat Codex, Claude Code, and Hermes as internal backend implementation details.",
-  "If asked about the backend, explain that skfiy can use Codex, Claude Code, or Hermes behind the pet.",
-  "Do not introduce yourself as Codex, Claude Code, Hermes, an OpenAI model, Anthropic Claude, or a generic assistant.",
-  "Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label.",
+  "Codex is only the backend provider used to run this turn.",
+  "Treat Codex as an internal backend implementation detail.",
+  "If asked about the backend, explain that skfiy uses Codex behind the pet.",
+  "Do not introduce yourself as Codex, an OpenAI model, or a generic assistant.",
+  "Do not prefix replies with Codex: or any backend provider label.",
   "Speak from skfiy's first-person perspective; do not frame replies as a backend provider speaking through skfiy.",
   "When asked who you are, answer as skfiy.",
   "Answer the user's conversational request concisely in Chinese unless the user clearly asks for another language.",
@@ -185,27 +184,18 @@ const execFileAsync = promisify(execFile);
 
 export function readInitialAssistantAgentSettings(
   env: {
-    SKFIY_ASSISTANT_AGENT?: string;
     SKFIY_CODEX_BIN?: string;
-    SKFIY_CLAUDE_CODE_BIN?: string;
-    SKFIY_HERMES_BIN?: string;
     SKFIY_ASSISTANT_AGENT_CWD?: string;
     SKFIY_ASSISTANT_AGENT_TIMEOUT_MS?: string;
   },
   defaults: { cwd?: string } = {}
 ): AssistantAgentSettings {
   const configuredCodexBinary = readOptionalString(env.SKFIY_CODEX_BIN);
-  const configuredClaudeCodeBinary = readOptionalString(env.SKFIY_CLAUDE_CODE_BIN);
-  const configuredHermesBinary = readOptionalString(env.SKFIY_HERMES_BIN);
 
   return {
-    mode: readAssistantAgentMode(env.SKFIY_ASSISTANT_AGENT),
+    mode: "codex",
     codexBinary: configuredCodexBinary ?? "codex",
     codexBinarySource: configuredCodexBinary ? "env" : "default",
-    claudeCodeBinary: configuredClaudeCodeBinary ?? "claude",
-    claudeCodeBinarySource: configuredClaudeCodeBinary ? "env" : "default",
-    hermesBinary: configuredHermesBinary ?? "hermes",
-    hermesBinarySource: configuredHermesBinary ? "env" : "default",
     cwd: readOptionalString(env.SKFIY_ASSISTANT_AGENT_CWD) ?? defaults.cwd ?? process.cwd(),
     timeoutMs: readPositiveInteger(env.SKFIY_ASSISTANT_AGENT_TIMEOUT_MS)
       ?? DEFAULT_ASSISTANT_AGENT_TIMEOUT_MS
@@ -231,31 +221,9 @@ export async function readAssistantAgentProviderStates(
     await readCliAssistantAgentProviderState({
       id: "codex",
       label: "Codex",
-      selected: settings.mode === "codex",
+      selected: true,
       executablePath: settings.codexBinary,
       executableSource: settings.codexBinarySource,
-      settings,
-      resolveExecutable,
-      runReadinessProbe,
-      proveChatReadiness: options.proveChatReadiness === true
-    }),
-    await readCliAssistantAgentProviderState({
-      id: "claude-code",
-      label: "Claude Code",
-      selected: settings.mode === "claude-code",
-      executablePath: settings.claudeCodeBinary,
-      executableSource: settings.claudeCodeBinarySource,
-      settings,
-      resolveExecutable,
-      runReadinessProbe,
-      proveChatReadiness: options.proveChatReadiness === true
-    }),
-    await readCliAssistantAgentProviderState({
-      id: "hermes",
-      label: "Hermes",
-      selected: settings.mode === "hermes",
-      executablePath: settings.hermesBinary,
-      executableSource: settings.hermesBinarySource,
       settings,
       resolveExecutable,
       runReadinessProbe,
@@ -277,77 +245,31 @@ export function buildAssistantAgentInvocation(
     browserPageContext,
     personalMemory,
     recalledSessions,
-    personalSkillSettings,
-    {
-      includeIdentityPrompt: settings.mode !== "claude-code"
-    }
+    personalSkillSettings
   );
 
-  if (settings.mode === "codex") {
-    return {
-      command: settings.codexBinary,
-      args: [
-        "exec",
-        "--ignore-rules",
-        "--model",
-        CODEX_PET_CHAT_MODEL,
-        "--config",
-        "approval_policy=\"never\"",
-        "--config",
-        `model_reasoning_effort="${CODEX_PET_CHAT_REASONING_EFFORT}"`,
-        "--sandbox",
-        "read-only",
-        "--cd",
-        settings.cwd,
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "--color",
-        "never",
-        prompt
-      ],
-      label: "Codex"
-    };
-  }
-
-  if (settings.mode === "hermes") {
-    return {
-      command: settings.hermesBinary,
-      args: [
-        "chat",
-        "--query",
-        prompt,
-        "--quiet",
-        "--max-turns",
-        "1",
-        "--toolsets",
-        "safe",
-        "--ignore-rules",
-        "--source",
-        "skfiy-pet-chat"
-      ],
-      label: "Hermes"
-    };
-  }
-
   return {
-    command: settings.claudeCodeBinary,
+    command: settings.codexBinary,
     args: [
-      "--print",
-      "--output-format",
-      "text",
-      "--system-prompt",
-      ASSISTANT_AGENT_IDENTITY_PROMPT,
-      "--permission-mode",
-      "dontAsk",
-      "--disallowedTools",
-      CLAUDE_CODE_DISALLOWED_TOOLS,
-      "--safe-mode",
-      "--no-chrome",
-      "--disable-slash-commands",
-      "--no-session-persistence",
+      "exec",
+      "--ignore-rules",
+      "--model",
+      CODEX_PET_CHAT_MODEL,
+      "--config",
+      "approval_policy=\"never\"",
+      "--config",
+      `model_reasoning_effort="${CODEX_PET_CHAT_REASONING_EFFORT}"`,
+      "--sandbox",
+      "read-only",
+      "--cd",
+      settings.cwd,
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--color",
+      "never",
       prompt
     ],
-    label: "Claude Code"
+    label: "Codex"
   };
 }
 
@@ -702,7 +624,7 @@ async function readCliAssistantAgentProviderState({
 }: {
   settings: AssistantAgentSettings;
   id: AssistantAgentProviderId;
-  label: "Codex" | "Claude Code" | "Hermes";
+  label: AssistantAgentProviderLabel;
   selected: boolean;
   executablePath: string;
   executableSource: AssistantAgentCliBinarySource;
@@ -824,7 +746,7 @@ async function readAssistantAgentChatReadyState({
   runReadinessProbe: AssistantAgentReadinessProbeRunner;
   settings: AssistantAgentSettings;
 }): Promise<AssistantAgentProviderState> {
-  const probeSettings = createAssistantAgentProbeSettings(settings, baseState.id, resolvedExecutablePath);
+  const probeSettings = createAssistantAgentProbeSettings(settings, resolvedExecutablePath);
   const invocation = buildAssistantAgentInvocation(
     probeSettings,
     "Reply exactly with skfiy-ready."
@@ -868,15 +790,11 @@ async function readAssistantAgentChatReadyState({
 
 function createAssistantAgentProbeSettings(
   settings: AssistantAgentSettings,
-  mode: AssistantAgentProviderId,
   resolvedExecutablePath: string
 ): AssistantAgentSettings {
   return {
     ...settings,
-    mode,
-    ...(mode === "codex" ? { codexBinary: resolvedExecutablePath } : {}),
-    ...(mode === "claude-code" ? { claudeCodeBinary: resolvedExecutablePath } : {}),
-    ...(mode === "hermes" ? { hermesBinary: resolvedExecutablePath } : {})
+    codexBinary: resolvedExecutablePath
   };
 }
 
@@ -947,12 +865,8 @@ function createAssistantAgentPrompt(
   browserPageContext?: BrowserPageContext,
   personalMemory?: PersonalMemorySnapshot,
   recalledSessions?: SessionMemoryRecord[],
-  personalSkillSettings?: PersonalSkillSettings,
-  options: {
-    includeIdentityPrompt?: boolean;
-  } = {}
+  personalSkillSettings?: PersonalSkillSettings
 ): string {
-  const includeIdentityPrompt = options.includeIdentityPrompt ?? true;
   const personalMemoryBlock = personalMemory
     ? createPersonalMemoryPromptBlock(personalMemory)
     : "";
@@ -981,7 +895,8 @@ function createAssistantAgentPrompt(
     : "";
 
   return [
-    ...(includeIdentityPrompt ? [ASSISTANT_AGENT_IDENTITY_PROMPT, ""] : []),
+    ASSISTANT_AGENT_IDENTITY_PROMPT,
+    "",
     ASSISTANT_AGENT_COMPUTER_USE_INTENT_PROMPT,
     "",
     ...(personalMemoryBlock ? [personalMemoryBlock, ""] : []),
@@ -991,18 +906,6 @@ function createAssistantAgentPrompt(
     ...(browserPageContext ? [createBrowserPageContextPromptBlock(browserPageContext), ""] : []),
     `User: ${userInput.trim()}`
   ].join("\n");
-}
-
-function readAssistantAgentMode(value: unknown): AssistantAgentMode {
-  if (value === "hermes") {
-    return "hermes";
-  }
-
-  if (value === "claude-code" || value === "claudecode" || value === "claude") {
-    return "claude-code";
-  }
-
-  return "codex";
 }
 
 function readOptionalString(value: unknown): string | undefined {

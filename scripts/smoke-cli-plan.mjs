@@ -135,7 +135,7 @@ function hasProviderPromptContractEvidence(contract) {
     || contract?.result !== "passed"
     || contract?.tokenLeakDetected !== false
     || !Array.isArray(contract?.providers)
-    || contract.providers.length !== 3
+    || contract.providers.length !== 1
   ) {
     return false;
   }
@@ -145,19 +145,7 @@ function hasProviderPromptContractEvidence(contract) {
     label: "Codex",
     commandBasename: "codex",
     requiredSafetyField: "usesReadOnlySandbox"
-  })
-    && hasProviderContract(contract.providers, {
-      mode: "claude-code",
-      label: "Claude Code",
-      commandBasename: "claude",
-      requiredSafetyField: "disallowsMutatingTools"
-    })
-    && hasProviderContract(contract.providers, {
-      mode: "hermes",
-      label: "Hermes",
-      commandBasename: "hermes",
-      requiredSafetyField: "usesBoundedChatToolset"
-    });
+  });
 }
 
 function hasProviderContract(providers, expected) {
@@ -183,7 +171,6 @@ function hasProviderContract(providers, expected) {
     && provider?.providerBoundaryPresent === true
     && provider?.rejectsDirectDesktopControl === true
     && provider?.dangerousFlagsAbsent === true
-    && (expected.mode !== "claude-code" || provider?.usesSystemIdentityPrompt === true)
     && provider?.[expected.requiredSafetyField] === true;
 }
 
@@ -202,19 +189,7 @@ function hasRealTurnIdentityContractEvidence(contract) {
     label: "Codex",
     commandBasename: "codex",
     identityChannel: "query-prompt"
-  })
-    && hasRealTurnProviderContract(contract.providers, {
-      mode: "claude-code",
-      label: "Claude Code",
-      commandBasename: "claude",
-      identityChannel: "system-prompt"
-    })
-    && hasRealTurnProviderContract(contract.providers, {
-      mode: "hermes",
-      label: "Hermes",
-      commandBasename: "hermes",
-      identityChannel: "query-prompt"
-    });
+  });
 }
 
 function hasRealTurnProviderContract(providers, expected) {
@@ -226,19 +201,12 @@ function hasRealTurnProviderContract(providers, expected) {
     && provider?.identityChannel === expected.identityChannel
     && provider?.runnerSawSkfiyIdentity === true
     && provider?.runnerSawUserPrompt === true
+    && provider?.skfiyIdentityBeforeUser === true
     && provider?.providerBoundaryPresent === true
     && provider?.providerDefaultOverridePresent === true
     && provider?.replyPrefixBlocked === true
     && provider?.responseProviderLabel === expected.label
-    && provider?.responseMessage === "我是 skfiy。"
-    && (
-      expected.identityChannel === "system-prompt"
-      || provider?.skfiyIdentityBeforeUser === true
-    )
-    && (
-      expected.mode !== "claude-code"
-      || provider?.userPromptHasNoDuplicateIdentity === true
-    );
+    && provider?.responseMessage === "我是 skfiy。";
 }
 
 function hasRealBrowserContextContractEvidence(contract) {

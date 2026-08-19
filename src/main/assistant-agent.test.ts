@@ -13,10 +13,6 @@ describe("assistant agent provider", () => {
     mode: "codex" as const,
     codexBinary: "codex",
     codexBinarySource: "default" as const,
-    claudeCodeBinary: "claude",
-    claudeCodeBinarySource: "default" as const,
-    hermesBinary: "hermes",
-    hermesBinarySource: "default" as const,
     cwd: "/tmp/skfiy",
     timeoutMs: 45_000
   };
@@ -27,39 +23,14 @@ describe("assistant agent provider", () => {
       mode: "codex",
       codexBinary: "codex",
       codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
       cwd: process.cwd(),
       timeoutMs: 45_000
     });
   });
 
-  it.each([
-    ["codex", "codex"],
-    ["claude-code", "claude-code"],
-    ["claudecode", "claude-code"],
-    ["claude", "claude-code"],
-    ["hermes", "hermes"]
-  ])("reads %s as an assistant agent provider", (value, mode) => {
-    expect(readInitialAssistantAgentSettings({ SKFIY_ASSISTANT_AGENT: value })).toMatchObject({
-      mode
-    });
-  });
-
-  it.each(["local", "built-in", ""])("does not keep legacy %s as an assistant agent provider", (value) => {
-    expect(readInitialAssistantAgentSettings({ SKFIY_ASSISTANT_AGENT: value })).toMatchObject({
-      mode: "codex"
-    });
-  });
-
   it("normalizes provider state with executable source and readiness", async () => {
     const settings = readInitialAssistantAgentSettings({
-      SKFIY_ASSISTANT_AGENT: "claude-code",
-      SKFIY_CODEX_BIN: " /opt/homebrew/bin/codex ",
-      SKFIY_CLAUDE_CODE_BIN: " /opt/homebrew/bin/claude ",
-      SKFIY_HERMES_BIN: " /Users/bytedance/.local/bin/hermes "
+      SKFIY_CODEX_BIN: " /opt/homebrew/bin/codex "
     }, { cwd: "/tmp/skfiy" });
 
     const states = await readAssistantAgentProviderStates(settings, {
@@ -75,39 +46,13 @@ describe("assistant agent provider", () => {
         provider: "assistant",
         id: "codex",
         label: "Codex",
-        selected: false,
+        selected: true,
         configured: true,
         executablePath: "/opt/homebrew/bin/codex",
         executableSource: "env",
         resolvedExecutablePath: "/opt/homebrew/bin/codex:resolved",
         readiness: "version-ok",
         readinessDetail: "Codex version check passed; chat readiness has not been proven by a dry-run.",
-        version: "--version version 1.2.3"
-      },
-      {
-        provider: "assistant",
-        id: "claude-code",
-        label: "Claude Code",
-        selected: true,
-        configured: true,
-        executablePath: "/opt/homebrew/bin/claude",
-        executableSource: "env",
-        resolvedExecutablePath: "/opt/homebrew/bin/claude:resolved",
-        readiness: "version-ok",
-        readinessDetail: "Claude Code version check passed; chat readiness has not been proven by a dry-run.",
-        version: "--version version 1.2.3"
-      },
-      {
-        provider: "assistant",
-        id: "hermes",
-        label: "Hermes",
-        selected: false,
-        configured: true,
-        executablePath: "/Users/bytedance/.local/bin/hermes",
-        executableSource: "env",
-        resolvedExecutablePath: "/Users/bytedance/.local/bin/hermes:resolved",
-        readiness: "version-ok",
-        readinessDetail: "Hermes version check passed; chat readiness has not been proven by a dry-run.",
         version: "--version version 1.2.3"
       }
     ]);
@@ -160,39 +105,11 @@ describe("assistant agent provider", () => {
     });
   });
 
-  it("lists Hermes as a Background Agent provider with readiness", async () => {
-    const settings = readInitialAssistantAgentSettings({
-      SKFIY_ASSISTANT_AGENT: "hermes",
-      SKFIY_HERMES_BIN: "/Users/bytedance/.local/bin/hermes"
-    });
-
-    const states = await readAssistantAgentProviderStates(settings, {
-      resolveExecutable: async (command) => `${command}:resolved`,
-      runReadinessProbe: async () => ({
-        stdout: "hermes 0.1.0",
-        stderr: ""
-      })
-    });
-
-    expect(states.find((state) => state.id === "hermes")).toMatchObject({
-      id: "hermes",
-      label: "Hermes",
-      selected: true,
-      readiness: "version-ok",
-      readinessDetail: "Hermes version check passed; chat readiness has not been proven by a dry-run.",
-      executablePath: "/Users/bytedance/.local/bin/hermes"
-    });
-  });
-
   it("reports unconfigured and unavailable CLI providers with last errors", async () => {
-    const states = await readAssistantAgentProviderStates({
+    const unconfiguredStates = await readAssistantAgentProviderStates({
       mode: "codex",
       codexBinary: "",
       codexBinarySource: "env",
-      claudeCodeBinary: "missing-claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "missing-hermes",
-      hermesBinarySource: "default",
       cwd: "/tmp/skfiy",
       timeoutMs: 45_000
     }, {
@@ -201,7 +118,7 @@ describe("assistant agent provider", () => {
       }
     });
 
-    expect(states.find((state) => state.id === "codex")).toMatchObject({
+    expect(unconfiguredStates.find((state) => state.id === "codex")).toMatchObject({
       id: "codex",
       selected: true,
       configured: false,
@@ -209,23 +126,27 @@ describe("assistant agent provider", () => {
       readiness: "unconfigured",
       lastError: "Codex executable is not configured."
     });
-    expect(states.find((state) => state.id === "claude-code")).toMatchObject({
-      id: "claude-code",
-      selected: false,
-      configured: true,
-      executablePath: "missing-claude",
-      executableSource: "default",
-      readiness: "unavailable",
-      lastError: "missing-claude not found"
+
+    const unavailableStates = await readAssistantAgentProviderStates({
+      mode: "codex",
+      codexBinary: "missing-codex",
+      codexBinarySource: "default",
+      cwd: "/tmp/skfiy",
+      timeoutMs: 45_000
+    }, {
+      resolveExecutable: async (command) => {
+        throw new Error(`${command} not found`);
+      }
     });
-    expect(states.find((state) => state.id === "hermes")).toMatchObject({
-      id: "hermes",
-      selected: false,
+
+    expect(unavailableStates.find((state) => state.id === "codex")).toMatchObject({
+      id: "codex",
+      selected: true,
       configured: true,
-      executablePath: "missing-hermes",
+      executablePath: "missing-codex",
       executableSource: "default",
       readiness: "unavailable",
-      lastError: "missing-hermes not found"
+      lastError: "missing-codex not found"
     });
   });
 
@@ -234,10 +155,6 @@ describe("assistant agent provider", () => {
       mode: "codex",
       codexBinary: "/opt/homebrew/bin/codex",
       codexBinarySource: "env",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
       cwd: "/tmp/skfiy",
       timeoutMs: 45_000
     }, "hello");
@@ -283,17 +200,7 @@ describe("assistant agent provider", () => {
   });
 
   it("includes bounded browser page context in CLI provider prompts", () => {
-    const invocation = buildAssistantAgentInvocation({
-      mode: "codex",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: "/tmp/skfiy",
-      timeoutMs: 45_000
-    }, "summarize this page", {
+    const invocation = buildAssistantAgentInvocation(baseSettings, "summarize this page", {
       state: "ready",
       url: "https://example.test/form",
       title: "Example Form",
@@ -308,65 +215,42 @@ describe("assistant agent provider", () => {
   });
 
   it("injects skfiy identity instructions before the real user prompt", () => {
-    const invocation = buildAssistantAgentInvocation({
-      mode: "codex",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: "/tmp/skfiy",
-      timeoutMs: 45_000
-    }, "你是谁");
+    const invocation = buildAssistantAgentInvocation(baseSettings, "你是谁");
 
     const prompt = invocation.args.at(-1) ?? "";
     expect(prompt).toContain("You are skfiy");
     expect(prompt).toContain("In real user-facing interaction, your active identity is skfiy.");
     expect(prompt).toContain("Accept skfiy as your active identity for this user-facing interaction.");
     expect(prompt).toContain("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.");
-    expect(prompt).toContain("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label.");
-    expect(prompt).toContain("Do not introduce yourself as Codex, Claude Code, Hermes");
+    expect(prompt).toContain("Do not prefix replies with Codex: or any backend provider label.");
+    expect(prompt).toContain("Do not introduce yourself as Codex, an OpenAI model, or a generic assistant.");
     expect(prompt.indexOf("You are skfiy")).toBeLessThan(prompt.indexOf("User: 你是谁"));
   });
 
-  it.each([
-    ["codex", "Codex"] as const,
-    ["claude-code", "Claude Code"] as const,
-    ["hermes", "Hermes"] as const
-  ])("injects skfiy-owned identity during real %s turns", async (mode, label) => {
+  it("injects skfiy-owned identity during real Codex turns", async () => {
     const runProcess = vi.fn<AssistantAgentProcessRunner>()
       .mockResolvedValue({ stdout: "我是 skfiy。", stderr: "" });
 
     await runAssistantAgentTurn("你是谁", {
-      settings: {
-        ...baseSettings,
-        mode
-      },
+      settings: baseSettings,
       runProcess,
       now: fixedNow,
-      createTurnId: () => `turn-${mode}`
+      createTurnId: () => "turn-codex"
     });
 
     const args = runProcess.mock.calls[0]?.[1] ?? [];
-    const prompt = readProviderIdentityPrompt(label, args);
-    const userPrompt = readProviderPrompt(label, args);
+    const prompt = args.at(-1) ?? "";
 
     expect(prompt).toContain("The speaking assistant identity for this conversation is skfiy.");
     expect(prompt).toContain("You are interacting with the user as skfiy, not as the backend CLI provider.");
     expect(prompt).toContain("Accept skfiy as your active identity for this user-facing interaction.");
-    expect(prompt).toContain("Treat Codex, Claude Code, and Hermes as internal backend implementation details.");
-    expect(prompt).toContain("If asked about the backend, explain that skfiy can use Codex, Claude Code, or Hermes behind the pet.");
+    expect(prompt).toContain("Treat Codex as an internal backend implementation detail.");
+    expect(prompt).toContain("If asked about the backend, explain that skfiy uses Codex behind the pet.");
     expect(prompt).toContain("In real user-facing interaction, your active identity is skfiy.");
     expect(prompt).toContain("Speak from skfiy's first-person perspective");
     expect(prompt).toContain("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.");
-    expect(prompt).toContain("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label.");
-    if (label === "Claude Code") {
-      expect(userPrompt).not.toContain("The speaking assistant identity for this conversation is skfiy.");
-      expect(userPrompt).toContain("User: 你是谁");
-    } else {
-      expect(prompt.indexOf("The speaking assistant identity")).toBeLessThan(prompt.indexOf("User: 你是谁"));
-    }
+    expect(prompt).toContain("Do not prefix replies with Codex: or any backend provider label.");
+    expect(prompt.indexOf("The speaking assistant identity")).toBeLessThan(prompt.indexOf("User: 你是谁"));
   });
 
   it("injects personal memory after skfiy identity and before Browser Context", () => {
@@ -406,7 +290,7 @@ describe("assistant agent provider", () => {
         createdAt: "2026-07-07T10:05:00.000Z",
         userInput: "我想要 Obsidian 风格 dashboard",
         assistantReply: "我会偏知识图谱和深色画布。",
-        providerLabel: "Hermes"
+        providerLabel: "Codex"
       }
     ]);
 
@@ -439,7 +323,7 @@ describe("assistant agent provider", () => {
         createdAt: "2026-07-07T10:05:00.000Z",
         userInput: "Dashboard 要像 Obsidian，有知识图谱和双链",
         assistantReply: "我会做成本地知识画布。",
-        providerLabel: "Hermes"
+        providerLabel: "Codex"
       }
     ]);
 
@@ -474,7 +358,7 @@ describe("assistant agent provider", () => {
         createdAt: "2026-07-07T10:05:00.000Z",
         userInput: "Dashboard 要像 Obsidian，有知识图谱和双链",
         assistantReply: "我会做成本地知识画布。",
-        providerLabel: "Hermes"
+        providerLabel: "Codex"
       }
     ]);
 
@@ -512,147 +396,11 @@ describe("assistant agent provider", () => {
     expect(prompt).not.toContain("Favor linked knowledge");
   });
 
-  it("uses the Claude Code system prompt for skfiy identity without duplicating it in the user prompt", () => {
-    const invocation = buildAssistantAgentInvocation({
-      mode: "claude-code",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: "/tmp/skfiy",
-      timeoutMs: 45_000
-    }, "你好");
-
-    const systemPrompt = readArgValue(invocation.args, "--system-prompt");
-    const userPrompt = invocation.args.at(-1) ?? "";
-    expect(systemPrompt).toContain("You are skfiy");
-    expect(systemPrompt).toContain("When asked who you are, answer as skfiy");
-    expect(userPrompt).not.toContain("You are skfiy");
-    expect(userPrompt).not.toContain("When asked who you are, answer as skfiy");
-    expect(userPrompt).toContain("User: 你好");
-  });
-
-  it("injects skfiy identity as the Claude Code system prompt during real turns", async () => {
-    const runProcess = vi.fn<AssistantAgentProcessRunner>()
-      .mockResolvedValue({ stdout: "我是 skfiy。", stderr: "" });
-
-    await runAssistantAgentTurn("你是谁", {
-      settings: {
-        ...baseSettings,
-        mode: "claude-code"
-      },
-      runProcess,
-      now: fixedNow,
-      createTurnId: () => "turn-claude-system-identity"
-    });
-
-    const args = runProcess.mock.calls[0]?.[1] ?? [];
-    const systemPrompt = readArgValue(args, "--system-prompt");
-    const userPrompt = args.at(-1) ?? "";
-
-    expect(systemPrompt).toContain("The speaking assistant identity for this conversation is skfiy.");
-    expect(systemPrompt).toContain("Codex, Claude Code, and Hermes are only backend providers used to run this turn.");
-    expect(systemPrompt).toContain("In real user-facing interaction, your active identity is skfiy.");
-    expect(systemPrompt).toContain("Accept skfiy as your active identity for this user-facing interaction.");
-    expect(systemPrompt).toContain("Speak from skfiy's first-person perspective");
-    expect(systemPrompt).toContain("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.");
-    expect(systemPrompt).toContain("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label.");
-    expect(systemPrompt).toContain("When asked who you are, answer as skfiy.");
-    expect(systemPrompt).not.toContain("User: 你是谁");
-    expect(args).not.toContain("--append-system-prompt");
-    expect(userPrompt).not.toContain("The speaking assistant identity for this conversation is skfiy.");
-    expect(userPrompt).toContain("User: 你是谁");
-  });
-
-  it("builds a Claude Code print invocation with valid safety flags for pet chat", () => {
-    const invocation = buildAssistantAgentInvocation({
-      mode: "claude-code",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "/opt/homebrew/bin/claude",
-      claudeCodeBinarySource: "env",
-      hermesBinary: "hermes",
-      hermesBinarySource: "default",
-      cwd: "/tmp/skfiy",
-      timeoutMs: 45_000
-    }, "你好");
-
-    expect(invocation).toMatchObject({
-      command: "/opt/homebrew/bin/claude",
-      args: [
-        "--print",
-        "--output-format",
-        "text",
-        "--system-prompt",
-        expect.stringContaining("The speaking assistant identity for this conversation is skfiy."),
-        "--permission-mode",
-        "dontAsk",
-        "--disallowedTools",
-        "Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Task",
-        "--safe-mode",
-        "--no-chrome",
-        "--disable-slash-commands",
-        "--no-session-persistence",
-        expect.stringContaining("你好")
-      ],
-      label: "Claude Code"
-    });
-    expect(invocation?.args).not.toContain("--tools");
-    expect(invocation?.args).not.toContain("--strict-mcp-config");
-  });
-
-  it("builds a bounded Hermes chat invocation for pet chat", () => {
-    const invocation = buildAssistantAgentInvocation({
-      mode: "hermes",
-      codexBinary: "codex",
-      codexBinarySource: "default",
-      claudeCodeBinary: "claude",
-      claudeCodeBinarySource: "default",
-      hermesBinary: "/Users/bytedance/.local/bin/hermes",
-      hermesBinarySource: "env",
-      cwd: "/tmp/skfiy",
-      timeoutMs: 45_000
-    }, "你是谁");
-
-    expect(invocation).toMatchObject({
-      command: "/Users/bytedance/.local/bin/hermes",
-      args: [
-        "chat",
-        "--query",
-        expect.stringContaining("You are skfiy"),
-        "--quiet",
-        "--max-turns",
-        "1",
-        "--toolsets",
-        "safe",
-        "--ignore-rules",
-        "--source",
-        "skfiy-pet-chat"
-      ],
-      label: "Hermes"
-    });
-    expect(invocation.args.join(" ")).toContain("User: 你是谁");
-    expect(invocation.args).not.toContain("--oneshot");
-    expect(invocation.args).not.toContain("--yolo");
-  });
-
   it("runs the configured provider and trims its response", async () => {
     const runProcess = vi.fn(async () => ({ stdout: "  agent reply\n", stderr: "" }));
 
     await expect(runAssistantAgentTurn("hello", {
-      settings: {
-        mode: "codex",
-        codexBinary: "codex",
-        codexBinarySource: "default",
-        claudeCodeBinary: "claude",
-        claudeCodeBinarySource: "default",
-        hermesBinary: "hermes",
-        hermesBinarySource: "default",
-        cwd: "/tmp/skfiy",
-        timeoutMs: 45_000
-      },
+      settings: baseSettings,
       runProcess,
       now: fixedNow,
       createTurnId: () => "turn-provider"
@@ -903,10 +651,7 @@ describe("assistant agent provider", () => {
     });
 
     await expect(runAssistantAgentTurn("hello", {
-      settings: {
-        ...baseSettings,
-        mode: "codex"
-      },
+      settings: baseSettings,
       runProcess,
       now: fixedNow,
       createTurnId: () => "turn-failed"
@@ -933,25 +678,3 @@ describe("assistant agent provider", () => {
     });
   });
 });
-
-function readProviderPrompt(label: "Codex" | "Claude Code" | "Hermes", args: string[]): string {
-  if (label === "Hermes") {
-    const queryIndex = args.indexOf("--query");
-    return queryIndex >= 0 ? args[queryIndex + 1] ?? "" : "";
-  }
-
-  return args.at(-1) ?? "";
-}
-
-function readProviderIdentityPrompt(label: "Codex" | "Claude Code" | "Hermes", args: string[]): string {
-  if (label === "Claude Code") {
-    return readArgValue(args, "--system-prompt");
-  }
-
-  return readProviderPrompt(label, args);
-}
-
-function readArgValue(args: string[], flag: string): string {
-  const index = args.indexOf(flag);
-  return index >= 0 ? args[index + 1] ?? "" : "";
-}

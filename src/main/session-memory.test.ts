@@ -19,7 +19,7 @@ describe("session memory", () => {
       createdAt: "2026-07-07T10:00:00.000Z",
       userInput: "以后进度更新短一点",
       assistantReply: "我会更简洁。",
-      providerLabel: "Hermes",
+      providerLabel: "Codex",
       browserContext: {
         url: "https://example.test",
         title: "Example"
@@ -30,7 +30,7 @@ describe("session memory", () => {
       expect.objectContaining({
         turnId: "turn-1",
         userInput: "以后进度更新短一点",
-        providerLabel: "Hermes"
+        providerLabel: "Codex"
       })
     ]);
   });
@@ -84,7 +84,7 @@ describe("session memory", () => {
         createdAt: "2026-07-07T10:00:00.000Z",
         userInput: "以后进度更新短一点，token sk-test-1234567890abcdef 不要展示",
         assistantReply: "我会用中文短句更新。",
-        providerLabel: "Hermes",
+        providerLabel: "Codex",
         browserContext: {
           url: "https://example.test/dashboard",
           title: "Dashboard"
@@ -93,7 +93,7 @@ describe("session memory", () => {
     ]);
 
     expect(block).toContain("<skfiy-recalled-sessions>");
-    expect(block).toContain("Provider: Hermes");
+    expect(block).toContain("Provider: Codex");
     expect(block).toContain("Browser: Dashboard");
     expect(block).toContain("User asked: 以后进度更新短一点");
     expect(block).toContain("token [redacted]");
