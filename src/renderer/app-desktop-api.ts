@@ -39,6 +39,16 @@ export const fallbackDesktopApi: DesktopApi = {
   runCommand: async () => undefined,
   approveTask: async () => undefined,
   denyTask: async () => undefined,
+  prepareTaskRecovery: async () => ({
+    state: "rejected",
+    code: "recovery-unknown",
+    message: "Task recovery is unavailable in this renderer environment."
+  }),
+  dispatchTaskRecovery: async () => ({
+    state: "rejected",
+    code: "recovery-dispatch-unavailable",
+    message: "Task recovery dispatch is unavailable in this renderer environment."
+  }),
   takeScreenshot: async () => undefined,
   stopTask: async () => undefined,
   getPermissions: async () => UNKNOWN_PERMISSIONS,

@@ -6,7 +6,13 @@ import type {
   ConversationSession,
   ConversationTurn
 } from "../shared/conversation-history.js";
-import type { TaskControlSnapshot } from "../shared/task-control.js";
+import type {
+  TaskControlRecoveryDescriptor,
+  TaskControlRecoveryDispatchResult,
+  TaskControlRecoveryPreparationResult,
+  TaskControlRecoveryRequest,
+  TaskControlSnapshot
+} from "../shared/task-control.js";
 
 type ManualMode = "active" | "quiet";
 type PetWindowMode = "compact" | "expanded";
@@ -129,6 +135,33 @@ const taskControlRecoveryActions = new Set([
   "revise_plan",
   "open_readiness"
 ]);
+const taskControlFailureStages = new Set([
+  "preflight",
+  "approval",
+  "observation",
+  "execution",
+  "verification"
+]);
+const taskControlRecoveryModes = new Set(["prepare_only", "draft_only", "navigation"]);
+const taskControlRecoveryResultCodes = new Set([
+  "recovery-prepared",
+  "recovery-invalid-request",
+  "recovery-invalid-response",
+  "recovery-stale-execution",
+  "recovery-unknown",
+  "recovery-mismatched"
+]);
+const taskControlRecoveryDispatchResultCodes = new Set([
+  "recovery-dispatched",
+  "recovery-dispatch-invalid-request",
+  "recovery-dispatch-invalid-response",
+  "recovery-dispatch-stale-execution",
+  "recovery-dispatch-unknown",
+  "recovery-dispatch-mismatched",
+  "recovery-not-prepared",
+  "recovery-already-dispatched",
+  "recovery-dispatch-unavailable"
+]);
 const taskControlSideEffectStates = new Set(["none", "possible", "occurred"]);
 const taskControlPlanKeys = new Set([
   "planId",
@@ -169,6 +202,39 @@ const taskControlFinderPreviewRequiredKeys = [
   "moveFiles"
 ];
 const taskControlFinderMoveKeys = new Set(["from", "to"]);
+const taskControlRecoveryDescriptorKeys = new Set([
+  "recoveryId",
+  "action",
+  "mode",
+  "executionId",
+  "planId",
+  "route",
+  "outcome",
+  "failureStage"
+]);
+const taskControlRecoveryRequestKeys = new Set([
+  "recoveryId",
+  "action",
+  "executionId",
+  "planId",
+  "route",
+  "outcome",
+  "failureStage"
+]);
+const taskControlRecoveryResultKeys = new Set([
+  "state",
+  "code",
+  "message",
+  "descriptor",
+  "draft"
+]);
+const taskControlRecoveryDispatchResultKeys = new Set([
+  "state",
+  "code",
+  "message",
+  "descriptor",
+  "recoveryExecutionId"
+]);
 const taskApprovalDecisionKeys = new Set(["executionId", "planId"]);
 const taskControlSnapshotKeys = new Set([
   "schemaVersion",
@@ -180,6 +246,9 @@ const taskControlSnapshotKeys = new Set([
   "sideEffectState",
   "replayAvailable",
   "recoveryActions",
+  "executionPlanId",
+  "failureStage",
+  "recoveryDescriptors",
   "approval",
   "outcome"
 ]);
@@ -624,6 +693,12 @@ interface DesktopApi {
     input: { sessionId: string; turnId: string; requestId: string }
   ) => Promise<ConversationRetryResult>;
   getTaskControl: () => Promise<TaskControlSnapshot | null>;
+  prepareTaskRecovery: (
+    input: TaskControlRecoveryRequest
+  ) => Promise<TaskControlRecoveryPreparationResult>;
+  dispatchTaskRecovery: (
+    input: TaskControlRecoveryRequest
+  ) => Promise<TaskControlRecoveryDispatchResult>;
   getTurnReplay: () => Promise<TurnReplay | null>;
   getAutomationMonitors: () => Promise<AutomationMonitorSnapshot>;
   upsertTmuxMonitor: (
@@ -1047,6 +1122,36 @@ const api: DesktopApi = {
   async getTaskControl() {
     const payload = await ipcRenderer.invoke("skfiy:get-task-control");
     return isTaskControlSnapshot(payload) ? cloneTaskControlSnapshot(payload) : null;
+  },
+  async prepareTaskRecovery(input) {
+    const request = requireTaskControlRecoveryRequest(input);
+    const payload = await ipcRenderer.invoke("skfiy:prepare-task-recovery", request);
+    return isTaskControlRecoveryPreparationResult(payload)
+      && (
+        payload.state === "rejected"
+        || taskControlRecoveryRequestMatchesDescriptor(request, payload.descriptor)
+      )
+      ? cloneTaskControlRecoveryPreparationResult(payload)
+      : {
+          state: "rejected",
+          code: "recovery-invalid-response",
+          message: "Task recovery returned an invalid response and was not prepared."
+        };
+  },
+  async dispatchTaskRecovery(input) {
+    const request = requireTaskControlRecoveryRequest(input);
+    const payload = await ipcRenderer.invoke("skfiy:dispatch-task-recovery", request);
+    return isTaskControlRecoveryDispatchResult(payload)
+      && (
+        payload.state === "rejected"
+        || taskControlRecoveryRequestMatchesDescriptor(request, payload.descriptor)
+      )
+      ? cloneTaskControlRecoveryDispatchResult(payload)
+      : {
+          state: "rejected",
+          code: "recovery-dispatch-invalid-response",
+          message: "Task recovery dispatch returned an invalid response and was not accepted."
+        };
   },
   async getTurnReplay() {
     const payload = await ipcRenderer.invoke("skfiy:get-turn-replay");
@@ -1686,11 +1791,66 @@ function isTaskControlSnapshot(value: unknown): value is TaskControlSnapshot {
     return false;
   }
 
+  const plan = readTaskControlRecord(snapshot.plan)!;
+  const executionPlanId = snapshot.executionPlanId;
+  if (
+    executionPlanId !== undefined
+    && (
+      !isTaskControlIdentifier(executionPlanId)
+      || !isTaskControlExecutionPlanId(executionPlanId, plan)
+    )
+  ) {
+    return false;
+  }
+  if (
+    snapshot.failureStage !== undefined
+    && !isTaskControlFailureStage(snapshot.failureStage)
+  ) {
+    return false;
+  }
+  if (
+    snapshot.recoveryDescriptors !== undefined
+    && !isTaskControlRecoveryDescriptorList(snapshot.recoveryDescriptors)
+  ) {
+    return false;
+  }
+
   if (snapshot.phase === "terminal") {
-    return typeof snapshot.outcome === "string"
-      && taskControlOutcomes.has(snapshot.outcome)
-      && snapshot.status === snapshot.outcome
-      && snapshot.approval === undefined;
+    if (
+      typeof snapshot.outcome !== "string"
+      || !taskControlOutcomes.has(snapshot.outcome)
+      || snapshot.status !== snapshot.outcome
+      || snapshot.approval === undefined
+    ) {
+      return false;
+    }
+    const descriptors = snapshot.recoveryDescriptors;
+    if (descriptors === undefined) return true;
+    if (!isTaskControlIdentifier(executionPlanId)) return false;
+    if (snapshot.outcome === "completed") {
+      return descriptors.length === 0
+        && (snapshot.recoveryActions as unknown[]).length === 0
+        && snapshot.failureStage === undefined;
+    }
+    if (!isTaskControlFailureStage(snapshot.failureStage) || descriptors.length === 0) {
+      return false;
+    }
+    const actions = snapshot.recoveryActions as string[];
+    return descriptors.length === actions.length
+      && descriptors.every((descriptor, index) =>
+        descriptor.action === actions[index]
+        && descriptor.executionId === snapshot.executionId
+        && descriptor.planId === executionPlanId
+        && descriptor.route === plan.route
+        && descriptor.outcome === snapshot.outcome
+        && descriptor.failureStage === snapshot.failureStage
+        && isTaskControlRecoveryActionAllowed(
+          descriptor.action,
+          descriptor.failureStage,
+          descriptor.outcome,
+          snapshot.sideEffectState as string
+        )
+      );
   }
 
   const approvalIsValid = snapshot.phase === "approval"
@@ -1699,10 +1859,20 @@ function isTaskControlSnapshot(value: unknown): value is TaskControlSnapshot {
 
   return approvalIsValid
     && snapshot.outcome === undefined
+    && snapshot.failureStage === undefined
     && snapshot.status === taskControlActiveStatusByPhase[
       snapshot.phase as keyof typeof taskControlActiveStatusByPhase
     ]
-    && snapshot.recoveryActions.length === 0;
+    && snapshot.recoveryActions.length === 0
+    && (
+      snapshot.recoveryDescriptors === undefined
+      || snapshot.recoveryDescriptors.length === 0
+    )
+    && (
+      executionPlanId === undefined
+      || snapshot.phase !== "approval"
+      || executionPlanId === readTaskControlRecord(snapshot.approval)?.planId
+    );
 }
 
 function isTaskControlApproval(value: unknown, planValue: unknown): boolean {
@@ -1864,6 +2034,262 @@ function isTaskControlRecoveryActionList(value: unknown): value is string[] {
     && value.every((action) => typeof action === "string" && taskControlRecoveryActions.has(action));
 }
 
+function isTaskControlFailureStage(value: unknown): value is TaskControlRecoveryDescriptor["failureStage"] {
+  return typeof value === "string" && taskControlFailureStages.has(value);
+}
+
+function isTaskControlRecoveryDescriptor(
+  value: unknown
+): value is TaskControlRecoveryDescriptor {
+  const descriptor = readTaskControlRecord(value);
+  if (!descriptor || !hasStrictTaskControlKeys(
+    descriptor,
+    taskControlRecoveryDescriptorKeys,
+    [...taskControlRecoveryDescriptorKeys]
+  )) {
+    return false;
+  }
+  return isTaskControlIdentifier(descriptor.recoveryId)
+    && typeof descriptor.action === "string"
+    && taskControlRecoveryActions.has(descriptor.action)
+    && typeof descriptor.mode === "string"
+    && taskControlRecoveryModes.has(descriptor.mode)
+    && isTaskControlRecoveryModeForAction(descriptor.mode, descriptor.action)
+    && isTaskControlIdentifier(descriptor.executionId)
+    && isTaskControlIdentifier(descriptor.planId)
+    && typeof descriptor.route === "string"
+    && taskControlRoutes.has(descriptor.route)
+    && typeof descriptor.outcome === "string"
+    && descriptor.outcome !== "completed"
+    && taskControlOutcomes.has(descriptor.outcome)
+    && isTaskControlFailureStage(descriptor.failureStage);
+}
+
+function isTaskControlRecoveryDescriptorList(
+  value: unknown
+): value is TaskControlRecoveryDescriptor[] {
+  if (!Array.isArray(value) || value.length > taskControlRecoveryActions.size) return false;
+  const ids = new Set<string>();
+  const actions = new Set<string>();
+  for (const descriptor of value) {
+    if (
+      !isTaskControlRecoveryDescriptor(descriptor)
+      || ids.has(descriptor.recoveryId)
+      || actions.has(descriptor.action)
+    ) {
+      return false;
+    }
+    ids.add(descriptor.recoveryId);
+    actions.add(descriptor.action);
+  }
+  return true;
+}
+
+function isTaskControlRecoveryModeForAction(mode: string, action: string): boolean {
+  if (action === "open_readiness") return mode === "navigation";
+  if (action === "revise_plan") return mode === "draft_only";
+  return mode === "prepare_only";
+}
+
+function isTaskControlExecutionPlanId(
+  executionPlanId: string,
+  plan: Record<string, unknown>
+): boolean {
+  return executionPlanId === plan.planId
+    || (
+      plan.route === "finder"
+      && typeof plan.planId === "string"
+      && executionPlanId.startsWith(`${plan.planId}:`)
+    );
+}
+
+function isTaskControlRecoveryActionAllowed(
+  action: string,
+  failureStage: string,
+  outcome: string,
+  sideEffectState: string
+): boolean {
+  if (outcome === "user_denied") {
+    return failureStage === "approval" && action === "revise_plan";
+  }
+  if (outcome === "cancelled") return action === "revise_plan";
+  if (outcome === "app_policy_denied" || outcome === "blocked") {
+    return failureStage === "preflight"
+      && (action === "revise_plan" || action === "open_readiness");
+  }
+  if (outcome === "confirmation_required") {
+    return failureStage === "verification"
+      && (
+        action === "retry_observation"
+        || action === "retry_verification"
+        || action === "revise_plan"
+      );
+  }
+  if (outcome !== "failed") return false;
+  if (failureStage === "preflight") {
+    return action === "revise_plan" || action === "open_readiness";
+  }
+  if (failureStage === "approval") return action === "revise_plan";
+  if (failureStage === "observation") {
+    return action === "retry_observation"
+      || action === "revise_plan"
+      || action === "open_readiness";
+  }
+  if (failureStage === "execution") {
+    return action === "revise_plan"
+      || (sideEffectState !== "none" && action === "retry_verification");
+  }
+  return failureStage === "verification"
+    && (
+      action === "retry_observation"
+      || action === "retry_verification"
+      || action === "revise_plan"
+    );
+}
+
+function requireTaskControlRecoveryRequest(value: unknown): TaskControlRecoveryRequest {
+  const request = readTaskControlRecord(value);
+  if (!request || !hasStrictTaskControlKeys(
+    request,
+    taskControlRecoveryRequestKeys,
+    [...taskControlRecoveryRequestKeys]
+  )) {
+    throw new Error("Task recovery request must include an exact bounded binding.");
+  }
+  const recoveryId = request.recoveryId;
+  const action = request.action;
+  const executionId = request.executionId;
+  const planId = request.planId;
+  const route = request.route;
+  const outcome = request.outcome;
+  const failureStage = request.failureStage;
+  if (
+    !isTaskControlIdentifier(recoveryId)
+    || typeof action !== "string"
+    || !taskControlRecoveryActions.has(action)
+    || !isTaskControlIdentifier(executionId)
+    || !isTaskControlIdentifier(planId)
+    || typeof route !== "string"
+    || !taskControlRoutes.has(route)
+    || typeof outcome !== "string"
+    || outcome === "completed"
+    || !taskControlOutcomes.has(outcome)
+    || !isTaskControlFailureStage(failureStage)
+  ) {
+    throw new Error("Task recovery request must match a known execution-bound descriptor.");
+  }
+
+  return {
+    recoveryId: recoveryId as TaskControlRecoveryRequest["recoveryId"],
+    action: action as TaskControlRecoveryRequest["action"],
+    executionId: executionId as TaskControlRecoveryRequest["executionId"],
+    planId: planId as TaskControlRecoveryRequest["planId"],
+    route: route as TaskControlRecoveryRequest["route"],
+    outcome: outcome as TaskControlRecoveryRequest["outcome"],
+    failureStage
+  };
+}
+
+function isTaskControlRecoveryPreparationResult(
+  value: unknown
+): value is TaskControlRecoveryPreparationResult {
+  const result = readTaskControlRecord(value);
+  if (!result || !hasStrictTaskControlKeys(
+    result,
+    taskControlRecoveryResultKeys,
+    ["state", "code", "message"]
+  ) || !isTaskControlText(result.message, 2_000)) {
+    return false;
+  }
+
+  if (result.state === "prepared") {
+    if (
+      result.code !== "recovery-prepared"
+      || !isTaskControlRecoveryDescriptor(result.descriptor)
+    ) {
+      return false;
+    }
+    return result.descriptor.mode === "draft_only"
+      ? isTaskControlText(result.draft, 2_000)
+      : result.draft === undefined;
+  }
+
+  return result.state === "rejected"
+    && typeof result.code === "string"
+    && result.code !== "recovery-prepared"
+    && taskControlRecoveryResultCodes.has(result.code)
+    && result.descriptor === undefined
+    && result.draft === undefined;
+}
+
+function isTaskControlRecoveryDispatchResult(
+  value: unknown
+): value is TaskControlRecoveryDispatchResult {
+  const result = readTaskControlRecord(value);
+  if (!result || !hasStrictTaskControlKeys(
+    result,
+    taskControlRecoveryDispatchResultKeys,
+    ["state", "code", "message"]
+  ) || !isTaskControlText(result.message, 2_000)) {
+    return false;
+  }
+
+  if (result.state === "dispatched") {
+    return result.code === "recovery-dispatched"
+      && isTaskControlRecoveryDescriptor(result.descriptor)
+      && result.descriptor.mode === "prepare_only"
+      && isTaskControlIdentifier(result.recoveryExecutionId);
+  }
+
+  return result.state === "rejected"
+    && typeof result.code === "string"
+    && result.code !== "recovery-dispatched"
+    && taskControlRecoveryDispatchResultCodes.has(result.code)
+    && result.descriptor === undefined
+    && result.recoveryExecutionId === undefined;
+}
+
+function taskControlRecoveryRequestMatchesDescriptor(
+  request: TaskControlRecoveryRequest,
+  descriptor: TaskControlRecoveryDescriptor
+): boolean {
+  return request.recoveryId === descriptor.recoveryId
+    && request.action === descriptor.action
+    && request.executionId === descriptor.executionId
+    && request.planId === descriptor.planId
+    && request.route === descriptor.route
+    && request.outcome === descriptor.outcome
+    && request.failureStage === descriptor.failureStage;
+}
+
+function cloneTaskControlRecoveryDescriptor(
+  descriptor: TaskControlRecoveryDescriptor
+): TaskControlRecoveryDescriptor {
+  return { ...descriptor };
+}
+
+function cloneTaskControlRecoveryPreparationResult(
+  result: TaskControlRecoveryPreparationResult
+): TaskControlRecoveryPreparationResult {
+  return result.state === "prepared"
+    ? {
+        ...result,
+        descriptor: { ...result.descriptor }
+      }
+    : { ...result };
+}
+
+function cloneTaskControlRecoveryDispatchResult(
+  result: TaskControlRecoveryDispatchResult
+): TaskControlRecoveryDispatchResult {
+  return result.state === "dispatched"
+    ? {
+        ...result,
+        descriptor: { ...result.descriptor }
+      }
+    : { ...result };
+}
+
 function isTaskControlIdentifier(value: unknown): value is string {
   return typeof value === "string"
     && value.length > 0
@@ -1918,6 +2344,9 @@ function cloneTaskControlSnapshot(snapshot: TaskControlSnapshot): TaskControlSna
       risk: { ...snapshot.plan.risk }
     },
     recoveryActions: [...snapshot.recoveryActions],
+    ...(snapshot.recoveryDescriptors ? {
+      recoveryDescriptors: snapshot.recoveryDescriptors.map(cloneTaskControlRecoveryDescriptor)
+    } : {}),
     ...(snapshot.approval ? { approval: cloneTaskControlApproval(snapshot.approval) } : {})
   };
 }

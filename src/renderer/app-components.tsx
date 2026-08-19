@@ -43,8 +43,18 @@ import type {
 } from "./app-types";
 import type {
   TaskControlRecoveryAction,
+  TaskControlRecoveryDescriptor,
   TaskControlSnapshot
 } from "../shared/task-control";
+import {
+  areTaskControlRecoveryDescriptorsEqual,
+  readAuthoritativeTaskControlRecoveryDescriptors
+} from "./app-task-control-recovery";
+
+const TASK_CONTROL_PREPARED_RECOVERY_LABELS = {
+  retry_observation: "Run prepared observation retry",
+  retry_verification: "Run prepared verification retry"
+} as const;
 
 export function TaskReplay({ records }: { records: ObserveAppReplayRecord[] }) {
   const rows = getTaskReplayRows(records);
@@ -93,8 +103,13 @@ export function TaskControlCard({
   onApprove,
   onDeny,
   onOpenReplay,
+  onDispatchRecovery = () => undefined,
   onRecover,
   onStop,
+  recoveryFeedback,
+  preparedRecoveryDescriptor,
+  recoveryDispatchPending = false,
+  recoveryPreparationPending = false,
   snapshot,
   stopPending
 }: {
@@ -103,8 +118,13 @@ export function TaskControlCard({
   onApprove: (input: TaskApprovalDecisionInput) => void;
   onDeny: (input: TaskApprovalDecisionInput) => void;
   onOpenReplay: () => void;
-  onRecover: (action: TaskControlRecoveryAction) => void;
+  onDispatchRecovery?: (descriptor: TaskControlRecoveryDescriptor) => void;
+  onRecover: (descriptor: TaskControlRecoveryDescriptor) => void;
   onStop: () => void;
+  recoveryFeedback?: string;
+  preparedRecoveryDescriptor?: TaskControlRecoveryDescriptor;
+  recoveryDispatchPending?: boolean;
+  recoveryPreparationPending?: boolean;
   snapshot: TaskControlSnapshot;
   stopPending: boolean;
 }) {
@@ -113,6 +133,7 @@ export function TaskControlCard({
     executionId: snapshot.executionId,
     planId: snapshot.approval.planId
   } : null;
+  const recoveryDescriptors = readAuthoritativeTaskControlRecoveryDescriptors(snapshot);
 
   return (
     <section
@@ -166,6 +187,11 @@ export function TaskControlCard({
       ) : null}
 
       {actionError ? <p className="task-control-error" role="alert">{actionError}</p> : null}
+      {recoveryFeedback ? (
+        <p className="task-control-recovery-feedback" role="status" aria-live="polite">
+          {recoveryFeedback}
+        </p>
+      ) : null}
 
       <div
         className="task-control-actions"
@@ -213,22 +239,85 @@ export function TaskControlCard({
         ) : null}
       </div>
 
-      {snapshot.recoveryActions.length > 0 ? (
-        <div className="task-control-recovery" aria-label="Task recovery actions">
+      {recoveryDescriptors.length > 0 ? (
+        <div
+          className="task-control-recovery"
+          aria-busy={recoveryPreparationPending || recoveryDispatchPending ? "true" : undefined}
+          aria-label="Task recovery actions"
+          role="group"
+        >
           <strong>Recovery</strong>
           <div>
-            {snapshot.recoveryActions.map((action) => (
-              <button
-                type="button"
-                aria-label={TASK_CONTROL_RECOVERY_LABELS[action]}
-                key={action}
-                onClick={() => onRecover(action)}
-              >
-                {TASK_CONTROL_RECOVERY_LABELS[action]}
-              </button>
-            ))}
+            {recoveryDescriptors.map((descriptor, index) => {
+              const prepared = preparedRecoveryDescriptor
+                && areTaskControlRecoveryDescriptorsEqual(
+                  descriptor,
+                  preparedRecoveryDescriptor
+                )
+                ? preparedRecoveryDescriptor
+                : null;
+              const preparationDisabled = recoveryPreparationPending || Boolean(prepared);
+              return (
+                <span key={descriptor.recoveryId}>
+                  <button
+                    type="button"
+                    aria-disabled={preparationDisabled ? "true" : undefined}
+                    aria-label={TASK_CONTROL_RECOVERY_LABELS[descriptor.action]}
+                    data-task-control-primary-recovery={index === 0 ? "true" : undefined}
+                    onClick={() => {
+                      if (!preparationDisabled) onRecover(descriptor);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        preparationDisabled
+                        && (event.key === "Enter" || event.key === " ")
+                      ) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }
+                    }}
+                  >
+                    {TASK_CONTROL_RECOVERY_LABELS[descriptor.action]}
+                  </button>
+                  {prepared && prepared.action in TASK_CONTROL_PREPARED_RECOVERY_LABELS ? (
+                    <button
+                      type="button"
+                      aria-disabled={recoveryDispatchPending ? "true" : undefined}
+                      aria-label={TASK_CONTROL_PREPARED_RECOVERY_LABELS[
+                        prepared.action as keyof typeof TASK_CONTROL_PREPARED_RECOVERY_LABELS
+                      ]}
+                      data-task-control-action="dispatch-recovery"
+                      onClick={() => {
+                        if (!recoveryDispatchPending) onDispatchRecovery(prepared);
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          recoveryDispatchPending
+                          && (event.key === "Enter" || event.key === " ")
+                        ) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }
+                      }}
+                    >
+                      {TASK_CONTROL_PREPARED_RECOVERY_LABELS[
+                        prepared.action as keyof typeof TASK_CONTROL_PREPARED_RECOVERY_LABELS
+                      ]}
+                    </button>
+                  ) : null}
+                </span>
+              );
+            })}
           </div>
         </div>
+      ) : snapshot.recoveryActions.length > 0 ? (
+        <p
+          className="task-control-recovery-unavailable"
+          aria-label="Task recovery unavailable"
+          role="note"
+        >
+          Task recovery is unavailable because authoritative recovery details are missing.
+        </p>
       ) : null}
     </section>
   );

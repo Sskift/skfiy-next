@@ -136,6 +136,54 @@ export interface FinderPlanPreview {
   copyFiles?: Array<{ from: string; to: string }>;
 }
 
+export type FinderCollisionPolicy = "cancel" | "skip" | "rename" | "replace";
+export type FinderFileResolution = "move" | "copy" | "unresolved" | "skip" | "rename" | "replace";
+
+export interface FinderFileIdentityBinding {
+  device: number;
+  inode: number;
+  size: number;
+  modifiedAtMs: number;
+  changedAtMs: number;
+}
+
+export type FinderExecutionPlanOperation =
+  | {
+      operationId: string;
+      type: "create_folder";
+      path: string;
+    }
+  | {
+      operationId: string;
+      type: "move_file";
+      from: string;
+      requestedTo: string;
+      to: string;
+      resolution: FinderFileResolution;
+      replaceEligible: boolean;
+      expectedSourceIdentity?: FinderFileIdentityBinding;
+      expectedDestinationIdentity?: FinderFileIdentityBinding;
+    }
+  | {
+      operationId: string;
+      type: "copy_file";
+      from: string;
+      requestedTo: string;
+      to: string;
+      resolution: FinderFileResolution;
+      replaceEligible: boolean;
+      expectedSourceIdentity?: FinderFileIdentityBinding;
+      expectedDestinationIdentity?: FinderFileIdentityBinding;
+    };
+
+export interface FinderExecutionPlanBinding {
+  schemaVersion: 1;
+  targetKind: FinderOrganizationTarget["kind"];
+  rootPath: string;
+  collisionPolicy: FinderCollisionPolicy;
+  operations: FinderExecutionPlanOperation[];
+}
+
 export interface FinderDesktopClient {
   executeAction(action: DesktopExecutableAction): Promise<DesktopActionResult>;
   getDesktopSessionStatus?(): Promise<DesktopSessionStatus>;

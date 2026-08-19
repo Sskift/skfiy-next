@@ -12,7 +12,12 @@ import type {
   ConversationHistorySnapshot,
   ConversationRetryResult
 } from "../shared/conversation-history.js";
-import type { TaskControlSnapshot } from "../shared/task-control.js";
+import type {
+  TaskControlRecoveryDispatchResult,
+  TaskControlRecoveryPreparationResult,
+  TaskControlRecoveryRequest,
+  TaskControlSnapshot
+} from "../shared/task-control.js";
 
 export type {
   ConversationHistorySnapshot,
@@ -22,6 +27,9 @@ export type {
   RouteOutcome,
   RouteOutcomeKind,
   RouteOutcomeTone,
+  TaskControlRecoveryDispatchResult,
+  TaskControlRecoveryPreparationResult,
+  TaskControlRecoveryRequest,
   TaskControlSnapshot
 };
 
@@ -416,6 +424,12 @@ export interface DesktopApi {
   runCommand: (command: string, options: { mode: ManualMode }) => Promise<void>;
   approveTask: (input: TaskApprovalDecisionInput) => Promise<void>;
   denyTask: (input: TaskApprovalDecisionInput) => Promise<void>;
+  prepareTaskRecovery: (
+    input: TaskControlRecoveryRequest
+  ) => Promise<TaskControlRecoveryPreparationResult>;
+  dispatchTaskRecovery: (
+    input: TaskControlRecoveryRequest
+  ) => Promise<TaskControlRecoveryDispatchResult>;
   takeScreenshot: () => Promise<void>;
   stopTask: () => Promise<void>;
   getPermissions: () => Promise<PermissionSummary>;

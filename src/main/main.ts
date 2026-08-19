@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DesktopHelperClient } from "./computer-use/desktop-helper.js";
+import { buildCdpCommand } from "./computer-use/browser-control.js";
 import {
   createTurnReplayStore,
   type TurnReplay
@@ -199,6 +200,13 @@ import {
   startComputerUseTaskControl
 } from "./main-task-control.js";
 import { createTaskControlStore } from "./task-control-store.js";
+import { createTaskRecoveryRegistry } from "./task-recovery-registry.js";
+import { startTaskRecoveryDispatch } from "./task-recovery-dispatch.js";
+import {
+  readTaskRecoveryChromePageSnapshot,
+  runTaskRecoveryStage
+} from "./task-recovery-stage.js";
+import { readTaskRecoveryPathStatus } from "./task-recovery-stage-runtime.js";
 import { createStopTaskEventDecision } from "./main-stop-task.js";
 import { createSmokeAssistantAgentTaskTurn } from "./main-smoke-assistant-turn.js";
 import {
@@ -277,7 +285,10 @@ const turnReplayStore = createTurnReplayStore({
     persistRuntimeSnapshot(replay);
   }
 });
-const taskControlStore = createTaskControlStore();
+const taskRecoveryRegistry = createTaskRecoveryRegistry();
+const taskControlStore = createTaskControlStore({
+  onChanged: (snapshot) => taskRecoveryRegistry.sync(snapshot)
+});
 const automationMonitorManager = createAutomationMonitorManager({
   store: createAutomationMonitorStore({
     filePath: createAutomationMonitorStatePath(os.homedir()),
@@ -1168,6 +1179,12 @@ async function continueComputerUseTask({
   activeComputerUseToolIdentity = toolIdentity;
   activeComputerUseRoute = route;
   let taskControl = readTaskControlForTool(toolIdentity);
+  taskRecoveryRegistry.bindExecutionContext({
+    executionId: taskControl.executionId,
+    command,
+    mode,
+    route
+  });
   const conversationStore = conversationSessionStore;
   const markConversationDispatching = () => {
     if (conversationStore && activeConversationTurn?.turnId === toolIdentity.turnId) {
@@ -2124,6 +2141,59 @@ ipcMain.handle("skfiy:get-turn-replay", () => {
 
 ipcMain.handle("skfiy:get-task-control", () => {
   return taskControlStore.read();
+});
+
+ipcMain.handle("skfiy:prepare-task-recovery", (_event, value: unknown) => {
+  return taskRecoveryRegistry.prepare(value, taskControlStore.read());
+});
+
+ipcMain.handle("skfiy:dispatch-task-recovery", (event, value: unknown) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const helper = createDesktopHelper();
+  let recoveryController: AbortController | null = null;
+  let recoveryTaskId: number | null = null;
+  const dispatch = startTaskRecoveryDispatch({
+    registry: taskRecoveryRegistry,
+    request: value,
+    store: taskControlStore,
+    runStage: (input) => {
+      const epoch = startComputerUseTaskEpoch();
+      recoveryController = epoch.controller;
+      recoveryTaskId = epoch.taskId;
+      return runTaskRecoveryStage(input, {
+        readPathStatus: (candidatePath) => readTaskRecoveryPathStatus(candidatePath),
+        listRunningAppBundleIds: async () => (await helper.listApps())
+          .map((candidate) => candidate.bundleId),
+        ...(chromeCdpEndpoint ? {
+          observeChromePage: async () => {
+            const result = await createChromeCdpClient({ endpoint: chromeCdpEndpoint })
+              .sendCdpCommand(buildCdpCommand({ type: "extract_page_snapshot" }));
+            return readTaskRecoveryChromePageSnapshot(result);
+          }
+        } : {})
+      });
+    },
+    isCurrent: () => Boolean(
+      recoveryController
+      && !recoveryController.signal.aborted
+      && recoveryTaskId === currentTaskId
+    ),
+    onLifecycle: ({ status, message, snapshot }) => {
+      emitTurnReplayTaskEvent(window, decorateTaskEventWithTaskControl(
+        { status, message, route: snapshot.plan.route },
+        snapshot
+      ));
+    }
+  });
+
+  if (dispatch.completion) {
+    void dispatch.completion.catch(() => undefined).finally(() => {
+      if (activeTaskController === recoveryController) {
+        activeTaskController = null;
+      }
+    });
+  }
+  return dispatch.result;
 });
 
 ipcMain.handle("skfiy:get-automation-monitors", () => {

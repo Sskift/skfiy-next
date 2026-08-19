@@ -83,6 +83,16 @@ beforeEach(() => {
     runCommand: vi.fn<DesktopApi["runCommand"]>().mockResolvedValue(undefined),
     approveTask: vi.fn<DesktopApi["approveTask"]>().mockResolvedValue(undefined),
     denyTask: vi.fn<DesktopApi["denyTask"]>().mockResolvedValue(undefined),
+    prepareTaskRecovery: vi.fn<DesktopApi["prepareTaskRecovery"]>().mockResolvedValue({
+      state: "rejected",
+      code: "recovery-unknown",
+      message: "Task recovery is unavailable in this renderer environment."
+    }),
+    dispatchTaskRecovery: vi.fn<DesktopApi["dispatchTaskRecovery"]>().mockResolvedValue({
+      state: "rejected",
+      code: "recovery-dispatch-unavailable",
+      message: "Task recovery dispatch is unavailable in this renderer environment."
+    }),
     takeScreenshot: vi.fn<DesktopApi["takeScreenshot"]>().mockResolvedValue(undefined),
     stopTask: vi.fn<DesktopApi["stopTask"]>().mockResolvedValue(undefined),
     getPermissions: vi.fn<DesktopApi["getPermissions"]>().mockResolvedValue({

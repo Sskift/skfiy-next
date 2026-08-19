@@ -9,7 +9,8 @@ describe("Task Control main-process wiring", () => {
     const clearIndex = runCommand.indexOf("taskControlStore.clear();");
     const beginTurnIndex = runCommand.indexOf("conversationStore.beginTurn({");
 
-    expect(source).toContain("const taskControlStore = createTaskControlStore();");
+    expect(source).toContain("const taskRecoveryRegistry = createTaskRecoveryRegistry();");
+    expect(source).toContain("onChanged: (snapshot) => taskRecoveryRegistry.sync(snapshot)");
     expect(source).toContain("startTaskControlForComputerUse({");
     expect(source).toContain("emitTaskControlEventForTool(window, event, toolIdentity)");
     expect(source).toContain('ipcMain.handle("skfiy:get-task-control", () => {');

@@ -1,8 +1,33 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { TaskControlSnapshot } from "../shared/task-control";
+import type {
+  TaskControlRecoveryAction,
+  TaskControlRecoveryDescriptor,
+  TaskControlSnapshot
+} from "../shared/task-control";
 import { TaskControlCard } from "./app-components";
+
+function createRecoveryDescriptor(
+  action: TaskControlRecoveryAction,
+  overrides: Partial<TaskControlRecoveryDescriptor> = {}
+): TaskControlRecoveryDescriptor {
+  return {
+    recoveryId: `recovery-${action}`,
+    action,
+    mode: action === "revise_plan"
+      ? "draft_only"
+      : action === "open_readiness"
+        ? "navigation"
+        : "prepare_only",
+    executionId: "execution-1",
+    planId: "plan-1",
+    route: "chrome",
+    outcome: "failed",
+    failureStage: "verification",
+    ...overrides
+  };
+}
 
 function createTaskControlSnapshot(
   overrides: Partial<TaskControlSnapshot> = {}
@@ -192,6 +217,12 @@ describe("TaskControlCard", () => {
   it("keeps exact terminal outcomes distinct and exposes replay and recovery entry points", () => {
     const onOpenReplay = vi.fn();
     const onRecover = vi.fn();
+    const recoveryActions = [
+      "retry_observation",
+      "retry_verification",
+      "revise_plan",
+      "open_readiness"
+    ] as const;
     const { rerender } = render(
       <TaskControlCard
         snapshot={createTaskControlSnapshot({
@@ -201,12 +232,10 @@ describe("TaskControlCard", () => {
           message: "Verification did not pass.",
           sideEffectState: "possible",
           replayAvailable: true,
-          recoveryActions: [
-            "retry_observation",
-            "retry_verification",
-            "revise_plan",
-            "open_readiness"
-          ]
+          executionPlanId: "plan-1",
+          failureStage: "verification",
+          recoveryActions: [...recoveryActions],
+          recoveryDescriptors: recoveryActions.map((action) => createRecoveryDescriptor(action))
         })}
         onApprove={vi.fn()}
         onDeny={vi.fn()}
@@ -230,7 +259,7 @@ describe("TaskControlCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Revise plan" }));
     fireEvent.click(screen.getByRole("button", { name: "Open readiness details" }));
     expect(onOpenReplay).toHaveBeenCalledTimes(1);
-    expect(onRecover.mock.calls.map(([action]) => action)).toEqual([
+    expect(onRecover.mock.calls.map(([descriptor]) => descriptor.action)).toEqual([
       "retry_observation",
       "retry_verification",
       "revise_plan",

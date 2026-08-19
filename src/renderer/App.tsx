@@ -122,9 +122,22 @@ import type {
 } from "./app-types";
 import type {
   TaskControlRecoveryAction,
+  TaskControlRecoveryDescriptor,
   TaskControlSnapshot,
   TaskControlStatus
 } from "../shared/task-control";
+import { createTaskControlRecoveryRequest } from "../shared/task-control";
+import {
+  areTaskControlRecoveryDescriptorsEqual,
+  createPreparedTaskRecovery,
+  createPreparedTaskRecoveryStage,
+  isTaskControlRecoveryDescriptorCurrent,
+  reconcilePreparedTaskRecovery,
+  reconcilePreparedTaskRecoveryStage,
+  releasePreparedTaskRecovery,
+  type PreparedTaskRecovery,
+  type PreparedTaskRecoveryStage
+} from "./app-task-control-recovery";
 
 export type {
   AppPolicy,
@@ -379,29 +392,11 @@ function createConversationRetryTaskView(
   }
 }
 
-function sanitizeTaskControlText(value: string): string {
-  return value
-    .replace(/\b(token|password|secret|api[_-]?key)=([^\s&]+)/giu, "$1=[redacted]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, "Bearer [redacted]")
-    .replace(/(?:file:\/\/)?(?:\/Users\/|\/tmp\/|\/private\/tmp\/|\/var\/|\/repo\/)[^\s"')]+/gu, "[path]");
-}
-
-function createTaskControlRecoveryDraft(
-  snapshot: TaskControlSnapshot,
-  action: Exclude<TaskControlRecoveryAction, "open_readiness">
-): string {
-  const target = sanitizeTaskControlText(snapshot.plan.target);
-  const app = sanitizeTaskControlText(snapshot.plan.appName);
-
-  if (action === "retry_observation") {
-    return `Retry observation only for ${app} (${target}). Do not repeat any mutation.`;
+function withNoComputerUseActionRan(message: string): string {
+  if (/no\s+(?:computer use\s+)?action\s+(?:has\s+)?(?:run|ran)/iu.test(message)) {
+    return message;
   }
-
-  if (action === "retry_verification") {
-    return `Retry verification only for ${app} (${target}). Do not repeat any mutation.`;
-  }
-
-  return `Revise the Computer Use plan for ${app} (${target}) before taking any action.`;
+  return `${message} No Computer Use action has run.`;
 }
 
 function createConversationRetryRequestId(): string {
@@ -410,6 +405,17 @@ function createConversationRetryRequestId(): string {
   }
 
   return `conversation-retry-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+interface PendingTaskControlRecoveryPreparation {
+  composerDraft: string;
+  descriptor: TaskControlRecoveryDescriptor;
+  revision: number;
+}
+
+interface PendingTaskControlRecoveryDispatch {
+  descriptor: TaskControlRecoveryDescriptor;
+  revision: number;
 }
 
 export default function App() {
@@ -452,6 +458,13 @@ export default function App() {
   const [taskControl, setTaskControl] = useState<TaskControlSnapshot | null>(null);
   const [taskControlActionError, setTaskControlActionError] = useState("");
   const [taskControlDecisionPending, setTaskControlDecisionPending] = useState(false);
+  const [preparedTaskRecovery, setPreparedTaskRecovery] =
+    useState<PreparedTaskRecovery | null>(null);
+  const [preparedTaskRecoveryStage, setPreparedTaskRecoveryStage] =
+    useState<PreparedTaskRecoveryStage | null>(null);
+  const [taskRecoveryPreparationPending, setTaskRecoveryPreparationPending] = useState(false);
+  const [taskRecoveryDispatchPending, setTaskRecoveryDispatchPending] = useState(false);
+  const [taskRecoveryFeedback, setTaskRecoveryFeedback] = useState("");
   const [taskStopPending, setTaskStopPending] = useState(false);
   const [replayRecords, setReplayRecords] = useState<ObserveAppReplayRecord[]>([]);
   const assistantInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -462,6 +475,13 @@ export default function App() {
   const taskControlEventReceivedRef = useRef(false);
   const taskControlRef = useRef<TaskControlSnapshot | null>(null);
   const pendingTaskControlDecisionRef = useRef<TaskApprovalDecisionInput | null>(null);
+  const pendingTaskControlRecoveryRef =
+    useRef<PendingTaskControlRecoveryPreparation | null>(null);
+  const pendingTaskControlRecoveryDispatchRef =
+    useRef<PendingTaskControlRecoveryDispatch | null>(null);
+  const taskRecoveryFeedbackDescriptorRef = useRef<TaskControlRecoveryDescriptor | null>(null);
+  const taskControlRecoveryRevisionRef = useRef(0);
+  const assistantInputValueRef = useRef(assistantInput);
   const taskStopPendingRef = useRef(false);
   const suppressNextPetClickRef = useRef(false);
   const { assistantPanelOpen, detailsOpen, permissionOnboardingOpen } = panelState;
@@ -911,6 +931,65 @@ export default function App() {
     });
   }, [api, stopCurrentTurn]);
 
+  useEffect(() => {
+    assistantInputValueRef.current = assistantInput;
+  }, [assistantInput]);
+
+  function clearTaskRecoveryFeedback() {
+    taskRecoveryFeedbackDescriptorRef.current = null;
+    setTaskRecoveryFeedback("");
+  }
+
+  useEffect(() => {
+    const feedbackDescriptor = taskRecoveryFeedbackDescriptorRef.current;
+    if (
+      feedbackDescriptor
+      && !isTaskControlRecoveryDescriptorCurrent(taskControl, feedbackDescriptor)
+    ) {
+      clearTaskRecoveryFeedback();
+    }
+
+    const pending = pendingTaskControlRecoveryRef.current;
+    if (
+      pending
+      && !isTaskControlRecoveryDescriptorCurrent(taskControl, pending.descriptor)
+    ) {
+      pendingTaskControlRecoveryRef.current = null;
+      setTaskRecoveryPreparationPending(false);
+    }
+  }, [taskControl]);
+
+  useEffect(() => {
+    if (!preparedTaskRecovery) return;
+    const reconciled = reconcilePreparedTaskRecovery(
+      preparedTaskRecovery,
+      assistantInput,
+      taskControl
+    );
+    if (!("stale" in reconciled)) {
+      return;
+    }
+
+    setPreparedTaskRecovery(null);
+    setAssistantInput(reconciled.draft);
+    clearTaskRecoveryFeedback();
+    setConversationFeedback(
+      "The prepared recovery became stale, so its generated draft was cleared. Nothing was sent."
+    );
+  }, [preparedTaskRecovery, assistantInput, taskControl]);
+
+  useEffect(() => {
+    if (!preparedTaskRecoveryStage) return;
+    if (reconcilePreparedTaskRecoveryStage(
+      preparedTaskRecoveryStage,
+      taskControl
+    )) {
+      return;
+    }
+
+    setPreparedTaskRecoveryStage(null);
+  }, [preparedTaskRecoveryStage, taskControl]);
+
   async function approveTask(input: TaskApprovalDecisionInput) {
     await submitTaskControlDecision("approved", input);
   }
@@ -970,19 +1049,207 @@ export default function App() {
     ));
   }
 
-  function recoverTaskControl(action: TaskControlRecoveryAction) {
-    const snapshot = taskControl;
-    if (!snapshot) {
+  async function recoverTaskControl(descriptor: TaskControlRecoveryDescriptor) {
+    const snapshot = taskControlRef.current;
+    if (!isTaskControlRecoveryDescriptorCurrent(snapshot, descriptor)) {
+      clearTaskRecoveryFeedback();
+      setTaskControlActionError(
+        "This recovery option is stale and was not prepared. Review the current task state."
+      );
       return;
     }
 
-    if (action === "open_readiness") {
+    if (descriptor.action === "open_readiness" && descriptor.mode === "navigation") {
       setAdvancedSettingsOpen(false);
       openDetailsPanel();
       return;
     }
 
-    setAssistantInput(createTaskControlRecoveryDraft(snapshot, action));
+    if (preparedTaskRecovery) {
+      transitionPanelState({ type: "open-assistant" });
+      setConversationFeedback(
+        "A prepared recovery is already bound. Use it as a new request or clear it first."
+      );
+      return;
+    }
+
+    if (preparedTaskRecoveryStage) {
+      setTaskControlActionError(
+        "A recovery stage is already prepared. Run it explicitly or wait for the task state to change."
+      );
+      return;
+    }
+
+    if (assistantInput.trim()) {
+      transitionPanelState({ type: "open-assistant" });
+      setConversationFeedback("已有草稿，未覆盖。清空或发送后再准备恢复操作。");
+      return;
+    }
+
+    if (pendingTaskControlRecoveryRef.current) return;
+
+    const revision = ++taskControlRecoveryRevisionRef.current;
+    const pending: PendingTaskControlRecoveryPreparation = {
+      composerDraft: assistantInputValueRef.current,
+      descriptor: { ...descriptor },
+      revision
+    };
+    pendingTaskControlRecoveryRef.current = pending;
+    setTaskRecoveryPreparationPending(true);
+    setTaskControlActionError("");
+    clearTaskRecoveryFeedback();
+
+    try {
+      const result = await api.prepareTaskRecovery(
+        createTaskControlRecoveryRequest(descriptor)
+      );
+      if (pendingTaskControlRecoveryRef.current?.revision !== revision) return;
+
+      const currentSnapshot = taskControlRef.current;
+      if (!isTaskControlRecoveryDescriptorCurrent(currentSnapshot, descriptor)) {
+        setTaskControlActionError(
+          "This recovery option became stale and was not prepared. Review the current task state."
+        );
+        return;
+      }
+      if (result.state === "rejected") {
+        setTaskControlActionError(result.message);
+        return;
+      }
+      if (!areTaskControlRecoveryDescriptorsEqual(result.descriptor, descriptor)) {
+        setTaskControlActionError(
+          "The prepared recovery did not match the current task and was not applied."
+        );
+        return;
+      }
+      if (
+        descriptor.mode === "draft_only"
+        && assistantInputValueRef.current !== pending.composerDraft
+      ) {
+        setTaskControlActionError(
+          "Composer changed while recovery was being prepared. Your draft was preserved and recovery was not bound."
+        );
+        return;
+      }
+
+      const noActionFeedback = withNoComputerUseActionRan(result.message);
+      if (descriptor.mode === "prepare_only") {
+        const preparedStage = createPreparedTaskRecoveryStage(result);
+        if (!preparedStage) {
+          setTaskControlActionError(
+            "The prepared recovery did not include a valid stage binding."
+          );
+          return;
+        }
+        setPreparedTaskRecoveryStage(preparedStage);
+        taskRecoveryFeedbackDescriptorRef.current = { ...descriptor };
+        setTaskRecoveryFeedback(noActionFeedback);
+        return;
+      }
+
+      const prepared = createPreparedTaskRecovery(result);
+      if (!prepared) {
+        setTaskControlActionError(
+          "The prepared recovery did not include the required main-process draft."
+        );
+        return;
+      }
+
+      setPreparedTaskRecovery(prepared);
+      setAssistantInput(prepared.generatedDraft);
+      setConversationFeedback(noActionFeedback);
+      taskRecoveryFeedbackDescriptorRef.current = { ...descriptor };
+      setTaskRecoveryFeedback(noActionFeedback);
+      transitionPanelState({ type: "open-assistant" });
+    } catch {
+      if (pendingTaskControlRecoveryRef.current?.revision === revision) {
+        setTaskControlActionError(
+          "Recovery preparation failed. The task state has not changed."
+        );
+      }
+    } finally {
+      if (pendingTaskControlRecoveryRef.current?.revision === revision) {
+        pendingTaskControlRecoveryRef.current = null;
+        setTaskRecoveryPreparationPending(false);
+      }
+    }
+  }
+
+  async function dispatchPreparedTaskRecovery(
+    descriptor: TaskControlRecoveryDescriptor
+  ) {
+    const prepared = preparedTaskRecoveryStage;
+    const snapshot = taskControlRef.current;
+    if (
+      !prepared
+      || !areTaskControlRecoveryDescriptorsEqual(prepared.descriptor, descriptor)
+      || !isTaskControlRecoveryDescriptorCurrent(snapshot, descriptor)
+    ) {
+      setPreparedTaskRecoveryStage(null);
+      clearTaskRecoveryFeedback();
+      setTaskControlActionError(
+        "This prepared recovery is stale and was not dispatched. Review the current task state."
+      );
+      return;
+    }
+    if (pendingTaskControlRecoveryDispatchRef.current) return;
+
+    const revision = ++taskControlRecoveryRevisionRef.current;
+    pendingTaskControlRecoveryDispatchRef.current = {
+      descriptor: { ...descriptor },
+      revision
+    };
+    setTaskRecoveryDispatchPending(true);
+    setTaskControlActionError("");
+
+    try {
+      const result = await api.dispatchTaskRecovery(prepared.request);
+      if (pendingTaskControlRecoveryDispatchRef.current?.revision !== revision) return;
+      if (result.state === "rejected") {
+        setTaskControlActionError(result.message);
+        return;
+      }
+      if (!areTaskControlRecoveryDescriptorsEqual(result.descriptor, descriptor)) {
+        setTaskControlActionError(
+          "The dispatched recovery did not match the prepared stage and was not accepted."
+        );
+        return;
+      }
+
+      setPreparedTaskRecoveryStage(null);
+      taskRecoveryFeedbackDescriptorRef.current = { ...descriptor };
+      setTaskRecoveryFeedback(result.message);
+    } catch {
+      if (pendingTaskControlRecoveryDispatchRef.current?.revision === revision) {
+        setTaskControlActionError(
+          "Recovery dispatch failed. No original task mutation was replayed."
+        );
+      }
+    } finally {
+      if (pendingTaskControlRecoveryDispatchRef.current?.revision === revision) {
+        pendingTaskControlRecoveryDispatchRef.current = null;
+        setTaskRecoveryDispatchPending(false);
+      }
+    }
+  }
+
+  function releasePreparedTaskRecoveryBinding(
+    intent: "clear_prepared_recovery" | "use_as_new_request"
+  ) {
+    if (!preparedTaskRecovery) return;
+    const release = releasePreparedTaskRecovery(
+      preparedTaskRecovery,
+      assistantInput,
+      intent
+    );
+    setPreparedTaskRecovery(null);
+    setAssistantInput(release.draft);
+    clearTaskRecoveryFeedback();
+    setConversationFeedback(intent === "use_as_new_request"
+      ? "Recovery binding removed. Review the text, then send it as a new request when ready."
+      : release.editedDraftPreserved
+        ? "Prepared recovery cleared. Your edited text was preserved and was not sent."
+        : "Prepared recovery and its generated draft were cleared. Nothing was sent.");
     transitionPanelState({ type: "open-assistant" });
   }
 
@@ -1393,15 +1660,43 @@ export default function App() {
     api.setWindowMode(panelVisibility.showPanel ? "expanded" : "compact");
   }, [api, panelVisibility.showPanel]);
 
+  const visibleTaskRecoveryFeedback = taskRecoveryFeedback
+    && taskRecoveryFeedbackDescriptorRef.current
+    && isTaskControlRecoveryDescriptorCurrent(
+      taskControl,
+      taskRecoveryFeedbackDescriptorRef.current
+    )
+    ? taskRecoveryFeedback
+    : "";
+  const visibleTaskRecoveryPreparationPending = Boolean(
+    taskRecoveryPreparationPending
+    && pendingTaskControlRecoveryRef.current
+    && isTaskControlRecoveryDescriptorCurrent(
+      taskControl,
+      pendingTaskControlRecoveryRef.current.descriptor
+    )
+  );
+  const visiblePreparedTaskRecoveryStage = preparedTaskRecoveryStage
+    && isTaskControlRecoveryDescriptorCurrent(
+      taskControl,
+      preparedTaskRecoveryStage.descriptor
+    )
+    ? preparedTaskRecoveryStage
+    : null;
   const taskControlCard = taskControl ? (
     <TaskControlCard
       actionError={taskControlActionError}
       approvalDecisionPending={taskControlDecisionPending}
       onApprove={(input) => void approveTask(input)}
       onDeny={(input) => void denyTask(input)}
+      onDispatchRecovery={(descriptor) => void dispatchPreparedTaskRecovery(descriptor)}
       onOpenReplay={openTaskControlReplay}
       onRecover={recoverTaskControl}
       onStop={() => void stopCurrentTurn()}
+      recoveryFeedback={visibleTaskRecoveryFeedback}
+      preparedRecoveryDescriptor={visiblePreparedTaskRecoveryStage?.descriptor}
+      recoveryDispatchPending={taskRecoveryDispatchPending}
+      recoveryPreparationPending={visibleTaskRecoveryPreparationPending}
       snapshot={taskControl}
       stopPending={taskStopPending}
     />
@@ -1691,9 +1986,39 @@ export default function App() {
               >
                 {conversationFeedback}
               </p>
+              {preparedTaskRecovery ? (
+                <section
+                  className="prepared-task-recovery"
+                  aria-label="Prepared Task Control recovery"
+                  data-recovery-action={preparedTaskRecovery.descriptor.action}
+                >
+                  <strong>Prepared recovery · not executed</strong>
+                  <p id="skfiy-prepared-task-recovery-note">
+                    This draft is bound to the failed {preparedTaskRecovery.descriptor.route} task.
+                    Edits are notes only; no Computer Use action has run.
+                  </p>
+                  <div role="group" aria-label="Prepared recovery controls">
+                    <button
+                      type="button"
+                      onClick={() => releasePreparedTaskRecoveryBinding("use_as_new_request")}
+                    >
+                      Use as new request
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => releasePreparedTaskRecoveryBinding("clear_prepared_recovery")}
+                    >
+                      Clear prepared recovery
+                    </button>
+                  </div>
+                </section>
+              ) : null}
               <textarea
                 ref={assistantInputRef}
                 aria-label="Ask skfiy"
+                aria-describedby={preparedTaskRecovery
+                  ? "skfiy-prepared-task-recovery-note"
+                  : undefined}
                 value={assistantInput}
                 placeholder="Ask skfiy..."
                 rows={3}

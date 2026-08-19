@@ -1089,3 +1089,116 @@ textarea:focus-visible {
     transform: translateX(calc(-50% + 4px)) translateY(2px);
   }
 }
+
+.prepared-task-recovery {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid rgba(255, 194, 120, 0.3);
+  border-radius: 7px;
+  background: rgba(69, 45, 18, 0.42);
+}
+
+.prepared-task-recovery > strong {
+  color: #ffd79b;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.prepared-task-recovery > p {
+  color: rgba(255, 239, 215, 0.72);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.prepared-task-recovery > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.prepared-task-recovery button {
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 215, 155, 0.26);
+  border-radius: 6px;
+  color: #fff1d9;
+  background: rgba(80, 52, 20, 0.72);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.task-control-error {
+  color: #ffd0cc !important;
+  font-size: 9px !important;
+  font-weight: 650 !important;
+}
+
+.task-control-recovery-feedback,
+.task-control-recovery-unavailable {
+  padding: 5px 6px;
+  border-radius: 6px;
+  color: rgba(238, 247, 255, 0.72) !important;
+  background: rgba(238, 247, 255, 0.05);
+  font-size: 9px !important;
+  font-weight: 650 !important;
+  line-height: 1.35 !important;
+}
+
+.task-control-recovery-unavailable {
+  color: rgba(255, 215, 155, 0.72) !important;
+}
+
+.task-control-actions,
+.task-control-recovery > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.task-control-recovery > div > span {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.task-control-actions button,
+.task-control-recovery button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid rgba(142, 232, 255, 0.22);
+  border-radius: 6px;
+  color: #eef7ff;
+  background: rgba(19, 35, 54, 0.82);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.task-control-actions button:disabled {
+  color: rgba(238, 247, 255, 0.48);
+  cursor: wait;
+}
+
+.task-control-recovery button[aria-disabled="true"] {
+  color: rgba(238, 247, 255, 0.48);
+  cursor: wait;
+}
+
+.task-control-recovery {
+  display: grid;
+  gap: 4px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(238, 247, 255, 0.08);
+}
+
+.task-control-recovery > strong {
+  color: rgba(238, 247, 255, 0.55);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

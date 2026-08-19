@@ -1,15 +1,18 @@
 import {
   TASK_CONTROL_SCHEMA_VERSION,
   cloneTaskControlApproval,
+  cloneTaskControlRecoveryDescriptor,
   cloneTaskControlSnapshot,
   isComputerUsePlanPreview,
   isTaskControlSnapshot,
   readTaskControlStatusForPhase,
   type ComputerUsePlanPreview,
   type TaskControlApproval,
+  type TaskControlFailureStage,
   type TaskControlOutcome,
   type TaskControlPhase,
   type TaskControlRecoveryAction,
+  type TaskControlRecoveryDescriptor,
   type TaskControlSideEffectState,
   type TaskControlSnapshot
 } from "../shared/task-control.js";
@@ -67,6 +70,8 @@ export interface FinishTaskControlInput {
   message: string;
   sideEffectState?: TaskControlSideEffectState;
   replayAvailable?: boolean;
+  failureStage?: TaskControlFailureStage;
+  recoveryDescriptors?: TaskControlRecoveryDescriptor[];
   recoveryActions?: TaskControlRecoveryAction[];
 }
 
@@ -223,15 +228,24 @@ export function createTaskControlStore(options: TaskControlStoreOptions = {}) {
       assertSideEffectMonotonic(current.sideEffectState, sideEffectState);
       const replayAvailable = input.replayAvailable ?? current.replayAvailable;
       assertReplayMonotonic(current.replayAvailable, replayAvailable);
+      const recoveryDescriptors = input.recoveryDescriptors?.map(
+        cloneTaskControlRecoveryDescriptor
+      );
+      const recoveryActions = recoveryDescriptors
+        ? recoveryDescriptors.map((descriptor) => descriptor.action)
+        : [...(input.recoveryActions ?? [])];
 
       return requireCommittedSnapshot(commit({
         ...current,
+        executionPlanId: current.executionPlanId ?? current.plan.planId,
         phase: "terminal",
         status: input.outcome,
         message: input.message,
         sideEffectState,
         replayAvailable,
-        recoveryActions: [...(input.recoveryActions ?? [])],
+        recoveryActions,
+        recoveryDescriptors,
+        failureStage: input.failureStage,
         approval: undefined,
         outcome: input.outcome
       }));
