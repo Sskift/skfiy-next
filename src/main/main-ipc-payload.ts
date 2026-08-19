@@ -19,6 +19,26 @@ export interface TmuxMonitorInput {
   enabled?: boolean;
 }
 
+export interface ConversationRenameRequest {
+  sessionId: string;
+  title: string;
+}
+
+export interface ConversationRetryRequest {
+  sessionId: string;
+  turnId: string;
+  requestId: string;
+}
+
+export interface TaskApprovalDecisionRequest {
+  executionId: string;
+  planId: string;
+}
+
+const MAX_CONVERSATION_ID_LENGTH = 200;
+const MAX_CONVERSATION_TITLE_LENGTH = 120;
+const MAX_TASK_CONTROL_ID_LENGTH = 160;
+
 export type RunCommandRequest =
   | {
     ok: true;
@@ -60,6 +80,81 @@ export function readRunCommandRequest(command: unknown, options: unknown): RunCo
     command: trimmed,
     mode: readMode(record.mode)
   };
+}
+
+export function readConversationSessionId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= MAX_CONVERSATION_ID_LENGTH
+    ? normalized
+    : undefined;
+}
+
+export function readConversationRenameRequest(value: unknown): ConversationRenameRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const sessionId = readConversationSessionId(record.sessionId);
+  const title = typeof record.title === "string"
+    ? record.title.trim().replace(/\s+/gu, " ")
+    : "";
+
+  if (!sessionId || !title || title.length > MAX_CONVERSATION_TITLE_LENGTH) {
+    return undefined;
+  }
+
+  return { sessionId, title };
+}
+
+export function readConversationRetryRequest(value: unknown): ConversationRetryRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const sessionId = readConversationSessionId(record.sessionId);
+  const turnId = readConversationSessionId(record.turnId);
+  const requestId = readConversationSessionId(record.requestId);
+
+  return sessionId && turnId && requestId
+    ? { sessionId, turnId, requestId }
+    : undefined;
+}
+
+export function readTaskApprovalDecisionRequest(
+  value: unknown
+): TaskApprovalDecisionRequest | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).some((key) => key !== "executionId" && key !== "planId")
+    || !Object.hasOwn(record, "executionId")
+    || !Object.hasOwn(record, "planId")
+  ) {
+    return undefined;
+  }
+  const executionId = readTaskControlId(record.executionId);
+  const planId = readTaskControlId(record.planId);
+  return executionId && planId ? { executionId, planId } : undefined;
+}
+
+function readTaskControlId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0
+    && normalized.length <= MAX_TASK_CONTROL_ID_LENGTH
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 export function readTmuxMonitorInput(input: unknown): TmuxMonitorInput {

@@ -1,12 +1,26 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import type {
+  ConversationHistorySnapshot,
+  ConversationMessage,
+  ConversationRetryResult,
+  ConversationSession,
+  ConversationTurn
+} from "../shared/conversation-history.js";
+import type { TaskControlSnapshot } from "../shared/task-control.js";
 
 type ManualMode = "active" | "quiet";
 type PetWindowMode = "compact" | "expanded";
+interface TaskApprovalDecisionInput {
+  executionId: string;
+  planId: string;
+}
 type TaskStatus =
   | "idle"
   | "planned"
+  | "waiting"
   | "observing"
   | "executing"
+  | "verifying"
   | "running"
   | "approval_required"
   | "needs_confirmation"
@@ -20,7 +34,8 @@ type PermissionState = "granted" | "denied" | "not-determined" | "unknown";
 type DesktopSessionDiagnosticState = "controllable" | "blocked" | "unknown";
 type PermissionSettingsTarget =
   | "screen-recording"
-  | "accessibility";
+  | "accessibility"
+  | "automation-finder";
 type StartupWarningId = "tmux-launch" | "dev-server" | "unbundled-electron";
 type AppPolicy = "allow" | "ask" | "deny";
 type AssistantAgentMode = "codex";
@@ -34,6 +49,15 @@ type AssistantAgentProviderReadiness =
   | "unconfigured"
   | "unavailable";
 type AssistantAgentExecutableSource = "default" | "env";
+type FirstRunReadinessStepId =
+  | "background-agent"
+  | "screen-recording"
+  | "accessibility"
+  | "finder-automation"
+  | "browser-context";
+type FirstRunReadinessRequirement = "required-for-chat" | "computer-use" | "optional";
+type FirstRunReadinessState = "ready" | "action-required" | "blocked" | "unknown";
+type FirstRunReadyWorkflow = "chat" | "computer-use" | "finder" | "browser-context";
 type PlannerProviderMode = "local-deterministic" | "external-cua" | "disabled";
 type RiskLevel = "low" | "medium" | "high" | "blocked";
 type TurnTranscriptOutcome =
@@ -87,6 +111,66 @@ const routeOutcomeTones = new Set<RouteOutcomeTone>([
   "neutral"
 ]);
 
+const taskControlRoutes = new Set(["ghostty", "chrome", "finder", "tmux_supervision"]);
+const taskControlRiskLevels = new Set(["low", "medium", "high", "blocked"]);
+const taskControlPhases = new Set(["waiting", "approval", "executing", "verifying", "terminal"]);
+const taskControlOutcomes = new Set([
+  "app_policy_denied",
+  "user_denied",
+  "blocked",
+  "confirmation_required",
+  "failed",
+  "cancelled",
+  "completed"
+]);
+const taskControlRecoveryActions = new Set([
+  "retry_observation",
+  "retry_verification",
+  "revise_plan",
+  "open_readiness"
+]);
+const taskControlSideEffectStates = new Set(["none", "possible", "occurred"]);
+const taskControlPlanKeys = new Set([
+  "planId",
+  "route",
+  "appName",
+  "target",
+  "risk",
+  "approvalRequired",
+  "expectedVerification",
+  "mutating"
+]);
+const taskControlRiskKeys = new Set(["level", "reason", "requiresApproval"]);
+const taskControlApprovalKeys = new Set(["gate", "planId", "finderPlanPreview"]);
+const taskControlFinderPreviewKeys = new Set([
+  "rootPath",
+  "operationCount",
+  "destructiveOperationCount",
+  "createFolders",
+  "moveFiles"
+]);
+const taskControlFinderMoveKeys = new Set(["from", "to"]);
+const taskApprovalDecisionKeys = new Set(["executionId", "planId"]);
+const taskControlSnapshotKeys = new Set([
+  "schemaVersion",
+  "executionId",
+  "phase",
+  "status",
+  "message",
+  "plan",
+  "sideEffectState",
+  "replayAvailable",
+  "recoveryActions",
+  "approval",
+  "outcome"
+]);
+const taskControlActiveStatusByPhase = {
+  waiting: "waiting",
+  approval: "approval_required",
+  executing: "executing",
+  verifying: "verifying"
+} as const;
+
 interface TaskEvent {
   status: TaskStatus;
   message?: string;
@@ -95,7 +179,9 @@ interface TaskEvent {
   routeReason?: string;
   denialKind?: string;
   policyKind?: string;
+  backgroundAgentFailure?: true;
   routeOutcome?: RouteOutcome;
+  taskControl?: TaskControlSnapshot;
   stopTurnBehavior?: TaskEventStopTurnBehavior;
   replayReset?: boolean;
   replayRecord?: ObserveAppReplayRecord;
@@ -203,6 +289,23 @@ interface AssistantAgentSettingsResponse {
   providers: AssistantAgentProviderState[];
 }
 
+interface FirstRunReadinessStep {
+  id: FirstRunReadinessStepId;
+  requirement: FirstRunReadinessRequirement;
+  state: FirstRunReadinessState;
+  reason?: string;
+  nextAction?: string;
+}
+
+interface FirstRunReadinessSnapshot {
+  schemaVersion: 1;
+  chatReady: boolean;
+  computerUseReady: boolean;
+  readyWorkflows: FirstRunReadyWorkflow[];
+  resumeStepId: FirstRunReadinessStepId | null;
+  steps: FirstRunReadinessStep[];
+}
+
 interface PlannerProviderSettings {
   mode: PlannerProviderMode;
   externalProviderLabel: string;
@@ -296,6 +399,7 @@ interface TurnReplay {
     denialKind?: string;
     policyKind?: string;
     routeOutcome?: RouteOutcome;
+    taskControl?: TaskControlSnapshot;
     stopTurnBehavior?: TaskEventStopTurnBehavior;
   }>;
 }
@@ -461,8 +565,8 @@ interface VisiblePetRect {
 
 interface DesktopApi {
   runCommand: (command: string, options: { mode: ManualMode }) => Promise<void>;
-  approveTask: () => Promise<void>;
-  denyTask: () => Promise<void>;
+  approveTask: (input: TaskApprovalDecisionInput) => Promise<void>;
+  denyTask: (input: TaskApprovalDecisionInput) => Promise<void>;
   takeScreenshot: () => Promise<void>;
   stopTask: () => Promise<void>;
   getPermissions: () => Promise<PermissionSummary>;
@@ -476,10 +580,26 @@ interface DesktopApi {
   setAssistantAgentSettings: (
     update: Partial<Pick<AssistantAgentSettings, "mode">>
   ) => Promise<AssistantAgentSettingsResponse>;
+  getFirstRunReadiness: () => Promise<FirstRunReadinessSnapshot>;
+  testBackgroundAgent: () => Promise<FirstRunReadinessSnapshot>;
+  testFinderAutomation: () => Promise<FirstRunReadinessSnapshot>;
   getPlannerProviderSettings: () => Promise<PlannerProviderSettings>;
   setPlannerProviderSettings: (
     update: Partial<Pick<PlannerProviderSettings, "mode">>
   ) => Promise<PlannerProviderSettings>;
+  getConversationHistory: () => Promise<ConversationHistorySnapshot>;
+  startConversationSession: () => Promise<ConversationHistorySnapshot>;
+  switchConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  renameConversationSession: (
+    input: { sessionId: string; title: string }
+  ) => Promise<ConversationHistorySnapshot>;
+  archiveConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  deleteConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  restoreConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  retryConversationTurn: (
+    input: { sessionId: string; turnId: string; requestId: string }
+  ) => Promise<ConversationRetryResult>;
+  getTaskControl: () => Promise<TaskControlSnapshot | null>;
   getTurnReplay: () => Promise<TurnReplay | null>;
   getAutomationMonitors: () => Promise<AutomationMonitorSnapshot>;
   upsertTmuxMonitor: (
@@ -493,13 +613,18 @@ interface DesktopApi {
   setWindowMode: (mode: PetWindowMode) => void;
   onStopTurnHotkey: (callback: () => void) => () => void;
   onTaskEvent: (callback: (event: TaskEvent) => void) => () => void;
+  onConversationHistoryChanged: (
+    callback: (snapshot: ConversationHistorySnapshot) => void
+  ) => () => void;
 }
 
 const taskStatuses = new Set<TaskStatus>([
   "idle",
   "planned",
+  "waiting",
   "observing",
   "executing",
+  "verifying",
   "running",
   "approval_required",
   "needs_confirmation",
@@ -526,7 +651,12 @@ function isTaskEvent(value: unknown): value is TaskEvent {
     && (candidate.routeReason === undefined || typeof candidate.routeReason === "string")
     && (candidate.denialKind === undefined || typeof candidate.denialKind === "string")
     && (candidate.policyKind === undefined || typeof candidate.policyKind === "string")
+    && (candidate.backgroundAgentFailure === undefined || candidate.backgroundAgentFailure === true)
     && (candidate.routeOutcome === undefined || isRouteOutcome(candidate.routeOutcome))
+    && (
+      candidate.taskControl === undefined
+      || isTaskControlSnapshot(candidate.taskControl)
+    )
     && (
       candidate.stopTurnBehavior === undefined
       || isTaskEventStopTurnBehavior(candidate.stopTurnBehavior)
@@ -534,15 +664,210 @@ function isTaskEvent(value: unknown): value is TaskEvent {
   );
 }
 
+function isConversationHistorySnapshot(value: unknown): value is ConversationHistorySnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const snapshot = value as Partial<ConversationHistorySnapshot>;
+  return snapshot.schemaVersion === 1
+    && (snapshot.lastActiveSessionId === null || isBoundedConversationText(snapshot.lastActiveSessionId))
+    && Array.isArray(snapshot.sessions)
+    && snapshot.sessions.every(isConversationSession);
+}
+
+function isConversationSession(value: unknown): value is ConversationSession {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const session = value as Partial<ConversationSession>;
+  return isBoundedConversationText(session.id)
+    && isBoundedConversationTitle(session.title)
+    && (session.titleSource === "generated" || session.titleSource === "user")
+    && isConversationTimestamp(session.createdAt)
+    && isConversationTimestamp(session.updatedAt)
+    && (session.archivedAt === undefined || isConversationTimestamp(session.archivedAt))
+    && (session.deletedAt === undefined || isConversationTimestamp(session.deletedAt))
+    && Array.isArray(session.turns)
+    && session.turns.every(isConversationTurn);
+}
+
+function isConversationTurn(value: unknown): value is ConversationTurn {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const turn = value as Partial<ConversationTurn>;
+  return isBoundedConversationText(turn.id)
+    && isBoundedConversationText(turn.submissionId)
+    && typeof turn.attempt === "number"
+    && Number.isInteger(turn.attempt)
+    && turn.attempt > 0
+    && (turn.retryOfTurnId === undefined || isBoundedConversationText(turn.retryOfTurnId))
+    && (turn.retryRequestId === undefined || isBoundedConversationText(turn.retryRequestId))
+    && isConversationTimestamp(turn.createdAt)
+    && isConversationTimestamp(turn.updatedAt)
+    && (
+      turn.status === "pending"
+      || turn.status === "completed"
+      || turn.status === "provider-failed"
+      || turn.status === "denied"
+      || turn.status === "blocked"
+      || turn.status === "failed"
+      || turn.status === "cancelled"
+      || turn.status === "stopped"
+    )
+    && isConversationProvider(turn.provider)
+    && (
+      turn.computerUseState === "none"
+      || turn.computerUseState === "requested"
+      || turn.computerUseState === "dispatching"
+      || turn.computerUseState === "finished"
+      || turn.computerUseState === "unknown"
+    )
+    && Array.isArray(turn.messages)
+    && turn.messages.every(isConversationMessage);
+}
+
+function isConversationProvider(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const provider = value as { id?: unknown; label?: unknown };
+  return isBoundedConversationText(provider.id) && isBoundedConversationText(provider.label);
+}
+
+function isConversationMessage(value: unknown): value is ConversationMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const message = value as Record<string, unknown>;
+  if (
+    !isBoundedConversationText(message.id)
+    || !isBoundedConversationText(message.turnId)
+    || !isConversationTimestamp(message.createdAt)
+    || !isConversationBodyText(message.text)
+  ) {
+    return false;
+  }
+
+  if (message.kind === "user-text") return true;
+  if (message.kind === "agent-reply") {
+    return isConversationProvider(message.provider)
+      && (message.state === "completed" || message.state === "error");
+  }
+  if (message.kind === "computer-use-request") {
+    return isBoundedConversationText(message.toolCallId)
+      && isConversationBodyText(message.command)
+      && isBoundedConversationText(message.route);
+  }
+  if (message.kind === "approval") {
+    return isBoundedConversationText(message.toolCallId)
+      && (
+        message.decision === "required"
+        || message.decision === "approved"
+        || message.decision === "denied"
+        || message.decision === "bypassed"
+      )
+      && (message.reason === undefined || isConversationBodyText(message.reason));
+  }
+  if (message.kind === "result") {
+    return isBoundedConversationText(message.toolCallId)
+      && (
+        message.status === "completed"
+        || message.status === "denied"
+        || message.status === "blocked"
+        || message.status === "failed"
+        || message.status === "cancelled"
+      )
+      && isConversationBodyText(message.summary);
+  }
+  if (message.kind === "stopped") {
+    return isConversationBodyText(message.reason);
+  }
+  return false;
+}
+
+function isConversationRetryResult(value: unknown): value is ConversationRetryResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Partial<ConversationRetryResult>;
+  return (
+    result.status === "completed"
+    || result.status === "provider-failed"
+    || result.status === "cancelled"
+    || result.status === "computer-use-blocked"
+    || result.status === "unsafe-retry-blocked"
+    || result.status === "not-found"
+    || result.status === "retry-in-progress"
+    || result.status === "storage-error"
+  )
+    && isConversationBodyText(result.message)
+    && isConversationHistorySnapshot(result.snapshot);
+}
+
+function isBoundedConversationText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 200;
+}
+
+function isBoundedConversationTitle(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 120;
+}
+
+function isConversationBodyText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 20_000;
+}
+
+function isConversationTimestamp(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function requireConversationHistorySnapshot(value: unknown): ConversationHistorySnapshot {
+  if (!isConversationHistorySnapshot(value)) {
+    throw new Error("Conversation history payload is invalid.");
+  }
+  return value;
+}
+
+function readBoundedConversationText(value: unknown): string {
+  return isBoundedConversationText(value) ? value.trim() : "";
+}
+
+function readBoundedConversationTitle(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const title = value.trim().replace(/\s+/gu, " ");
+  return title.length > 0 && title.length <= 120 ? title : "";
+}
+
+function createEmptyConversationHistorySnapshot(): ConversationHistorySnapshot {
+  return {
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  };
+}
+
+function createConversationStorageErrorResult(): ConversationRetryResult {
+  return {
+    status: "storage-error",
+    message: "Conversation history is unavailable.",
+    snapshot: createEmptyConversationHistorySnapshot()
+  };
+}
+
 const api: DesktopApi = {
   async runCommand(command, options) {
     await ipcRenderer.invoke("skfiy:run-command", command, options);
   },
-  async approveTask() {
-    await ipcRenderer.invoke("skfiy:approve-task");
+  async approveTask(input) {
+    const decision = requireTaskApprovalDecisionInput(input);
+    await ipcRenderer.invoke("skfiy:approve-task", decision);
   },
-  async denyTask() {
-    await ipcRenderer.invoke("skfiy:deny-task");
+  async denyTask(input) {
+    const decision = requireTaskApprovalDecisionInput(input);
+    await ipcRenderer.invoke("skfiy:deny-task", decision);
   },
   async takeScreenshot() {
     await ipcRenderer.invoke("skfiy:take-screenshot");
@@ -606,6 +931,24 @@ const api: DesktopApi = {
       ? payload
       : createDefaultAssistantAgentSettingsResponse();
   },
+  async getFirstRunReadiness() {
+    const payload = await ipcRenderer.invoke("skfiy:get-first-run-readiness");
+    return isFirstRunReadinessSnapshot(payload)
+      ? payload
+      : createUnknownFirstRunReadinessSnapshot();
+  },
+  async testBackgroundAgent() {
+    const payload = await ipcRenderer.invoke("skfiy:test-background-agent");
+    return isFirstRunReadinessSnapshot(payload)
+      ? payload
+      : createUnknownFirstRunReadinessSnapshot();
+  },
+  async testFinderAutomation() {
+    const payload = await ipcRenderer.invoke("skfiy:test-finder-automation");
+    return isFirstRunReadinessSnapshot(payload)
+      ? payload
+      : createUnknownFirstRunReadinessSnapshot();
+  },
   async getPlannerProviderSettings() {
     const payload = await ipcRenderer.invoke("skfiy:get-planner-provider-settings");
     return isPlannerProviderSettings(payload)
@@ -624,9 +967,66 @@ const api: DesktopApi = {
       ? payload
       : createDefaultPlannerProviderSettings();
   },
+  async getConversationHistory() {
+    const payload = await ipcRenderer.invoke("skfiy:get-conversation-history");
+    return requireConversationHistorySnapshot(payload);
+  },
+  async startConversationSession() {
+    const payload = await ipcRenderer.invoke("skfiy:start-conversation-session");
+    return requireConversationHistorySnapshot(payload);
+  },
+  async switchConversationSession(sessionId) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:switch-conversation-session",
+      readBoundedConversationText(sessionId)
+    );
+    return requireConversationHistorySnapshot(payload);
+  },
+  async renameConversationSession(input) {
+    const payload = await ipcRenderer.invoke("skfiy:rename-conversation-session", {
+      sessionId: readBoundedConversationText(input.sessionId),
+      title: readBoundedConversationTitle(input.title)
+    });
+    return requireConversationHistorySnapshot(payload);
+  },
+  async archiveConversationSession(sessionId) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:archive-conversation-session",
+      readBoundedConversationText(sessionId)
+    );
+    return requireConversationHistorySnapshot(payload);
+  },
+  async deleteConversationSession(sessionId) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:delete-conversation-session",
+      readBoundedConversationText(sessionId)
+    );
+    return requireConversationHistorySnapshot(payload);
+  },
+  async restoreConversationSession(sessionId) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:restore-conversation-session",
+      readBoundedConversationText(sessionId)
+    );
+    return requireConversationHistorySnapshot(payload);
+  },
+  async retryConversationTurn(input) {
+    const payload = await ipcRenderer.invoke("skfiy:retry-conversation-turn", {
+      sessionId: readBoundedConversationText(input.sessionId),
+      turnId: readBoundedConversationText(input.turnId),
+      requestId: readBoundedConversationText(input.requestId)
+    });
+    return isConversationRetryResult(payload)
+      ? payload
+      : createConversationStorageErrorResult();
+  },
+  async getTaskControl() {
+    const payload = await ipcRenderer.invoke("skfiy:get-task-control");
+    return isTaskControlSnapshot(payload) ? cloneTaskControlSnapshot(payload) : null;
+  },
   async getTurnReplay() {
     const payload = await ipcRenderer.invoke("skfiy:get-turn-replay");
-    return isTurnReplay(payload) ? payload : null;
+    return isTurnReplay(payload) ? cloneTurnReplayTaskControls(payload) : null;
   },
   async getAutomationMonitors() {
     const payload = await ipcRenderer.invoke("skfiy:get-automation-monitors");
@@ -691,12 +1091,22 @@ const api: DesktopApi = {
   onTaskEvent(callback) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => {
       if (isTaskEvent(payload)) {
-        callback(payload);
+        callback(cloneTaskEventTaskControl(payload));
       }
     };
 
     ipcRenderer.on("skfiy:task-event", listener);
     return () => ipcRenderer.removeListener("skfiy:task-event", listener);
+  },
+  onConversationHistoryChanged(callback) {
+    const listener = (_event: IpcRendererEvent, payload: unknown) => {
+      if (isConversationHistorySnapshot(payload)) {
+        callback(payload);
+      }
+    };
+
+    ipcRenderer.on("skfiy:conversation-history-changed", listener);
+    return () => ipcRenderer.removeListener("skfiy:conversation-history-changed", listener);
   }
 };
 
@@ -856,11 +1266,72 @@ function isAssistantAgentExecutableSource(value: unknown): value is AssistantAge
 }
 
 function isAssistantAgentProviderReadiness(value: unknown): value is AssistantAgentProviderReadiness {
-  return value === "ready"
-    || value === "chat-ready"
+  return value === "chat-ready"
+    || value === "version-ok"
     || value === "binary-found"
+    || value === "binary-configured"
+    || value === "auth-or-permission-blocked"
     || value === "unconfigured"
     || value === "unavailable";
+}
+
+function isFirstRunReadinessSnapshot(value: unknown): value is FirstRunReadinessSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const snapshot = value as Partial<FirstRunReadinessSnapshot>;
+  return snapshot.schemaVersion === 1
+    && typeof snapshot.chatReady === "boolean"
+    && typeof snapshot.computerUseReady === "boolean"
+    && Array.isArray(snapshot.readyWorkflows)
+    && snapshot.readyWorkflows.every(isFirstRunReadyWorkflow)
+    && (snapshot.resumeStepId === null || isFirstRunReadinessStepId(snapshot.resumeStepId))
+    && Array.isArray(snapshot.steps)
+    && snapshot.steps.length === 5
+    && snapshot.steps.every(isFirstRunReadinessStep);
+}
+
+function isFirstRunReadinessStep(value: unknown): value is FirstRunReadinessStep {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const step = value as Partial<FirstRunReadinessStep>;
+  const readyShape = step.state === "ready"
+    ? step.reason === undefined && step.nextAction === undefined
+    : typeof step.reason === "string" && typeof step.nextAction === "string";
+
+  return isFirstRunReadinessStepId(step.id)
+    && isFirstRunReadinessRequirement(step.requirement)
+    && isFirstRunReadinessState(step.state)
+    && readyShape;
+}
+
+function isFirstRunReadinessStepId(value: unknown): value is FirstRunReadinessStepId {
+  return value === "background-agent"
+    || value === "screen-recording"
+    || value === "accessibility"
+    || value === "finder-automation"
+    || value === "browser-context";
+}
+
+function isFirstRunReadinessRequirement(value: unknown): value is FirstRunReadinessRequirement {
+  return value === "required-for-chat" || value === "computer-use" || value === "optional";
+}
+
+function isFirstRunReadinessState(value: unknown): value is FirstRunReadinessState {
+  return value === "ready"
+    || value === "action-required"
+    || value === "blocked"
+    || value === "unknown";
+}
+
+function isFirstRunReadyWorkflow(value: unknown): value is FirstRunReadyWorkflow {
+  return value === "chat"
+    || value === "computer-use"
+    || value === "finder"
+    || value === "browser-context";
 }
 
 function isPlannerProviderSettings(value: unknown): value is PlannerProviderSettings {
@@ -1143,10 +1614,283 @@ function isTurnReplayTimelineEvent(
     && (event.policyKind === undefined || typeof event.policyKind === "string")
     && (event.routeOutcome === undefined || isRouteOutcome(event.routeOutcome))
     && (
+      event.taskControl === undefined
+      || isTaskControlSnapshot(event.taskControl)
+    )
+    && (
       event.stopTurnBehavior === undefined
       || isTaskEventStopTurnBehavior(event.stopTurnBehavior)
     )
   );
+}
+
+function isTaskControlSnapshot(value: unknown): value is TaskControlSnapshot {
+  const snapshot = readTaskControlRecord(value);
+  if (!snapshot || !hasStrictTaskControlKeys(
+    snapshot,
+    taskControlSnapshotKeys,
+    [
+      "schemaVersion",
+      "executionId",
+      "phase",
+      "status",
+      "message",
+      "plan",
+      "sideEffectState",
+      "replayAvailable",
+      "recoveryActions"
+    ]
+  )) {
+    return false;
+  }
+
+  if (
+    snapshot.schemaVersion !== 1
+    || !isTaskControlIdentifier(snapshot.executionId)
+    || typeof snapshot.phase !== "string"
+    || !taskControlPhases.has(snapshot.phase)
+    || typeof snapshot.status !== "string"
+    || !isTaskControlStatus(snapshot.status)
+    || !isTaskControlText(snapshot.message, 2_000)
+    || !isComputerUsePlanPreview(snapshot.plan)
+    || typeof snapshot.sideEffectState !== "string"
+    || !taskControlSideEffectStates.has(snapshot.sideEffectState)
+    || typeof snapshot.replayAvailable !== "boolean"
+    || !isTaskControlRecoveryActionList(snapshot.recoveryActions)
+  ) {
+    return false;
+  }
+
+  if (snapshot.phase === "terminal") {
+    return typeof snapshot.outcome === "string"
+      && taskControlOutcomes.has(snapshot.outcome)
+      && snapshot.status === snapshot.outcome
+      && snapshot.approval === undefined;
+  }
+
+  const approvalIsValid = snapshot.phase === "approval"
+    ? isTaskControlApproval(snapshot.approval, snapshot.plan)
+    : snapshot.approval === undefined;
+
+  return approvalIsValid
+    && snapshot.outcome === undefined
+    && snapshot.status === taskControlActiveStatusByPhase[
+      snapshot.phase as keyof typeof taskControlActiveStatusByPhase
+    ]
+    && snapshot.recoveryActions.length === 0;
+}
+
+function isTaskControlApproval(value: unknown, planValue: unknown): boolean {
+  const approval = readTaskControlRecord(value);
+  const plan = readTaskControlRecord(planValue);
+  if (!approval || !plan || !hasStrictTaskControlKeys(
+    approval,
+    taskControlApprovalKeys,
+    ["gate", "planId"]
+  )) {
+    return false;
+  }
+  if (
+    (approval.gate !== "action-plan" && approval.gate !== "finder-plan")
+    || !isTaskControlIdentifier(approval.planId)
+    || !isTaskControlIdentifier(plan.planId)
+  ) {
+    return false;
+  }
+
+  if (approval.gate === "action-plan") {
+    return approval.planId === plan.planId && approval.finderPlanPreview === undefined;
+  }
+
+  return approval.planId.startsWith(`${plan.planId}:`)
+    && isTaskControlFinderPlanPreview(approval.finderPlanPreview);
+}
+
+function isTaskControlFinderPlanPreview(value: unknown): boolean {
+  const preview = readTaskControlRecord(value);
+  if (!preview || !hasStrictTaskControlKeys(
+    preview,
+    taskControlFinderPreviewKeys,
+    [...taskControlFinderPreviewKeys]
+  )) {
+    return false;
+  }
+
+  return isTaskControlText(preview.rootPath, 2_000)
+    && isTaskControlBoundedCount(preview.operationCount)
+    && isTaskControlBoundedCount(preview.destructiveOperationCount)
+    && (preview.destructiveOperationCount as number) <= (preview.operationCount as number)
+    && isTaskControlTextList(preview.createFolders)
+    && Array.isArray(preview.moveFiles)
+    && preview.moveFiles.length <= 2_000
+    && preview.moveFiles.every(isTaskControlFinderMove);
+}
+
+function isTaskControlFinderMove(value: unknown): boolean {
+  const move = readTaskControlRecord(value);
+  return Boolean(move)
+    && hasStrictTaskControlKeys(
+      move!,
+      taskControlFinderMoveKeys,
+      [...taskControlFinderMoveKeys]
+    )
+    && isTaskControlText(move!.from, 2_000)
+    && isTaskControlText(move!.to, 2_000);
+}
+
+function isTaskControlTextList(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length <= 2_000
+    && value.every((entry) => isTaskControlText(entry, 2_000));
+}
+
+function isTaskControlBoundedCount(value: unknown): boolean {
+  return Number.isSafeInteger(value)
+    && (value as number) >= 0
+    && (value as number) <= 2_000;
+}
+
+function isComputerUsePlanPreview(value: unknown): boolean {
+  const plan = readTaskControlRecord(value);
+  if (!plan || !hasStrictTaskControlKeys(
+    plan,
+    taskControlPlanKeys,
+    [...taskControlPlanKeys]
+  )) {
+    return false;
+  }
+
+  const risk = readTaskControlRecord(plan.risk);
+  if (!risk || !hasStrictTaskControlKeys(
+    risk,
+    taskControlRiskKeys,
+    [...taskControlRiskKeys]
+  )) {
+    return false;
+  }
+
+  return isTaskControlIdentifier(plan.planId)
+    && typeof plan.route === "string"
+    && taskControlRoutes.has(plan.route)
+    && isTaskControlText(plan.appName, 160)
+    && isTaskControlText(plan.target, 2_000)
+    && typeof risk.level === "string"
+    && taskControlRiskLevels.has(risk.level)
+    && isTaskControlText(risk.reason, 2_000)
+    && typeof risk.requiresApproval === "boolean"
+    && typeof plan.approvalRequired === "boolean"
+    && isTaskControlText(plan.expectedVerification, 2_000)
+    && typeof plan.mutating === "boolean"
+    && (
+      risk.level !== "blocked"
+      || (plan.approvalRequired === false && plan.mutating === false)
+    );
+}
+
+function isTaskControlStatus(value: string): boolean {
+  return value === "waiting"
+    || value === "approval_required"
+    || value === "executing"
+    || value === "verifying"
+    || taskControlOutcomes.has(value);
+}
+
+function isTaskControlRecoveryActionList(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length > taskControlRecoveryActions.size) {
+    return false;
+  }
+
+  const unique = new Set(value);
+  return unique.size === value.length
+    && value.every((action) => typeof action === "string" && taskControlRecoveryActions.has(action));
+}
+
+function isTaskControlIdentifier(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 160
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value);
+}
+
+function requireTaskApprovalDecisionInput(value: unknown): TaskApprovalDecisionInput {
+  const input = readTaskControlRecord(value);
+  if (!input || !hasStrictTaskControlKeys(
+    input,
+    taskApprovalDecisionKeys,
+    [...taskApprovalDecisionKeys]
+  ) || !isTaskControlIdentifier(input.executionId) || !isTaskControlIdentifier(input.planId)) {
+    throw new Error("Task approval decision must be bound to a valid execution and plan.");
+  }
+
+  return {
+    executionId: input.executionId,
+    planId: input.planId
+  };
+}
+
+function isTaskControlText(value: unknown, maxLength: number): value is string {
+  return typeof value === "string"
+    && value.trim().length > 0
+    && value.length <= maxLength
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
+}
+
+function readTaskControlRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function hasStrictTaskControlKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  required: readonly string[]
+): boolean {
+  const keys = Object.keys(value);
+  return keys.every((key) => allowed.has(key))
+    && required.every((key) => Object.hasOwn(value, key));
+}
+
+function cloneTaskControlSnapshot(snapshot: TaskControlSnapshot): TaskControlSnapshot {
+  return {
+    ...snapshot,
+    plan: {
+      ...snapshot.plan,
+      risk: { ...snapshot.plan.risk }
+    },
+    recoveryActions: [...snapshot.recoveryActions],
+    ...(snapshot.approval ? { approval: cloneTaskControlApproval(snapshot.approval) } : {})
+  };
+}
+
+function cloneTaskControlApproval(
+  approval: NonNullable<TaskControlSnapshot["approval"]>
+): NonNullable<TaskControlSnapshot["approval"]> {
+  return {
+    ...approval,
+    ...(approval.finderPlanPreview ? {
+      finderPlanPreview: {
+        ...approval.finderPlanPreview,
+        createFolders: [...approval.finderPlanPreview.createFolders],
+        moveFiles: approval.finderPlanPreview.moveFiles.map((move) => ({ ...move }))
+      }
+    } : {})
+  };
+}
+
+function cloneTaskEventTaskControl(event: TaskEvent): TaskEvent {
+  return event.taskControl
+    ? { ...event, taskControl: cloneTaskControlSnapshot(event.taskControl) }
+    : { ...event };
+}
+
+function cloneTurnReplayTaskControls(replay: TurnReplay): TurnReplay {
+  return {
+    ...replay,
+    timeline: replay.timeline.map((event) => event.taskControl
+      ? { ...event, taskControl: cloneTaskControlSnapshot(event.taskControl) }
+      : { ...event })
+  };
 }
 
 function isTaskStatus(value: unknown): value is TaskStatus {
@@ -1282,6 +2026,7 @@ function isPermissionSettingsTarget(value: unknown): value is PermissionSettings
   return (
     value === "screen-recording"
     || value === "accessibility"
+    || value === "automation-finder"
   );
 }
 
@@ -1610,6 +2355,36 @@ function createDefaultAssistantAgentSettingsResponse(): AssistantAgentSettingsRe
         readiness: "unavailable"
       }
     ]
+  };
+}
+
+function createUnknownFirstRunReadinessSnapshot(): FirstRunReadinessSnapshot {
+  return {
+    schemaVersion: 1,
+    chatReady: false,
+    computerUseReady: false,
+    readyWorkflows: [],
+    resumeStepId: "background-agent",
+    steps: [
+      createUnknownFirstRunReadinessStep("background-agent", "required-for-chat"),
+      createUnknownFirstRunReadinessStep("screen-recording", "computer-use"),
+      createUnknownFirstRunReadinessStep("accessibility", "computer-use"),
+      createUnknownFirstRunReadinessStep("finder-automation", "optional"),
+      createUnknownFirstRunReadinessStep("browser-context", "optional")
+    ]
+  };
+}
+
+function createUnknownFirstRunReadinessStep(
+  id: FirstRunReadinessStepId,
+  requirement: FirstRunReadinessRequirement
+): FirstRunReadinessStep {
+  return {
+    id,
+    requirement,
+    state: "unknown",
+    reason: "Readiness status could not be read.",
+    nextAction: "Refresh first-run readiness."
   };
 }
 

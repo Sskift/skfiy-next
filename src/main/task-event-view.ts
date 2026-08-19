@@ -22,13 +22,16 @@ import {
   readRouteOutcome,
   type RouteOutcome
 } from "../shared/route-outcome.js";
+import type { TaskControlSnapshot } from "../shared/task-control.js";
 
 export type ManualMode = "active" | "quiet";
 export type TaskStatus =
   | "idle"
   | "planned"
+  | "waiting"
   | "observing"
   | "executing"
+  | "verifying"
   | "running"
   | "approval_required"
   | "needs_confirmation"
@@ -57,6 +60,7 @@ export interface TaskEvent {
   denialKind?: string;
   policyKind?: string;
   routeOutcome?: RouteOutcome;
+  taskControl?: TaskControlSnapshot;
   stopTurnBehavior?: TaskEventStopTurnBehavior;
   replayReset?: boolean;
   replayRecord?: ObserveAppReplayRecord;
@@ -81,11 +85,19 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
   switch (event.type) {
     case "started":
       return {
-        status: "executing",
+        status: "waiting",
         message: `${prefix}Risk ${event.risk.level}: ${event.risk.reason}`,
         replayReset: true
       };
     case "approval_required":
+      if (event.risk.level === "blocked") {
+        return {
+          status: "blocked",
+          message: event.risk.reason,
+          command: "command" in event ? event.command : `监督 tmux ${event.sessionName}`
+        };
+      }
+
       return {
         status: "approval_required",
         message: `Approval required (${event.risk.level}): ${event.risk.reason}`,
@@ -122,23 +134,28 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         message: `${prefix}Initialized Ghostty session marker: ${event.title}.`
       };
     case "action_verified":
-      return {
-        status: event.status === "passed" ? "executing" : "needs_confirmation",
-        message: event.status === "passed"
-          ? `${prefix}Verified ${event.actionType}: ${event.message ?? "passed."}`
-          : `${prefix}Verification needs confirmation for ${event.actionType}: ${event.reason ?? event.status}`
-      };
-    case "verification_failed":
-      if (event.stage === "permissions") {
+      if (event.status === "needs_user_confirmation") {
         return {
-          status: "failed",
-          message: `${prefix}${event.reason}`
+          status: "needs_confirmation",
+          message: `${prefix}Verification needs confirmation for ${event.actionType}: ${event.reason}`
         };
       }
-
+      if (event.status === "failed") {
+        return {
+          status: "failed",
+          message: `${prefix}Verification failed for ${event.actionType}: ${event.reason}`
+        };
+      }
       return {
-        status: "needs_confirmation",
-        message: `${prefix}Verification failed (${event.stage}): ${event.reason}`
+        status: "verifying",
+        message: `${prefix}Verified ${event.actionType}: ${event.message ?? "passed."}`
+      };
+    case "verification_failed":
+      return {
+        status: "failed",
+        message: event.stage === "permissions"
+          ? `${prefix}${event.reason}`
+          : `${prefix}Verification failed (${event.stage}): ${event.reason}`
       };
     case "recovery_attempted":
       return {
@@ -182,7 +199,7 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
       };
     case "screenshot_after":
       return {
-        status: "observing",
+        status: "verifying",
         message: `${prefix}Captured after screenshot: ${event.path}`,
         replayRecord: createObserveAppReplayRecord("after", event.observation)
       };
@@ -210,6 +227,7 @@ export function readTurnReplayTaskEvent(event: TaskEvent): TurnReplayTaskEvent {
     ...(event.denialKind ? { denialKind: event.denialKind } : {}),
     ...(event.policyKind ? { policyKind: event.policyKind } : {}),
     ...(event.routeOutcome ? { routeOutcome: event.routeOutcome } : {}),
+    ...(event.taskControl ? { taskControl: event.taskControl } : {}),
     ...(event.stopTurnBehavior ? { stopTurnBehavior: event.stopTurnBehavior } : {})
   };
 }

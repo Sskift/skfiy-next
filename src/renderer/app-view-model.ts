@@ -9,6 +9,11 @@ import {
   readRouteOutcome,
   type RouteOutcome
 } from "../shared/route-outcome.js";
+import type {
+  TaskControlRecoveryAction,
+  TaskControlSnapshot,
+  TaskControlStatus
+} from "../shared/task-control.js";
 import type { AssistantAgentProviderReadiness } from "./app-types";
 
 export type PermissionKey = "screenRecording" | "accessibility";
@@ -18,8 +23,10 @@ export type PermissionSettingsTarget = "screen-recording" | "accessibility";
 export type TaskStatus =
   | "idle"
   | "planned"
+  | "waiting"
   | "observing"
   | "executing"
+  | "verifying"
   | "running"
   | "approval_required"
   | "needs_confirmation"
@@ -71,6 +78,11 @@ export const STATUS_COPY: Record<TaskStatus, { label: string; message: string; p
     message: "已规划，等待执行.",
     pulse: "Review"
   },
+  waiting: {
+    label: "Waiting",
+    message: "等待 Computer Use 适配器就绪.",
+    pulse: "Waiting"
+  },
   observing: {
     label: "Observing",
     message: "正在看桌面.",
@@ -80,6 +92,11 @@ export const STATUS_COPY: Record<TaskStatus, { label: string; message: string; p
     label: "Executing",
     message: "正在执行.",
     pulse: "Running"
+  },
+  verifying: {
+    label: "Verifying",
+    message: "正在验证执行结果.",
+    pulse: "Review"
   },
   running: {
     label: "Running",
@@ -393,12 +410,91 @@ export function getPlannerProviderDisplayViewModel(settings: {
 export function canStopTurn(status: TaskStatus): boolean {
   return (
     status === "planned"
+    || status === "waiting"
     || status === "running"
     || status === "observing"
     || status === "executing"
+    || status === "verifying"
     || status === "approval_required"
-    || status === "needs_confirmation"
   );
+}
+
+const TASK_CONTROL_STATUS_LABELS: Record<TaskControlStatus, string> = {
+  waiting: "Waiting",
+  approval_required: "Approval required",
+  executing: "Executing",
+  verifying: "Verifying",
+  app_policy_denied: "App policy denied",
+  user_denied: "User denied",
+  blocked: "Blocked",
+  confirmation_required: "Confirmation required",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  completed: "Completed"
+};
+
+const TASK_CONTROL_RISK_LABELS = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  blocked: "Blocked"
+} as const;
+
+export const TASK_CONTROL_RECOVERY_LABELS: Record<TaskControlRecoveryAction, string> = {
+  retry_observation: "Retry observation",
+  retry_verification: "Retry verification",
+  revise_plan: "Revise plan",
+  open_readiness: "Open readiness details"
+};
+
+export function getTaskControlCardViewModel(snapshot: TaskControlSnapshot): {
+  active: boolean;
+  approvalLabel: string;
+  canApprove: boolean;
+  message: string;
+  riskDetail: string;
+  riskLabel: string;
+  sideEffectMessage: string;
+  statusLabel: string;
+  target: string;
+  verification: string;
+} {
+  const active = snapshot.phase !== "terminal";
+  return {
+    active,
+    approvalLabel: snapshot.plan.approvalRequired ? "Required" : "Not required",
+    canApprove: snapshot.phase === "approval"
+      && snapshot.status === "approval_required"
+      && snapshot.approval !== undefined
+      && snapshot.plan.approvalRequired
+      && snapshot.plan.risk.level !== "blocked",
+    message: sanitizeTaskControlText(snapshot.message),
+    riskDetail: sanitizeTaskControlText(snapshot.plan.risk.reason),
+    riskLabel: TASK_CONTROL_RISK_LABELS[snapshot.plan.risk.level],
+    sideEffectMessage: snapshot.sideEffectState === "none"
+      ? "No external mutation was recorded before cancellation."
+      : "Dispatched or completed actions, if any, were not undone.",
+    statusLabel: TASK_CONTROL_STATUS_LABELS[snapshot.status],
+    target: sanitizeTaskControlText(snapshot.plan.target),
+    verification: sanitizeTaskControlText(snapshot.plan.expectedVerification)
+  };
+}
+
+function sanitizeTaskControlText(value: string): string {
+  return value
+    .replace(/\b(token|password|secret|api[_-]?key)=([^\s&]+)/giu, "$1=[redacted]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, "Bearer [redacted]")
+    .replace(/(?:file:\/\/)?(?:\/Users\/|\/tmp\/|\/private\/tmp\/|\/var\/|\/repo\/)[^\s"')]+/gu, "[path]");
+}
+
+function readPetAtlasStateForTaskStatus(status: TaskStatus): PetAtlasState {
+  if (status === "waiting") {
+    return "waiting";
+  }
+  if (status === "verifying") {
+    return "review";
+  }
+  return getPetStateForTask(status);
 }
 
 export function canDismissTaskBubble(status: TaskStatus): boolean {
@@ -419,11 +515,15 @@ export function getDashboardStatusCopy(task: {
   switch (task.status) {
     case "planned":
       return { label: "任务已规划", detail: task.message, tone: "warning" };
+    case "waiting":
+      return { label: "任务等待中", detail: task.message, tone: "warning" };
     case "observing":
       return { label: "正在观察桌面", detail: task.message, tone: "warning" };
     case "executing":
     case "running":
       return { label: "正在执行任务", detail: task.message, tone: "warning" };
+    case "verifying":
+      return { label: "正在验证结果", detail: task.message, tone: "warning" };
     case "approval_required":
       return { label: "等待审批", detail: task.message, tone: "warning" };
     case "needs_confirmation":
@@ -904,7 +1004,7 @@ export function getAppRootViewModel<
       taskStatus
     }),
     permissionOnboardingRows: readMissingPermissionRows(permissions),
-    petState: getPetStateForTask(taskStatus),
+    petState: readPetAtlasStateForTaskStatus(taskStatus),
     selectedAssistantAgentProvider: readSelectedAssistantAgentProvider(
       assistantAgentSettings.providers,
       assistantAgentSettings.settings.mode,

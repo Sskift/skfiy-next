@@ -21,6 +21,8 @@ export type TurnReplayTaskStatus =
   | "needs_confirmation"
   | "needs_clarification"
   | "running"
+  | "waiting"
+  | "verifying"
   | "completed"
   | "denied"
   | "blocked"
@@ -39,6 +41,7 @@ export interface TurnReplayTaskEvent {
   policyKind?: string;
   routeOutcome?: RouteOutcome;
   stopTurnBehavior?: TurnReplayStopTurnBehavior;
+  taskControl?: import("../../shared/task-control.js").TaskControlSnapshot;
 }
 
 export interface TurnReplayStopTurnBehavior {

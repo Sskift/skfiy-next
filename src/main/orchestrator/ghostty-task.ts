@@ -79,8 +79,7 @@ export async function* runGhosttyCommandTask(
   const command = planned.ok ? planned.command : input.trim();
   const completionMarker = createCommandCompletionMarker();
   const executableCommand = createVerifiableTerminalCommand(command, completionMarker);
-  const risk = classifyTerminalCommand(command);
-  const effectiveRisk = planned.ok ? risk : blockedDecision(planned.reason);
+  const effectiveRisk = readGhosttyTaskRisk(input);
 
   yield {
     type: "started",
@@ -701,6 +700,13 @@ export async function* runGhosttyCommandTask(
     command,
     summary: "Command completed in Ghostty."
   };
+}
+
+export function readGhosttyTaskRisk(input: string): RiskDecision {
+  const planned = parseTerminalIntent(input);
+  return planned.ok
+    ? classifyTerminalCommand(planned.command)
+    : blockedDecision(planned.reason);
 }
 
 function createCommandCompletionMarker(): string {

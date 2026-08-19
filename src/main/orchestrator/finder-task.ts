@@ -31,7 +31,7 @@ const FINDER_ITEM_DRAG_DROP_DURATION_MS = 300;
 const FINDER_ITEM_DRAG_DROP_SOURCE_ITEM = "photo.png";
 const FINDER_ITEM_DRAG_DROP_TARGET_ITEM = "Images";
 
-const FINDER_ORGANIZATION_RISK: RiskDecision = {
+export const FINDER_ORGANIZATION_RISK: RiskDecision = {
   level: "medium",
   reason: "Finder organization moves files inside a user-approved folder.",
   requiresApproval: true
@@ -137,7 +137,7 @@ export async function* runFinderOrganizationTask(
   yield {
     type: "started",
     command,
-    risk: parsed.ok ? FINDER_ORGANIZATION_RISK : blockedDecision(parsed.reason)
+    risk: readFinderTaskRisk(input)
   };
 
   if (!parsed.ok) {
@@ -318,6 +318,16 @@ export async function* runFinderOrganizationTask(
     command: rootPath,
     summary: "Finder test folder organized."
   };
+}
+
+export function readFinderTaskRisk(input: string): RiskDecision {
+  const parsed = parseFinderOrganizationIntent(input);
+  return parsed.ok ? { ...FINDER_ORGANIZATION_RISK } : blockedDecision(parsed.reason);
+}
+
+export function requiresFinderPlanConfirmation(input: string): boolean {
+  const parsed = parseFinderOrganizationIntent(input);
+  return parsed.ok && needsFinderPlanConfirmation(parsed.target);
 }
 
 function needsFinderPlanConfirmation(target: FinderOrganizationTarget): boolean {

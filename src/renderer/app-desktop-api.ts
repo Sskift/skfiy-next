@@ -82,7 +82,73 @@ export const fallbackDesktopApi: DesktopApi = {
   moveWindowBy: () => undefined,
   setWindowMode: () => undefined,
   onStopTurnHotkey: () => () => undefined,
-  onTaskEvent: () => () => undefined
+  onTaskEvent: () => () => undefined,
+  getFirstRunReadiness: async () => ({
+    schemaVersion: 1,
+    chatReady: false,
+    computerUseReady: false,
+    readyWorkflows: [],
+    resumeStepId: "background-agent",
+    steps: []
+  }),
+  testBackgroundAgent: async () => ({
+    schemaVersion: 1,
+    chatReady: false,
+    computerUseReady: false,
+    readyWorkflows: [],
+    resumeStepId: "background-agent",
+    steps: []
+  }),
+  testFinderAutomation: async () => ({
+    schemaVersion: 1,
+    chatReady: false,
+    computerUseReady: false,
+    readyWorkflows: [],
+    resumeStepId: "background-agent",
+    steps: []
+  }),
+  getConversationHistory: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  startConversationSession: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  switchConversationSession: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  renameConversationSession: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  archiveConversationSession: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  deleteConversationSession: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  restoreConversationSession: async () => ({
+    schemaVersion: 1,
+    lastActiveSessionId: null,
+    sessions: []
+  }),
+  retryConversationTurn: async () => ({
+    status: "storage-error",
+    message: "Conversation history is unavailable in fallback mode.",
+    snapshot: { schemaVersion: 1, lastActiveSessionId: null, sessions: [] }
+  }),
+  onConversationHistoryChanged: () => () => undefined,
+  getTaskControl: async () => null
 };
 
 export function getDesktopApi(): DesktopApi {

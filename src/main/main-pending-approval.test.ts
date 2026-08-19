@@ -6,15 +6,72 @@ import {
   createClearedPendingComputerUseTaskState,
   createStartedComputerUseTaskState,
   completeComputerUseToolCallState,
-  createPendingApproval,
+  createPendingApproval as createBoundPendingApproval,
   createPendingApprovalDeniedTaskEvent,
+  readApprovedPendingApprovalContinuation,
   readComputerUseRouteForToolCallState,
   readComputerUseToolCallIdentityToCancel,
   USER_DENIED_COMPUTER_USE_REASON
 } from "./main-pending-approval";
+import type {
+  ComputerUseCommandRoute,
+  CreatePendingApprovalInput,
+  PendingApproval
+} from "./main-pending-approval";
+import type { AssistantComputerUseToolIdentity } from "./assistant-computer-use-executor";
+import type { FinderPlanPreview } from "./orchestrator/finder-task";
+import type { ManualMode } from "./task-event-view";
 import { CHROME_BUNDLE_ID, FINDER_BUNDLE_ID } from "./task-routing";
 
 describe("main pending approval helpers", () => {
+  it("binds action and Finder approvals to an explicit gate and plan id", () => {
+    const actionApproval = createPendingApproval({
+      command: "open Chrome",
+      mode: "active",
+      identity: {
+        turnId: "turn-plan-bound",
+        toolCallId: "tool-plan-bound"
+      },
+      route: {
+        kind: "chrome",
+        bundleId: CHROME_BUNDLE_ID
+      },
+      gate: "action-plan",
+      planId: "plan-action-123",
+      actionApproved: false,
+      finderPlanApproved: false
+    });
+
+    expect(actionApproval).toMatchObject({
+      gate: "action-plan",
+      planId: "plan-action-123",
+      actionApproved: false,
+      finderPlanApproved: false
+    });
+    expect(readApprovedPendingApprovalContinuation(actionApproval)).toEqual({
+      actionApproved: true,
+      finderPlanApproved: false
+    });
+
+    const finderApproval = createPendingApproval({
+      command: actionApproval.command,
+      mode: actionApproval.mode,
+      identity: {
+        turnId: actionApproval.turnId,
+        toolCallId: actionApproval.toolCallId
+      },
+      route: actionApproval.route,
+      gate: "finder-plan",
+      planId: "plan-finder-456",
+      actionApproved: true,
+      finderPlanApproved: false
+    });
+    expect(readApprovedPendingApprovalContinuation(finderApproval)).toEqual({
+      actionApproved: true,
+      finderPlanApproved: true
+    });
+  });
+
   it("preserves assistant tool identity and route state for approval resumption", () => {
     const approvedPlanPreview = {
       rootPath: "/tmp/Downloads",
@@ -49,12 +106,15 @@ describe("main pending approval helpers", () => {
         kind: "finder",
         bundleId: FINDER_BUNDLE_ID
       },
-      planApproved: true,
+      gate: "finder-plan",
+      planId: "test-plan-tool-call-1",
+      actionApproved: true,
+      finderPlanApproved: false,
       approvedPlanPreview
     });
   });
 
-  it("omits planApproved unless the Finder plan has already been approved", () => {
+  it("keeps initial action approval explicit when a Finder plan is not involved", () => {
     expect(createPendingApproval(
       "open Chrome",
       "quiet",
@@ -74,7 +134,11 @@ describe("main pending approval helpers", () => {
       route: {
         kind: "chrome",
         bundleId: CHROME_BUNDLE_ID
-      }
+      },
+      gate: "action-plan",
+      planId: "test-plan-tool-call-2",
+      actionApproved: false,
+      finderPlanApproved: false
     });
   });
 
@@ -317,3 +381,37 @@ describe("main pending approval helpers", () => {
     });
   });
 });
+
+function createPendingApproval(input: CreatePendingApprovalInput): PendingApproval;
+function createPendingApproval(
+  command: string,
+  mode: ManualMode,
+  identity: AssistantComputerUseToolIdentity,
+  route: ComputerUseCommandRoute,
+  planApproved?: boolean,
+  approvedPlanPreview?: FinderPlanPreview
+): PendingApproval;
+function createPendingApproval(
+  inputOrCommand: CreatePendingApprovalInput | string,
+  mode?: ManualMode,
+  identity?: AssistantComputerUseToolIdentity,
+  route?: ComputerUseCommandRoute,
+  planApproved = false,
+  approvedPlanPreview?: FinderPlanPreview
+): PendingApproval {
+  if (typeof inputOrCommand !== "string") {
+    return createBoundPendingApproval(inputOrCommand);
+  }
+
+  return createBoundPendingApproval({
+    command: inputOrCommand,
+    mode: mode!,
+    identity: identity!,
+    route: route!,
+    gate: planApproved ? "finder-plan" : "action-plan",
+    planId: `test-plan-${identity!.toolCallId}`,
+    actionApproved: planApproved,
+    finderPlanApproved: false,
+    ...(approvedPlanPreview ? { approvedPlanPreview } : {})
+  });
+}

@@ -4,18 +4,34 @@ import type {
   RouteOutcomeKind,
   RouteOutcomeTone
 } from "../shared/route-outcome.js";
+import type {
+  FirstRunReadinessSnapshot,
+  FirstRunReadinessStep
+} from "../shared/first-run-readiness.js";
+import type {
+  ConversationHistorySnapshot,
+  ConversationRetryResult
+} from "../shared/conversation-history.js";
+import type { TaskControlSnapshot } from "../shared/task-control.js";
 
 export type {
+  ConversationHistorySnapshot,
+  ConversationRetryResult,
+  FirstRunReadinessSnapshot,
+  FirstRunReadinessStep,
   RouteOutcome,
   RouteOutcomeKind,
-  RouteOutcomeTone
+  RouteOutcomeTone,
+  TaskControlSnapshot
 };
 
 export type TaskStatus =
   | "idle"
   | "planned"
+  | "waiting"
   | "observing"
   | "executing"
+  | "verifying"
   | "running"
   | "approval_required"
   | "needs_confirmation"
@@ -188,6 +204,7 @@ export interface TurnReplay {
     denialKind?: string;
     policyKind?: string;
     routeOutcome?: RouteOutcome;
+    taskControl?: TaskControlSnapshot;
     stopTurnBehavior?: TaskEventStopTurnBehavior;
   }>;
 }
@@ -319,6 +336,7 @@ export interface TaskEvent {
   denialKind?: string;
   policyKind?: string;
   routeOutcome?: RouteOutcome;
+  taskControl?: TaskControlSnapshot;
   stopTurnBehavior?: TaskEventStopTurnBehavior;
   replayReset?: boolean;
   replayRecord?: ObserveAppReplayRecord;
@@ -391,8 +409,8 @@ export interface ObserveAppReplayRecord {
 
 export interface DesktopApi {
   runCommand: (command: string, options: { mode: ManualMode }) => Promise<void>;
-  approveTask: () => Promise<void>;
-  denyTask: () => Promise<void>;
+  approveTask: (input: TaskApprovalDecisionInput) => Promise<void>;
+  denyTask: (input: TaskApprovalDecisionInput) => Promise<void>;
   takeScreenshot: () => Promise<void>;
   stopTask: () => Promise<void>;
   getPermissions: () => Promise<PermissionSummary>;
@@ -406,10 +424,26 @@ export interface DesktopApi {
   setAssistantAgentSettings: (
     update: Partial<Pick<AssistantAgentSettings, "mode">>
   ) => Promise<AssistantAgentSettingsResponse>;
+  getFirstRunReadiness: () => Promise<FirstRunReadinessSnapshot>;
+  testBackgroundAgent: () => Promise<FirstRunReadinessSnapshot>;
+  testFinderAutomation: () => Promise<FirstRunReadinessSnapshot>;
   getPlannerProviderSettings: () => Promise<PlannerProviderSettings>;
   setPlannerProviderSettings: (
     update: Partial<Pick<PlannerProviderSettings, "mode">>
   ) => Promise<PlannerProviderSettings>;
+  getConversationHistory: () => Promise<ConversationHistorySnapshot>;
+  startConversationSession: () => Promise<ConversationHistorySnapshot>;
+  switchConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  renameConversationSession: (
+    input: { sessionId: string; title: string }
+  ) => Promise<ConversationHistorySnapshot>;
+  archiveConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  deleteConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  restoreConversationSession: (sessionId: string) => Promise<ConversationHistorySnapshot>;
+  retryConversationTurn: (
+    input: { sessionId: string; turnId: string; requestId: string }
+  ) => Promise<ConversationRetryResult>;
+  getTaskControl: () => Promise<TaskControlSnapshot | null>;
   getTurnReplay: () => Promise<TurnReplay | null>;
   getAutomationMonitors: () => Promise<AutomationMonitorSnapshot>;
   upsertTmuxMonitor: (
@@ -423,4 +457,12 @@ export interface DesktopApi {
   setWindowMode: (mode: PetWindowMode) => void;
   onStopTurnHotkey: (callback: () => void) => () => void;
   onTaskEvent: (callback: (event: TaskEvent) => void) => () => void;
+  onConversationHistoryChanged: (
+    callback: (snapshot: ConversationHistorySnapshot) => void
+  ) => () => void;
+}
+
+export interface TaskApprovalDecisionInput {
+  executionId: string;
+  planId: string;
 }

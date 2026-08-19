@@ -7,6 +7,8 @@ export const CHROME_BUNDLE_ID = "com.google.Chrome";
 export const FINDER_BUNDLE_ID = "com.apple.finder";
 const GENERIC_VISIBLE_APP_CLARIFICATION_REASON =
   "Generic visible-app control is not a supported product route yet. Name Ghostty, Chrome/Chromium, Finder, or money-run supervision.";
+export const ROUTE_POLICY_BLOCKED_REASON =
+  "Route policy blocks destructive or sensitive terminal commands before Computer Use.";
 
 export type ExecutableCommandRoute =
   | { kind: "ghostty"; bundleId: typeof GHOSTTY_BUNDLE_ID }
@@ -50,6 +52,15 @@ export function selectCommandRoute(command: string): CommandRoute {
   }
 
   return route;
+}
+
+export function readExecutableRoutePolicyBlockReason(
+  command: string,
+  route: ExecutableCommandRoute
+): string | undefined {
+  return isRoutePolicyBlockedRequest(command, route)
+    ? ROUTE_POLICY_BLOCKED_REASON
+    : undefined;
 }
 
 function selectBaseCommandRoute(command: string): CommandRoute {

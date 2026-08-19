@@ -10,6 +10,7 @@ import type {
   TaskEvent
 } from "./app-types";
 import type { PetAtlasManifest } from "./pet-atlas";
+import type { TaskControlSnapshot } from "../shared/task-control";
 
 let emitTaskEvent: (event: TaskEvent) => void;
 let emitStopTurnHotkey: () => void;
@@ -218,7 +219,73 @@ beforeEach(() => {
     onTaskEvent: vi.fn((callback: (event: TaskEvent) => void) => {
       emitTaskEvent = callback;
       return vi.fn();
-    })
+    }),
+    getFirstRunReadiness: vi.fn<DesktopApi["getFirstRunReadiness"]>().mockResolvedValue({
+      schemaVersion: 1,
+      chatReady: false,
+      computerUseReady: false,
+      readyWorkflows: [],
+      resumeStepId: "background-agent",
+      steps: []
+    }),
+    testBackgroundAgent: vi.fn<DesktopApi["testBackgroundAgent"]>().mockResolvedValue({
+      schemaVersion: 1,
+      chatReady: false,
+      computerUseReady: false,
+      readyWorkflows: [],
+      resumeStepId: "background-agent",
+      steps: []
+    }),
+    testFinderAutomation: vi.fn<DesktopApi["testFinderAutomation"]>().mockResolvedValue({
+      schemaVersion: 1,
+      chatReady: false,
+      computerUseReady: false,
+      readyWorkflows: [],
+      resumeStepId: "background-agent",
+      steps: []
+    }),
+    getConversationHistory: vi.fn<DesktopApi["getConversationHistory"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    startConversationSession: vi.fn<DesktopApi["startConversationSession"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    switchConversationSession: vi.fn<DesktopApi["switchConversationSession"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    renameConversationSession: vi.fn<DesktopApi["renameConversationSession"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    archiveConversationSession: vi.fn<DesktopApi["archiveConversationSession"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    deleteConversationSession: vi.fn<DesktopApi["deleteConversationSession"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    restoreConversationSession: vi.fn<DesktopApi["restoreConversationSession"]>().mockResolvedValue({
+      schemaVersion: 1,
+      lastActiveSessionId: null,
+      sessions: []
+    }),
+    retryConversationTurn: vi.fn<DesktopApi["retryConversationTurn"]>().mockResolvedValue({
+      status: "storage-error",
+      message: "Conversation history is unavailable in tests.",
+      snapshot: { schemaVersion: 1, lastActiveSessionId: null, sessions: [] }
+    }),
+    onConversationHistoryChanged: vi.fn(() => vi.fn()),
+    getTaskControl: vi.fn<DesktopApi["getTaskControl"]>().mockResolvedValue(null)
   } satisfies DesktopApi;
 });
 
@@ -858,10 +925,51 @@ describe("App", () => {
   });
 
   it("submits command input through the active pet command path", async () => {
+    const api = window.skfiy as DesktopApi;
+    // The conversation transcript is driven by the persisted history snapshot:
+    // the first load is empty, and the refresh after submit returns the session
+    // containing the just-sent user message.
+    api.getConversationHistory = vi
+      .fn<DesktopApi["getConversationHistory"]>()
+      .mockResolvedValueOnce({ schemaVersion: 1, lastActiveSessionId: null, sessions: [] })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        lastActiveSessionId: "session-1",
+        sessions: [
+          {
+            id: "session-1",
+            title: "Ghostty 会话",
+            titleSource: "generated",
+            createdAt: "2026-08-20T00:00:00.000Z",
+            updatedAt: "2026-08-20T00:00:00.000Z",
+            turns: [
+              {
+                id: "turn-1",
+                submissionId: "submission-1",
+                attempt: 1,
+                createdAt: "2026-08-20T00:00:00.000Z",
+                updatedAt: "2026-08-20T00:00:00.000Z",
+                status: "pending",
+                provider: { id: "codex", label: "Codex" },
+                computerUseState: "none",
+                messages: [
+                  {
+                    id: "message-1",
+                    turnId: "turn-1",
+                    kind: "user-text",
+                    createdAt: "2026-08-20T00:00:00.000Z",
+                    text: "打开 Ghostty 查看 pwd"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      });
     render(<App />);
 
-    const api = window.skfiy as DesktopApi;
     fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    await waitFor(() => expect(screen.getByLabelText("会话消息")).toBeInTheDocument());
 
     const input = screen.getByRole("textbox", { name: /ask skfiy/i });
     fireEvent.change(input, { target: { value: "打开 Ghostty 查看 pwd" } });
@@ -871,7 +979,9 @@ describe("App", () => {
       expect(api.runCommand).toHaveBeenCalledWith("打开 Ghostty 查看 pwd", { mode: "active" });
     });
     expect(screen.getByLabelText(/skfiy assistant input/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("你发送给 skfiy")).toHaveTextContent("打开 Ghostty 查看 pwd");
+    await waitFor(() => {
+      expect(screen.getByLabelText("你发送给 skfiy")).toHaveTextContent("打开 Ghostty 查看 pwd");
+    });
   });
 
   it("keeps the conversation panel usable while waiting for the background agent", async () => {
@@ -892,7 +1002,7 @@ describe("App", () => {
 
     await waitFor(() => expect(api.runCommand).toHaveBeenCalledWith("你好", { mode: "active" }));
     expect(screen.getByLabelText(/skfiy assistant input/i)).toBeInTheDocument();
-    expect(screen.getByText("Background Agent 正在回复...")).toBeInTheDocument();
+    expect(screen.getByText("等待回复")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送给 skfiy" })).toBeDisabled();
 
     act(() => resolveRunCommand?.());
@@ -1149,13 +1259,62 @@ describe("App", () => {
   it("exposes approval controls when a command is waiting for approval", () => {
     render(<App />);
 
-    act(() => emitTaskEvent({ status: "approval_required", message: "Needs a human check" }));
-    fireEvent.click(screen.getByRole("button", { name: "确认" }));
-    fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
+    const createApprovalSnapshot = (
+      executionId: string,
+      planId: string
+    ): TaskControlSnapshot => ({
+      schemaVersion: 1,
+      executionId,
+      phase: "approval",
+      status: "approval_required",
+      message: "Needs a human check",
+      plan: {
+        planId,
+        route: "ghostty",
+        appName: "Ghostty",
+        target: "active terminal session",
+        risk: {
+          level: "medium",
+          reason: "This command changes local files.",
+          requiresApproval: true
+        },
+        approvalRequired: true,
+        expectedVerification: "Confirm the command result appears in the active terminal.",
+        mutating: true
+      },
+      sideEffectState: "none",
+      replayAvailable: false,
+      recoveryActions: [],
+      approval: { gate: "action-plan", planId }
+    });
+
+    act(() => emitTaskEvent({
+      status: "approval_required",
+      message: "Needs a human check",
+      taskControl: createApprovalSnapshot("execution-1", "plan-1")
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve task plan" }));
 
     const api = window.skfiy as DesktopApi;
     expect(api.approveTask).toHaveBeenCalledTimes(1);
+    expect(api.approveTask).toHaveBeenCalledWith({
+      executionId: "execution-1",
+      planId: "plan-1"
+    });
+
+    // The card locks further decisions while the first one is pending; a fresh
+    // approval turn re-arms the controls so the deny path can be exercised.
+    act(() => emitTaskEvent({
+      status: "approval_required",
+      message: "Needs a human check",
+      taskControl: createApprovalSnapshot("execution-2", "plan-2")
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Deny task plan" }));
     expect(api.denyTask).toHaveBeenCalledTimes(1);
+    expect(api.denyTask).toHaveBeenCalledWith({
+      executionId: "execution-2",
+      planId: "plan-2"
+    });
   });
 
   it("shows Finder plan preview details inside the approval panel", () => {

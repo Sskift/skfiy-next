@@ -17,15 +17,19 @@ describe("main stop task helper", () => {
       kind: "finder",
       bundleId: FINDER_BUNDLE_ID
     } as const;
-    const pendingApproval = createPendingApproval(
-      "organize Downloads",
-      "active",
-      {
+    const pendingApproval = createPendingApproval({
+      command: "organize Downloads",
+      mode: "active",
+      identity: {
         turnId: "turn-stop-pending",
         toolCallId: "tool-stop-pending"
       },
-      pendingRoute
-    );
+      route: pendingRoute,
+      gate: "action-plan",
+      planId: "test-plan-stop-pending",
+      actionApproved: false,
+      finderPlanApproved: false
+    });
 
     expect(createStopTaskEventDecision({
       activeRoute,

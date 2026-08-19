@@ -1,7 +1,7 @@
 import type { RiskDecision } from "../../shared/types.js";
 import type { TmuxSupervisionReport } from "../computer-use/tmux-supervisor.js";
 
-const TMUX_SUPERVISION_RISK: RiskDecision = {
+export const TMUX_SUPERVISION_RISK: RiskDecision = {
   level: "medium",
   reason: "tmux supervision reads recent pane output but does not mutate the session.",
   requiresApproval: true
@@ -9,6 +9,10 @@ const TMUX_SUPERVISION_RISK: RiskDecision = {
 
 export interface TmuxSupervisionTaskClient {
   observeSession(sessionName: string): Promise<TmuxSupervisionReport>;
+}
+
+export function readTmuxSupervisionTaskRisk(): RiskDecision {
+  return { ...TMUX_SUPERVISION_RISK };
 }
 
 export type TmuxSupervisionTaskEvent =

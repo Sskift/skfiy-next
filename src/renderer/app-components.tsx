@@ -25,7 +25,9 @@ import {
   getLocalReplayViewModel,
   getPlannerProviderDisplayViewModel,
   getPolicySummary,
+  getTaskControlCardViewModel,
   getTaskReplayRows,
+  TASK_CONTROL_RECOVERY_LABELS,
   getUserDashboardPanelViewModel
 } from "./app-view-model";
 import type { TaskView } from "./app-task-state";
@@ -36,8 +38,13 @@ import type {
   ObserveAppReplayRecord,
   PermissionSummary,
   PlannerProviderSettings,
+  TaskApprovalDecisionInput,
   TurnReplay
 } from "./app-types";
+import type {
+  TaskControlRecoveryAction,
+  TaskControlSnapshot
+} from "../shared/task-control";
 
 export function TaskReplay({ records }: { records: ObserveAppReplayRecord[] }) {
   const rows = getTaskReplayRows(records);
@@ -75,6 +82,153 @@ export function FinderPlanPreviewSummary({ preview }: { preview: FinderPlanPrevi
         {previewViewModel.moveItems.map((move) => <em key={move.key}>{move.label}</em>)}
       </div>
     </div>
+  );
+}
+
+export function TaskControlCard({
+  actionError,
+  approvalDecisionPending,
+  onApprove,
+  onDeny,
+  onOpenReplay,
+  onRecover,
+  onStop,
+  snapshot,
+  stopPending
+}: {
+  actionError?: string;
+  approvalDecisionPending: boolean;
+  onApprove: (input: TaskApprovalDecisionInput) => void;
+  onDeny: (input: TaskApprovalDecisionInput) => void;
+  onOpenReplay: () => void;
+  onRecover: (action: TaskControlRecoveryAction) => void;
+  onStop: () => void;
+  snapshot: TaskControlSnapshot;
+  stopPending: boolean;
+}) {
+  const view = getTaskControlCardViewModel(snapshot);
+  const approvalInput = snapshot.approval ? {
+    executionId: snapshot.executionId,
+    planId: snapshot.approval.planId
+  } : null;
+
+  return (
+    <section
+      className="task-control-card"
+      aria-label="Computer Use task control"
+      data-phase={snapshot.phase}
+      data-status={snapshot.status}
+    >
+      <div className="task-control-heading">
+        <div>
+          <strong>Task Control</strong>
+          <span>{view.statusLabel}</span>
+        </div>
+        <code>{snapshot.status}</code>
+      </div>
+
+      <p className="task-control-message">{view.message}</p>
+
+      <dl className="task-control-plan" aria-label="Computer Use plan preview">
+        <div>
+          <dt>App</dt>
+          <dd>{snapshot.plan.appName}</dd>
+        </div>
+        <div>
+          <dt>Target</dt>
+          <dd>{view.target}</dd>
+        </div>
+        <div>
+          <dt>Risk</dt>
+          <dd><strong>{view.riskLabel}</strong><span>{view.riskDetail}</span></dd>
+        </div>
+        <div>
+          <dt>Approval</dt>
+          <dd>{view.approvalLabel}</dd>
+        </div>
+        <div>
+          <dt>Expected verification</dt>
+          <dd>{view.verification}</dd>
+        </div>
+      </dl>
+
+      {view.canApprove && snapshot.approval?.finderPlanPreview ? (
+        <FinderPlanPreviewSummary preview={snapshot.approval.finderPlanPreview} />
+      ) : null}
+
+      {snapshot.phase === "terminal" ? (
+        <div className="task-control-result" aria-label="Task Control completion summary">
+          <strong>{view.statusLabel}</strong>
+          <span>{view.sideEffectMessage}</span>
+        </div>
+      ) : null}
+
+      {actionError ? <p className="task-control-error" role="alert">{actionError}</p> : null}
+
+      <div
+        className="task-control-actions"
+        aria-busy={approvalDecisionPending ? "true" : undefined}
+        aria-label="Task Control actions"
+      >
+        {view.active ? (
+          <button
+            type="button"
+            aria-label={stopPending ? "Stopping task" : "Stop task"}
+            disabled={stopPending}
+            onClick={onStop}
+          >
+            <CirclePause size={13} aria-hidden="true" />
+            <span>{stopPending ? "Stopping…" : "Stop"}</span>
+          </button>
+        ) : null}
+        {view.canApprove && approvalInput ? (
+          <>
+            <button
+              type="button"
+              aria-label="Approve task plan"
+              disabled={approvalDecisionPending}
+              onClick={() => onApprove(approvalInput)}
+            >
+              <Play size={13} aria-hidden="true" />
+              <span>Approve</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Deny task plan"
+              disabled={approvalDecisionPending}
+              onClick={() => onDeny(approvalInput)}
+            >
+              <CirclePause size={13} aria-hidden="true" />
+              <span>Deny</span>
+            </button>
+          </>
+        ) : null}
+        {snapshot.replayAvailable ? (
+          <button type="button" aria-label="Open task replay" onClick={onOpenReplay}>
+            <History size={13} aria-hidden="true" />
+            <span>Open replay</span>
+          </button>
+        ) : null}
+      </div>
+
+      {snapshot.recoveryActions.length > 0 ? (
+        <div className="task-control-recovery" aria-label="Task recovery actions">
+          <strong>Recovery</strong>
+          <div>
+            {snapshot.recoveryActions.map((action) => (
+              <button
+                type="button"
+                aria-label={TASK_CONTROL_RECOVERY_LABELS[action]}
+                key={action}
+                onClick={() => onRecover(action)}
+              >
+                {TASK_CONTROL_RECOVERY_LABELS[action]}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

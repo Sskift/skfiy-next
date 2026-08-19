@@ -115,7 +115,7 @@ describe("Chrome extension readiness diagnostics", () => {
         state: "configured",
         path: hostPolicyPath,
         defaultMode: "ask",
-        entryCount: 2
+        entryCount: 1
       },
       approvalPolicy: {
         state: "ready",

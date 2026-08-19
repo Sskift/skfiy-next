@@ -11,6 +11,9 @@ export type ChromeHostPolicyAction =
   | "ask_host";
 export type ChromeBrowserDataExposure = "browser_history" | "download_filename";
 
+export const CHROME_CURRENT_TURN_HOST_GRANT_REQUIRED_MESSAGE =
+  "Chrome current-turn host approval requires a live pet Computer Use tool call and cannot be stored in durable host policy.";
+
 export interface ChromeHostPolicy {
   defaultMode: ChromeHostPolicyDefaultMode;
   allowedHosts: string[];
@@ -202,14 +205,13 @@ export function normalizeChromeHostPolicy(value: unknown): ChromeHostPolicy {
   const blockedSet = new Set(blockedHosts);
   const allowedHosts = normalizeHostList(record.allowedHosts)
     .filter((host) => !blockedSet.has(host));
-  const allowedSet = new Set(allowedHosts);
-  const currentTurnAllowedHosts = normalizeHostList(record.currentTurnAllowedHosts)
-    .filter((host) => !blockedSet.has(host) && !allowedSet.has(host));
 
   return {
     defaultMode: "ask",
     allowedHosts,
-    currentTurnAllowedHosts,
+    // Kept in the serialized contract for compatibility. Current-turn grants
+    // live only in the pet's tool-scoped in-memory grant store.
+    currentTurnAllowedHosts: [],
     blockedHosts
   };
 }
@@ -245,15 +247,6 @@ export function decideChromeHostPolicy(
     };
   }
 
-  if (normalizedPolicy.currentTurnAllowedHosts.includes(host)) {
-    return {
-      decision: "allow",
-      host,
-      reason: "current_turn_allowed_host",
-      scope: "current_turn"
-    };
-  }
-
   return {
     decision: "ask",
     host,
@@ -273,32 +266,26 @@ export function applyChromeHostPolicyAction(
   }
 
   const allowedHosts = removeHost(nextPolicy.allowedHosts, host);
-  const currentTurnAllowedHosts = removeHost(nextPolicy.currentTurnAllowedHosts, host);
   const blockedHosts = removeHost(nextPolicy.blockedHosts, host);
 
   if (input.action === "always_allow") {
     return {
       ...nextPolicy,
       allowedHosts: [...allowedHosts, host],
-      currentTurnAllowedHosts,
+      currentTurnAllowedHosts: [],
       blockedHosts
     };
   }
 
   if (input.action === "allow_current_turn") {
-    return {
-      ...nextPolicy,
-      allowedHosts,
-      currentTurnAllowedHosts: [...currentTurnAllowedHosts, host],
-      blockedHosts
-    };
+    return nextPolicy;
   }
 
   if (input.action === "block_host") {
     return {
       ...nextPolicy,
       allowedHosts,
-      currentTurnAllowedHosts,
+      currentTurnAllowedHosts: [],
       blockedHosts: [...blockedHosts, host]
     };
   }
@@ -306,7 +293,7 @@ export function applyChromeHostPolicyAction(
   return {
     ...nextPolicy,
     allowedHosts,
-    currentTurnAllowedHosts,
+    currentTurnAllowedHosts: [],
     blockedHosts
   };
 }

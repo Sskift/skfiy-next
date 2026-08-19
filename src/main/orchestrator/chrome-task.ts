@@ -19,7 +19,7 @@ const CHROME_FORM_SUFFIX = " 并提取正文";
 const CHROME_FORM_FIELD_MARKER = " 字段 ";
 const CHROME_FORM_CLICK_MARKER = " 点击 ";
 
-const CHROME_PAGE_RISK: RiskDecision = {
+export const CHROME_PAGE_RISK: RiskDecision = {
   level: "medium",
   reason: "Chrome test-page control navigates the browser and reads page text.",
   requiresApproval: true
@@ -129,7 +129,7 @@ export async function* runChromePageTask(
   yield {
     type: "started",
     command,
-    risk: parsed.ok ? CHROME_PAGE_RISK : blockedDecision(parsed.reason)
+    risk: readChromeTaskRisk(input)
   };
 
   if (!parsed.ok) {
@@ -291,6 +291,11 @@ export async function* runChromePageTask(
       reason: `Chrome CDP extraction failed: ${readErrorMessage(error, "Chrome text extraction failed.")}`
     });
   }
+}
+
+export function readChromeTaskRisk(input: string): RiskDecision {
+  const parsed = parseChromePageIntent(input);
+  return parsed.ok ? { ...CHROME_PAGE_RISK } : blockedDecision(parsed.reason);
 }
 
 function hasSensitiveText(value: string): boolean {

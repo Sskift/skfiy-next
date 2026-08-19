@@ -9,13 +9,34 @@ import {
 } from "./task-event-view.js";
 
 export type ComputerUseCommandRoute = ExecutableCommandRoute;
+export type ComputerUseApprovalGate = "action-plan" | "finder-plan";
 
 export interface PendingApproval extends AssistantComputerUseToolIdentity {
   command: string;
   mode: ManualMode;
   route: ComputerUseCommandRoute;
-  planApproved?: boolean;
+  gate: ComputerUseApprovalGate;
+  planId: string;
+  actionApproved: boolean;
+  finderPlanApproved: boolean;
   approvedPlanPreview?: FinderPlanPreview;
+}
+
+export interface CreatePendingApprovalInput {
+  command: string;
+  mode: ManualMode;
+  identity: AssistantComputerUseToolIdentity;
+  route: ComputerUseCommandRoute;
+  gate: ComputerUseApprovalGate;
+  planId: string;
+  actionApproved: boolean;
+  finderPlanApproved: boolean;
+  approvedPlanPreview?: FinderPlanPreview;
+}
+
+export interface ApprovedPendingApprovalContinuation {
+  actionApproved: boolean;
+  finderPlanApproved: boolean;
 }
 
 export interface ComputerUseToolCallState {
@@ -44,20 +65,40 @@ export interface StartedComputerUseTaskState extends ActiveComputerUseTaskState 
 export const USER_DENIED_COMPUTER_USE_REASON = "User denied this Computer Use turn.";
 
 export function createPendingApproval(
-  command: string,
-  mode: ManualMode,
-  identity: AssistantComputerUseToolIdentity,
-  route: ComputerUseCommandRoute,
-  planApproved = false,
-  approvedPlanPreview?: FinderPlanPreview
+  input: CreatePendingApprovalInput
 ): PendingApproval {
+  const planId = input.planId.trim();
+  if (!planId) {
+    throw new Error("Pending Computer Use approval requires a plan id.");
+  }
+
   return {
-    ...identity,
-    command,
-    mode,
-    route,
-    ...(planApproved ? { planApproved } : {}),
-    ...(approvedPlanPreview ? { approvedPlanPreview } : {})
+    ...input.identity,
+    command: input.command,
+    mode: input.mode,
+    route: input.route,
+    gate: input.gate,
+    planId,
+    actionApproved: input.actionApproved,
+    finderPlanApproved: input.finderPlanApproved,
+    ...(input.approvedPlanPreview ? { approvedPlanPreview: cloneFinderPlanPreview(input.approvedPlanPreview) } : {})
+  };
+}
+
+export function readApprovedPendingApprovalContinuation(
+  approval: PendingApproval
+): ApprovedPendingApprovalContinuation {
+  return {
+    actionApproved: approval.actionApproved === true || approval.gate === "action-plan",
+    finderPlanApproved: approval.finderPlanApproved === true || approval.gate === "finder-plan"
+  };
+}
+
+function cloneFinderPlanPreview(preview: FinderPlanPreview): FinderPlanPreview {
+  return {
+    ...preview,
+    createFolders: [...preview.createFolders],
+    moveFiles: preview.moveFiles.map((move) => ({ ...move }))
   };
 }
 
