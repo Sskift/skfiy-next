@@ -996,7 +996,9 @@ function dispatchComputerUseTaskEvent({
   );
 
   if (dispatch.toolResult) {
-    completeComputerUseToolCall(toolIdentity, dispatch.toolResult);
+    // Emit the terminal event before completing the tool call so the
+    // renderer always sees the outcome, even if the assistant agent's
+    // continuation interferes with the dispatch.
     emitTaskControlEventForTool(
       window,
       dispatch.taskStatus,
@@ -1004,6 +1006,7 @@ function dispatchComputerUseTaskEvent({
       sideEffectState,
       approvalContext
     );
+    completeComputerUseToolCall(toolIdentity, dispatch.toolResult);
     return;
   }
 
