@@ -187,6 +187,12 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         command: event.command,
         finderPlanPreview: event.preview
       };
+    case "submit_confirmation_required":
+      return {
+        status: "needs_confirmation",
+        message: `${prefix}Chrome submit confirmation required: ${event.reason}`,
+        command: event.command
+      };
     case "typing":
       return {
         status: "executing",
