@@ -11,6 +11,7 @@
     "dev:electron": "SKFIY_DEV_SERVER_URL=${SKFIY_DEV_SERVER_URL:-http://127.0.0.1:5173} electron .",
     "start": "electron .",
     "clean": "rm -rf dist",
+    "postinstall": "node node_modules/electron/install.js",
     "test": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "npm run clean && vite build && tsc -p tsconfig.electron.json && npm run build:preload && npm run build:helper && npm run package:mac",
