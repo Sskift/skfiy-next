@@ -16,6 +16,14 @@ export type AutomationMonitorStatus =
   | "scheduler_inactive";
 export type AutomationMonitorLastResult = TmuxSupervisionStatus | "error";
 export type AutomationSchedulerScope = "app-process";
+export type AutomationMonitorRunTrigger = "manual" | "scheduled";
+export type AutomationMonitorNotificationOutcome = "attention" | "completed" | "failure";
+
+export interface AutomationMonitorNotificationEvent {
+  runId: string;
+  label: string;
+  outcome: AutomationMonitorNotificationOutcome;
+}
 
 export interface AutomationMonitorSchedulerStatus {
   state: AutomationSchedulerState;
@@ -100,7 +108,10 @@ export interface AutomationMonitorManager {
   }) => AutomationMonitorDefinition;
   start: () => void;
   stop: () => void;
-  runMonitorNow: (id: string) => Promise<AutomationMonitorRuntime>;
+  runMonitorNow: (
+    id: string,
+    trigger?: AutomationMonitorRunTrigger
+  ) => Promise<AutomationMonitorRuntime>;
   readSnapshot: () => AutomationMonitorSnapshot;
 }
 
@@ -166,12 +177,14 @@ export function createAutomationMonitorStore({
 export function createAutomationMonitorManager({
   clearInterval = globalThis.clearInterval as AutomationClearInterval,
   now = () => new Date().toISOString(),
+  onRunTerminal = () => undefined,
   setInterval = globalThis.setInterval as unknown as AutomationSetInterval,
   store,
   tmuxClient
 }: {
   clearInterval?: AutomationClearInterval;
   now?: () => string;
+  onRunTerminal?: (event: AutomationMonitorNotificationEvent) => void;
   setInterval?: AutomationSetInterval;
   store: AutomationMonitorStore;
   tmuxClient: TmuxSupervisionClient;
@@ -208,7 +221,7 @@ export function createAutomationMonitorManager({
     }
 
     timers.set(definition.id, setInterval(async () => {
-      await runMonitorNow(definition.id);
+      await runMonitorNow(definition.id, "scheduled");
     }, definition.intervalMs));
   }
 
@@ -222,7 +235,10 @@ export function createAutomationMonitorManager({
     timers.delete(id);
   }
 
-  async function runMonitorNow(id: string): Promise<AutomationMonitorRuntime> {
+  async function runMonitorNow(
+    id: string,
+    trigger: AutomationMonitorRunTrigger = "manual"
+  ): Promise<AutomationMonitorRuntime> {
     const definition = definitions.get(id);
     if (!definition) {
       throw new Error(`Unknown automation monitor: ${id}`);
@@ -236,6 +252,7 @@ export function createAutomationMonitorManager({
     }
 
     const checkedAt = now();
+    const previousLastResult = readRuntime(definition).lastResult;
     try {
       const report = await tmuxClient.observeSession(definition.sessionName);
       updateRuntime(definition, {
@@ -248,6 +265,7 @@ export function createAutomationMonitorManager({
         nextCheckAt: addMilliseconds(checkedAt, definition.intervalMs),
         status: report.status
       });
+      emitRunTerminalNotification(definition, trigger, previousLastResult);
       return readSnapshotRuntime(definition.id);
     } catch (error) {
       updateRuntime(definition, {
@@ -259,7 +277,34 @@ export function createAutomationMonitorManager({
         nextCheckAt: addMilliseconds(checkedAt, definition.intervalMs),
         status: "error"
       });
+      emitRunTerminalNotification(definition, trigger, previousLastResult);
       return readSnapshotRuntime(definition.id);
+    }
+  }
+
+  function emitRunTerminalNotification(
+    definition: AutomationMonitorDefinition,
+    trigger: AutomationMonitorRunTrigger,
+    previousLastResult: AutomationMonitorLastResult | undefined
+  ) {
+    const runtime = readRuntime(definition);
+    const outcome = readAutomationMonitorNotificationOutcome(runtime.lastResult);
+    if (!outcome) {
+      return;
+    }
+    const previousOutcome = readAutomationMonitorNotificationOutcome(previousLastResult);
+    if (trigger === "scheduled" && previousOutcome === outcome) {
+      return;
+    }
+
+    try {
+      onRunTerminal({
+        runId: `${definition.id}:run:${runtime.checkCount}`,
+        label: definition.label,
+        outcome
+      });
+    } catch {
+      // Native notification failures must not change the durable monitor outcome.
     }
   }
 
@@ -558,6 +603,21 @@ function normalizeAutomationMonitorLastResult(value: unknown): AutomationMonitor
 
 function readMonitorLastResult(status: AutomationMonitorStatus): AutomationMonitorLastResult | undefined {
   return normalizeAutomationMonitorLastResult(status);
+}
+
+function readAutomationMonitorNotificationOutcome(
+  lastResult: AutomationMonitorLastResult | undefined
+): AutomationMonitorNotificationOutcome | undefined {
+  if (lastResult === "error") {
+    return "failure";
+  }
+  if (lastResult === "observing") {
+    return "completed";
+  }
+  if (lastResult === "needs_attention" || lastResult === "blocked") {
+    return "attention";
+  }
+  return undefined;
 }
 
 function normalizeMonitorSessionName(value: string): string {

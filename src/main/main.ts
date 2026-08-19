@@ -1,4 +1,12 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, screen, systemPreferences } from "electron";
+import {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  Notification as ElectronNotification,
+  screen,
+  systemPreferences
+} from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,8 +128,12 @@ import {
   createAutomationMonitorManager,
   createAutomationMonitorStatePath,
   createAutomationMonitorStore,
+  type AutomationMonitorNotificationEvent,
   type AutomationMonitorStoreIo
 } from "./automation-monitor.js";
+import {
+  createAutomationMonitorNotificationCoordinator
+} from "./automation-monitor-notification.js";
 import {
   readConversationRenameRequest,
   readConversationRetryRequest,
@@ -289,7 +301,9 @@ const taskRecoveryRegistry = createTaskRecoveryRegistry();
 const taskControlStore = createTaskControlStore({
   onChanged: (snapshot) => taskRecoveryRegistry.sync(snapshot)
 });
+const automationMonitorNotificationCoordinator = createAutomationMonitorNotificationCoordinator();
 const automationMonitorManager = createAutomationMonitorManager({
+  onRunTerminal: showAutomationMonitorNotification,
   store: createAutomationMonitorStore({
     filePath: createAutomationMonitorStatePath(os.homedir()),
     io: createNodeAutomationMonitorStoreIo()
@@ -301,6 +315,32 @@ const assistantComputerUseExecutor = createAssistantComputerUseExecutor({
 });
 const chromeTurnHostGrantStore = createChromeTurnHostGrantStore();
 let mainWindow: BrowserWindow | null = null;
+
+function showAutomationMonitorNotification(event: AutomationMonitorNotificationEvent) {
+  if (smokeWindowHidden) {
+    return;
+  }
+
+  const window = mainWindow;
+  const notice = automationMonitorNotificationCoordinator.take(event, {
+    windowFocused: Boolean(window && !window.isDestroyed() && window.isFocused())
+  });
+  if (!notice || !ElectronNotification.isSupported()) {
+    return;
+  }
+
+  const notification = new ElectronNotification({
+    title: notice.title,
+    body: notice.body,
+    silent: true
+  });
+  notification.on("click", () => {
+    if (!window || window.isDestroyed()) return;
+    window.show();
+    window.focus();
+  });
+  notification.show();
+}
 let currentPetAnchor: Point | null = null;
 let currentPetSize: Size | null = null;
 let currentTaskId = 0;

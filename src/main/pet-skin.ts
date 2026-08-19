@@ -1,6 +1,6 @@
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const LOCAL_ORIGIN_PET_SKIN_SLUG = "luoxiaohei-local";
 export const LOCAL_ORIGIN_PET_SKIN_DISPLAY_NAME = "Luo Xiaohei local";
@@ -99,6 +99,16 @@ const ANIMATED_RASTER_EXTENSIONS = new Set([
   ".webp"
 ]);
 
+export const MAX_PET_SKIN_ASSET_BYTES = 16 * 1024 * 1024;
+
+const MAX_PET_SKIN_FRAME_DIMENSION = 4_096;
+const MAX_PET_SKIN_FRAME_DURATION_MS = 60_000;
+const MAX_DECODED_PET_SKIN_BYTES = 64 * 1024 * 1024;
+const MAX_DECODED_PET_SKIN_PIXELS = Math.floor(MAX_DECODED_PET_SKIN_BYTES / 4);
+const MAX_PET_SKIN_ANIMATION_FRAMES = 512;
+const MAX_PET_SKIN_PIXELS = MAX_PET_SKIN_FRAME_DIMENSION ** 2;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 export function createPetSkinsRootPath(homeDir: string): string {
   return path.join(homeDir, "Library", "Application Support", "skfiy", "skins");
 }
@@ -190,15 +200,373 @@ export async function readDefaultLocalOriginPetSkin(input: {
   }
 
   try {
+    const skinDir = createPetSkinDirectoryPath(input.homeDir, LOCAL_ORIGIN_PET_SKIN_SLUG);
     const rawManifest = await readFile(
       createPetSkinManifestPath(input.homeDir, LOCAL_ORIGIN_PET_SKIN_SLUG),
       "utf8"
     );
     const parsed = JSON.parse(rawManifest) as unknown;
-    return isPetSkinManifest(parsed) ? parsed : null;
+    if (!isPetSkinManifest(parsed)) {
+      return null;
+    }
+
+    const assetPath = await resolveAvailableLocalPetSkinAsset(parsed.asset, skinDir);
+    if (assetPath) {
+      return parsed;
+    }
+
+    return await readLegacyWebpPetSkinFallback(parsed, skinDir);
   } catch {
     return null;
   }
+}
+
+async function resolveAvailableLocalPetSkinAsset(
+  asset: string,
+  skinDir: string
+): Promise<string | null> {
+  let assetPath: string;
+  try {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(asset)) {
+      const assetUrl = new URL(asset);
+      if (assetUrl.protocol !== "file:") return null;
+      assetPath = fileURLToPath(assetUrl);
+    } else {
+      if (path.isAbsolute(asset)) return null;
+      assetPath = path.resolve(skinDir, asset);
+    }
+
+    const [resolvedSkinDir, resolvedAssetPath] = await Promise.all([
+      realpath(skinDir),
+      realpath(assetPath)
+    ]);
+    if (!isPathInside(resolvedSkinDir, resolvedAssetPath)) return null;
+
+    const assetStats = await stat(resolvedAssetPath);
+    return assetStats.isFile() ? resolvedAssetPath : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readLegacyWebpPetSkinFallback(
+  manifest: PetSkinManifest,
+  skinDir: string
+): Promise<PetSkinManifest | null> {
+  const candidates: string[] = [];
+  if (readPetSkinAssetExtension(manifest.asset) === ".webp") {
+    candidates.push(manifest.asset);
+  }
+  const legacyFramesPath = path.join(skinDir, "origin-visible.webp");
+  if (!candidates.includes(legacyFramesPath)) {
+    candidates.push(legacyFramesPath);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const assetPath = await resolveLegacyPetSkinAssetPath(candidate, skinDir);
+      const [assetStats, assetBytes] = await Promise.all([
+        stat(assetPath),
+        readFile(assetPath)
+      ]);
+      const inspection = inspectLegacyAnimatedWebpContainer(assetBytes);
+      if (
+        !assetStats.isFile()
+        || assetStats.size !== assetBytes.length
+        || assetBytes.length === 0
+        || assetBytes.length > MAX_PET_SKIN_ASSET_BYTES
+        || !inspection
+        || inspection.width !== manifest.frameWidth
+        || inspection.height !== manifest.frameHeight
+      ) {
+        continue;
+      }
+
+      return {
+        ...manifest,
+        asset: pathToFileURL(assetPath).href,
+        rendering: {
+          mode: "animated-raster",
+          ambientMotion: false,
+          failureShake: manifest.rendering?.failureShake ?? false
+        },
+        states: cloneStates(manifest.states)
+      };
+    } catch {
+      // Try the next legacy candidate before falling back to the transparent PNG.
+    }
+  }
+
+  return readLegacyTransparentPngFallback(manifest, skinDir);
+}
+
+async function readLegacyTransparentPngFallback(
+  manifest: PetSkinManifest,
+  skinDir: string
+): Promise<PetSkinManifest | null> {
+  try {
+    const fallbackPath = path.join(skinDir, "origin-transparent.png");
+    const [resolvedSkinDir, resolvedFallbackPath] = await Promise.all([
+      realpath(skinDir),
+      realpath(fallbackPath)
+    ]);
+    if (!isPathInside(resolvedSkinDir, resolvedFallbackPath)) return null;
+
+    const [fallbackStats, fallbackBytes] = await Promise.all([
+      stat(resolvedFallbackPath),
+      readFile(resolvedFallbackPath)
+    ]);
+    if (
+      !fallbackStats.isFile()
+      || fallbackStats.size !== fallbackBytes.length
+      || fallbackBytes.length === 0
+      || fallbackBytes.length > MAX_PET_SKIN_ASSET_BYTES
+      || !isValidTransparentPngFallback(fallbackBytes)
+    ) {
+      return null;
+    }
+
+    const { rendering, ...staticManifest } = manifest;
+    return {
+      ...staticManifest,
+      asset: pathToFileURL(resolvedFallbackPath).href,
+      states: cloneStates(manifest.states)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveLegacyPetSkinAssetPath(
+  asset: string,
+  skinDir: string
+): Promise<string> {
+  const assetPath = /^[a-z][a-z0-9+.-]*:/i.test(asset)
+    ? fileURLToPath(new URL(asset))
+    : path.resolve(skinDir, asset);
+  const [resolvedSkinDir, resolvedAssetPath] = await Promise.all([
+    realpath(skinDir),
+    realpath(assetPath)
+  ]);
+  if (!isPathInside(resolvedSkinDir, resolvedAssetPath)) {
+    throw new Error("Legacy pet skin asset is outside its skin directory.");
+  }
+  return resolvedAssetPath;
+}
+
+interface AnimatedWebpInspection {
+  frameCount: number;
+  height: number;
+  width: number;
+}
+
+function inspectLegacyAnimatedWebpContainer(bytes: Buffer): AnimatedWebpInspection | null {
+  if (
+    bytes.length < 30
+    || bytes.toString("ascii", 0, 4) !== "RIFF"
+    || bytes.readUInt32LE(4) + 8 !== bytes.length
+    || bytes.toString("ascii", 8, 12) !== "WEBP"
+  ) {
+    return null;
+  }
+
+  let offset = 12;
+  let canvas: { width: number; height: number } | null = null;
+  let frameCount = 0;
+  let decodedPixels = 0;
+  let sawAnimationHeader = false;
+  while (offset < bytes.length) {
+    const chunk = readWebpChunk(bytes, offset, bytes.length);
+    if (!chunk) return null;
+
+    if (chunk.type === "VP8X") {
+      if (canvas || chunk.size !== 10 || bytes[chunk.dataStart + 1] !== 0
+        || bytes[chunk.dataStart + 2] !== 0 || bytes[chunk.dataStart + 3] !== 0) {
+        return null;
+      }
+      const width = readUint24Le(bytes, chunk.dataStart + 4) + 1;
+      const height = readUint24Le(bytes, chunk.dataStart + 7) + 1;
+      if (
+        (bytes[chunk.dataStart] & 0x02) === 0
+        || !hasBoundedImageDimensions(width, height)
+      ) {
+        return null;
+      }
+      canvas = { width, height };
+    } else if (chunk.type === "ANIM") {
+      if (!canvas || sawAnimationHeader || chunk.size !== 6) return null;
+      sawAnimationHeader = true;
+    } else if (chunk.type === "ANMF") {
+      if (!canvas || !sawAnimationHeader || chunk.size < 29) return null;
+      const frame = readAnimatedWebpFrame(bytes, chunk.dataStart, chunk.dataEnd, canvas);
+      if (!frame) return null;
+      frameCount += 1;
+      decodedPixels += frame.width * frame.height;
+      if (
+        frameCount > MAX_PET_SKIN_ANIMATION_FRAMES
+        || decodedPixels > MAX_DECODED_PET_SKIN_PIXELS
+      ) {
+        return null;
+      }
+    }
+
+    offset = chunk.nextOffset;
+  }
+
+  return offset === bytes.length && canvas && sawAnimationHeader && frameCount > 0
+    ? { ...canvas, frameCount }
+    : null;
+}
+
+function readAnimatedWebpFrame(
+  bytes: Buffer,
+  start: number,
+  end: number,
+  canvas: { width: number; height: number }
+): { width: number; height: number } | null {
+  const x = readUint24Le(bytes, start) * 2;
+  const y = readUint24Le(bytes, start + 3) * 2;
+  const width = readUint24Le(bytes, start + 6) + 1;
+  const height = readUint24Le(bytes, start + 9) + 1;
+  const duration = readUint24Le(bytes, start + 12);
+  if (
+    !hasBoundedImageDimensions(width, height)
+    || duration === 0
+    || duration > MAX_PET_SKIN_FRAME_DURATION_MS
+    || (bytes[start + 15] & 0xfc) !== 0
+    || x + width > canvas.width
+    || y + height > canvas.height
+  ) {
+    return null;
+  }
+
+  let offset = start + 16;
+  let imageDimensions: { width: number; height: number } | null = null;
+  while (offset < end) {
+    const chunk = readWebpChunk(bytes, offset, end);
+    if (!chunk) return null;
+    if (chunk.type === "VP8L" || chunk.type === "VP8 ") {
+      if (imageDimensions) return null;
+      imageDimensions = readWebpFrameImageDimensions(bytes, chunk);
+      if (!imageDimensions) return null;
+    } else if (chunk.type !== "ALPH") {
+      return null;
+    }
+    offset = chunk.nextOffset;
+  }
+
+  return offset === end
+    && imageDimensions?.width === width
+    && imageDimensions.height === height
+    ? { width, height }
+    : null;
+}
+
+interface WebpChunk {
+  dataEnd: number;
+  dataStart: number;
+  nextOffset: number;
+  size: number;
+  type: string;
+}
+
+function readWebpChunk(bytes: Buffer, offset: number, boundary: number): WebpChunk | null {
+  if (offset + 8 > boundary) return null;
+  const size = bytes.readUInt32LE(offset + 4);
+  const dataStart = offset + 8;
+  const dataEnd = dataStart + size;
+  const nextOffset = dataEnd + (size % 2);
+  if (dataEnd < dataStart || nextOffset > boundary) return null;
+  return {
+    dataEnd,
+    dataStart,
+    nextOffset,
+    size,
+    type: bytes.toString("ascii", offset, offset + 4)
+  };
+}
+
+function readWebpFrameImageDimensions(
+  bytes: Buffer,
+  chunk: WebpChunk
+): { width: number; height: number } | null {
+  if (chunk.type === "VP8L") {
+    if (chunk.size < 5 || bytes[chunk.dataStart] !== 0x2f) return null;
+    const bits = bytes.readUInt32LE(chunk.dataStart + 1);
+    if ((bits >>> 29) !== 0) return null;
+    return {
+      width: (bits & 0x3fff) + 1,
+      height: ((bits >>> 14) & 0x3fff) + 1
+    };
+  }
+  if (
+    chunk.size < 10
+    || bytes[chunk.dataStart + 3] !== 0x9d
+    || bytes[chunk.dataStart + 4] !== 0x01
+    || bytes[chunk.dataStart + 5] !== 0x2a
+  ) {
+    return null;
+  }
+  return {
+    width: bytes.readUInt16LE(chunk.dataStart + 6) & 0x3fff,
+    height: bytes.readUInt16LE(chunk.dataStart + 8) & 0x3fff
+  };
+}
+
+function readUint24Le(bytes: Buffer, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+}
+
+function readPetSkinAssetExtension(asset: string): string {
+  try {
+    return path.extname(/^[a-z][a-z0-9+.-]*:/i.test(asset)
+      ? fileURLToPath(new URL(asset))
+      : asset).toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isValidTransparentPngFallback(bytes: Buffer): boolean {
+  if (bytes.length < 33 || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    return false;
+  }
+  if (
+    bytes.readUInt32BE(8) !== 13
+    || bytes.toString("ascii", 12, 16) !== "IHDR"
+  ) {
+    return false;
+  }
+  return hasBoundedImageDimensions(
+    bytes.readUInt32BE(16),
+    bytes.readUInt32BE(20)
+  );
+}
+
+function hasBoundedImageDimensions(width: number, height: number): boolean {
+  return Number.isInteger(width)
+    && Number.isInteger(height)
+    && width > 0
+    && height > 0
+    && width <= MAX_PET_SKIN_FRAME_DIMENSION
+    && height <= MAX_PET_SKIN_FRAME_DIMENSION
+    && width * height <= MAX_PET_SKIN_PIXELS;
+}
+
+function isPathInside(parentPath: string, candidatePath: string): boolean {
+  const relativePath = path.relative(parentPath, candidatePath);
+  return relativePath.length > 0
+    && !relativePath.startsWith(`..${path.sep}`)
+    && relativePath !== ".."
+    && !path.isAbsolute(relativePath);
+}
+
+function cloneStates(
+  states: Record<PetAtlasState, PetAnimationState>
+): Record<PetAtlasState, PetAnimationState> {
+  return Object.fromEntries(
+    Object.entries(states).map(([state, animation]) => [state, { ...animation }])
+  ) as Record<PetAtlasState, PetAnimationState>;
 }
 
 function sanitizePetSkinSlug(value: string): string {
