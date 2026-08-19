@@ -5,8 +5,7 @@ import { parseTerminalIntent } from "../shared/terminal-intent.js";
 export const GHOSTTY_BUNDLE_ID = "com.mitchellh.ghostty";
 export const CHROME_BUNDLE_ID = "com.google.Chrome";
 export const FINDER_BUNDLE_ID = "com.apple.finder";
-const GENERIC_VISIBLE_APP_CLARIFICATION_REASON =
-  "Generic visible-app control is not a supported product route yet. Name Ghostty, Chrome/Chromium, Finder, or money-run supervision.";
+export const UNRESOLVED_DESKTOP_BUNDLE_ID = "skfiy.unresolved.desktop-target";
 export const ROUTE_POLICY_BLOCKED_REASON =
   "Route policy blocks destructive or sensitive terminal commands before Computer Use.";
 
@@ -14,6 +13,12 @@ export type ExecutableCommandRoute =
   | { kind: "ghostty"; bundleId: typeof GHOSTTY_BUNDLE_ID }
   | { kind: "chrome"; bundleId: typeof CHROME_BUNDLE_ID }
   | { kind: "finder"; bundleId: typeof FINDER_BUNDLE_ID }
+  | {
+      kind: "desktop";
+      bundleId: string;
+      appName: string;
+      pid?: number;
+    }
   | { kind: "tmux_supervision"; sessionName: string };
 
 export type CommandRoute =
@@ -89,10 +94,11 @@ function selectBaseCommandRoute(command: string): CommandRoute {
     };
   }
 
-  if (isUnsupportedVisibleAppControlRequest(command)) {
+  if (isGenericVisibleAppControlRequest(command)) {
     return {
-      kind: "needs_clarification",
-      reason: GENERIC_VISIBLE_APP_CLARIFICATION_REASON
+      kind: "desktop",
+      bundleId: UNRESOLVED_DESKTOP_BUNDLE_ID,
+      appName: "Named or frontmost application"
     };
   }
 
@@ -134,6 +140,7 @@ function isExecutableCommandRoute(route: CommandRoute): route is ExecutableComma
   return route.kind === "ghostty"
     || route.kind === "chrome"
     || route.kind === "finder"
+    || route.kind === "desktop"
     || route.kind === "tmux_supervision";
 }
 
@@ -145,6 +152,8 @@ function createRouteConfirmationReason(route: ExecutableCommandRoute): string {
       return "Route policy requires confirmation before continuing with Chrome.";
     case "finder":
       return "Route policy requires confirmation before continuing with Finder.";
+    case "desktop":
+      return `Route policy requires confirmation before continuing with ${route.appName}.`;
     case "tmux_supervision":
       return "Route policy requires confirmation before continuing with money-run supervision.";
   }
@@ -267,22 +276,22 @@ function isRoutePolicyBlockedRequest(command: string, route: ExecutableCommandRo
   ].some((pattern) => pattern.test(terminalCommand));
 }
 
-function isUnsupportedVisibleAppControlRequest(command: string): boolean {
+function isGenericVisibleAppControlRequest(command: string): boolean {
   const normalized = command.trim().toLowerCase();
-  const asksForDesktopControl = /输入|点击|点|观察|查看|读取|截图|按|拖|滚动|\b(type|click|observe|watch|read|inspect|capture|press|drag|scroll)\b/u
+  const asksForDesktopControl = /输入|写入|写下|填写|编辑|保存|选择|点击|点|观察|查看|读取|截图|按|拖|滚动|\b(type|write|fill|edit|save|select|click|observe|watch|read|inspect|capture|press|drag|scroll|navigate)\b/u
     .test(normalized);
 
   if (!asksForDesktopControl) {
     return false;
   }
 
-  const namesSupportedApp = /\b(ghostty|chrome|chromium|finder)\b/u.test(normalized);
-  const namesUnsupportedApp = !namesSupportedApp
-    && /(?:用|在)\s+[a-z][a-z0-9 ._-]*\s*(?:输入|点击|点|观察|查看|读取|截图|按|拖|滚动)/u
+  const namesLatinApp = /(?:用|在)\s+[a-z][a-z0-9 ._-]*\s*(?:里|中|上)?\s*(?:输入|写入|写下|填写|编辑|保存|选择|点击|点|观察|查看|读取|截图|按|拖|滚动)/u
+      .test(normalized);
+  const namesLocalizedApp = /(?:用|在)\s*[\p{L}\p{N}][\p{L}\p{N} ._-]{1,40}?\s*(?:里|中|上|应用|app)\s*(?:输入|写入|写下|填写|编辑|保存|选择|点击|点|观察|查看|读取|截图|按|拖|滚动)/u
       .test(normalized);
   const namesGenericVisibleTarget =
     /\b(any|current|frontmost)\s+visible\s+(app|application|window|button)\b|\b(current|frontmost)\s+(app|application|window|button)\b|\bvisible\s+(app|application)\b|当前屏幕可见|屏幕可见|当前可见\s*(app|应用|程序|窗口|按钮)?|可见\s*(app|应用|程序|窗口|按钮)|当前\s*(app|应用|程序|窗口|按钮)|前台\s*(app|应用|程序|窗口|按钮)|任意.*(app|应用|程序)/u
       .test(normalized);
 
-  return namesUnsupportedApp || namesGenericVisibleTarget;
+  return namesLatinApp || namesLocalizedApp || namesGenericVisibleTarget;
 }

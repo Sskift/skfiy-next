@@ -117,7 +117,7 @@ const routeOutcomeTones = new Set<RouteOutcomeTone>([
   "neutral"
 ]);
 
-const taskControlRoutes = new Set(["ghostty", "chrome", "finder", "tmux_supervision"]);
+const taskControlRoutes = new Set(["ghostty", "chrome", "finder", "desktop", "tmux_supervision"]);
 const taskControlRiskLevels = new Set(["low", "medium", "high", "blocked"]);
 const taskControlPhases = new Set(["waiting", "approval", "executing", "verifying", "terminal"]);
 const taskControlOutcomes = new Set([

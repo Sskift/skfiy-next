@@ -33,6 +33,7 @@ const EXPECTED_VERIFICATION = {
   ghostty: "Confirm the owned Ghostty session remains active and observe the command completion marker.",
   chrome: "Confirm the approved page action and inspect the resulting page snapshot.",
   finder: "Confirm the approved plan still matches the target and verify each file operation.",
+  desktop: "Confirm a fresh target-app observation verifies the requested goal after each action.",
   tmux_supervision: "Confirm a fresh read-only pane snapshot and supervision recommendation."
 } as const;
 
@@ -99,6 +100,12 @@ function readRouteRisk(command: string, route: ExecutableCommandRoute) {
       return readChromeTaskRisk(command);
     case "finder":
       return readFinderTaskRisk(command);
+    case "desktop":
+      return {
+        level: "medium" as const,
+        reason: `Generic Computer Use can click or type in ${boundedLabel(route.appName, "the approved app")}; approval is required before the bounded loop starts.`,
+        requiresApproval: true
+      };
     case "tmux_supervision":
       return readTmuxSupervisionTaskRisk();
   }
@@ -112,6 +119,8 @@ function readRouteAppName(route: ExecutableCommandRoute): string {
       return "Chrome";
     case "finder":
       return "Finder";
+    case "desktop":
+      return boundedLabel(route.appName, "Approved app");
     case "tmux_supervision":
       return "tmux";
   }
@@ -125,6 +134,8 @@ function readRouteTarget(command: string, route: ExecutableCommandRoute): string
       return readChromeTarget(command);
     case "finder":
       return readFinderTarget(command);
+    case "desktop":
+      return `${boundedLabel(route.appName, "Approved app")} · ${boundedLabel(route.bundleId, "bound process")}`;
     case "tmux_supervision":
       return `Session ${boundedLabel(route.sessionName, "money-run")}`;
   }
@@ -185,7 +196,7 @@ function readRouteMutation(
   if (route.kind === "ghostty") {
     return riskLevel !== "low";
   }
-  if (route.kind === "finder") {
+  if (route.kind === "finder" || route.kind === "desktop") {
     return true;
   }
 

@@ -18,7 +18,7 @@ This is the distilled rewrite of [skfiy](../skfiy): the proven core (agent, comp
 ```
 src/renderer/       Pet UI (React). Talks to main via the preload-injected DesktopApi.
 src/main/           Electron main process.
-  assistant-agent.ts      Background Agent (CLI provider: codex / claude-code / hermes)
+  assistant-agent.ts      Background Agent (codex-only CLI provider; claude-code/hermes collapsed)
   computer-use/           Permissioned tool layer: helper client, policies, executor, replay
   orchestrator/           Task runners: ghostty, chrome, finder, tmux
   main-*.ts               Wiring modules (IPC payloads, window controls, routing)
@@ -36,7 +36,7 @@ The pet renderer is intentionally independent from the backend: main emits task 
 ```bash
 nvm use            # Node 22
 npm install
-npm test           # vitest, ~475 tests, ~45s
+npm test           # vitest, ~682 tests, ~45s
 npm run typecheck  # tsc --noEmit, strict, zero any
 npm run dev        # vite dev server (renderer)
 npm run dev:electron  # electron pointing at the dev server
@@ -45,19 +45,25 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — 501 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~682 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
 - [x] **smoke:cli passes** — 5 dist-module contract collectors green
 - [x] smoke:chrome adapted (native-host/installed-extension lanes cut, CDP lanes kept)
 - [x] CI green on GitHub Actions (macOS: typecheck + vitest + build)
+- [x] **M1 features shipped** — first-run readiness, conversation continuity (session store + history wiring), task control (start/stop store + wiring)
+- [x] Task recovery dispatch (`task-recovery-dispatch` + registry + stage runtime)
+- [x] Chrome submit confirmation and recovery (form-fill submit gates on approval; bound selector actions recover)
+- [x] Finder file operations: copy, rename, organize selected
+- [x] Bounded Computer Use agent loop ported (step-budgeted plan/act/verify loop in `computer-use/agent-loop.ts`)
+- [x] Pet skin legacy WebP fallback (`origin-visible.webp` frame candidates)
+- [x] Automation monitor notifications (tmux-session monitor → attention/completed/failure notices)
 - [ ] Electron 39 → 43 upgrade
-- [ ] First-run onboarding (the M1 feature — reference implementation on the old repo's `codex/computer-use-loop` branch, now backed up to origin)
 
 ## Cut from the old repo (intentionally)
 
-Dashboard (22k LOC), dogfood program (26k LOC of theater), 18.8k-LOC CLI, MCP server, Codex plugin, money-run supervision, automation monitors (frozen — code kept, not expanded), personalization learning loop, `.agentframe/` scaffolding, signed-release tooling (unsigned-alpha path only).
+Dashboard (22k LOC), dogfood program (26k LOC of theater), 18.8k-LOC CLI, MCP server, Codex plugin, money-run supervision, the old automation-monitor sprawl (a tmux-session monitor with user notifications was rebuilt in the core instead — see Status), personalization learning loop, `.agentframe/` scaffolding, signed-release tooling (unsigned-alpha path only).
 
 ## Known gaps
 

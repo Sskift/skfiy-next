@@ -23,6 +23,7 @@ export function createSmokeAssistantAgentTaskTurn(
       route.kind !== "chrome"
       && route.kind !== "finder"
       && route.kind !== "ghostty"
+      && route.kind !== "desktop"
       && route.kind !== "tmux_supervision"
     ) {
       return undefined;

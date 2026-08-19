@@ -29,6 +29,7 @@ function readTaskEventRouteLabel(route: CommandRoute | ExecutableCommandRoute): 
     route.kind === "ghostty"
     || route.kind === "chrome"
     || route.kind === "finder"
+    || route.kind === "desktop"
     || route.kind === "tmux_supervision"
   ) {
     return route.kind;

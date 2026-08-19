@@ -13,6 +13,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DesktopHelperClient } from "./computer-use/desktop-helper.js";
 import { buildCdpCommand } from "./computer-use/browser-control.js";
+import { runComputerUseAgentLoop } from "./computer-use/agent-loop.js";
+import { createCodexComputerUsePlanner } from "./computer-use/agent-loop-planner.js";
 import {
   createTurnReplayStore,
   type TurnReplay
@@ -1375,6 +1377,46 @@ async function continueComputerUseTask({
   const { controller, taskId } = startComputerUseTaskEpoch();
 
   try {
+    if (route.kind === "desktop") {
+      const agentSettings = assistantAgentSettingsStore.get();
+      const planner = await createCodexComputerUsePlanner({
+        codexBinary: agentSettings.codexBinary,
+        timeoutMs: Math.min(agentSettings.timeoutMs, 45_000)
+      });
+      const result = await runComputerUseAgentLoop({
+        goal: command,
+        route,
+        client: createDesktopHelper(),
+        planner,
+        createScreenshotPath: (step) => createScreenshotPath(`desktop-agent-${step}`),
+        removeScreenshot: (screenshotPath) => fs.promises.rm(screenshotPath, { force: true }),
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (controller.signal.aborted || taskId !== currentTaskId) {
+            return;
+          }
+          emitTaskControlEventForTool(window, withRouteTaskEventMetadata({
+            status: progress.status,
+            message: progress.message,
+            command
+          }, route), toolIdentity, progress.sideEffectState);
+        }
+      }).finally(() => planner.dispose().catch(() => undefined));
+      if (controller.signal.aborted || taskId !== currentTaskId) {
+        return;
+      }
+      const summary = result.status === "completed"
+        ? `${result.summary} Verified with ${result.observationCount} fresh observations and ${result.actionCount} actions.`
+        : result.summary;
+      completeComputerUseToolCall(toolIdentity, createToolResult(result.status, summary));
+      emitTaskControlEventForTool(window, withRouteTaskEventMetadata({
+        status: result.status,
+        message: summary,
+        command
+      }, route), toolIdentity, result.sideEffectState);
+      return;
+    }
+
     if (route.kind === "finder") {
       const helper = createDesktopHelper();
       const desktopClient = createFinderDesktopClient(helper);

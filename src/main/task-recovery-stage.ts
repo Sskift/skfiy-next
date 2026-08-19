@@ -85,6 +85,11 @@ export async function runTaskRecoveryStage(
       return runChromeRecoveryStage(input, dependencies);
     case "ghostty":
       return runGhosttyRecoveryStage(input, dependencies);
+    case "desktop":
+      return {
+        state: "blocked",
+        message: "Read-only recovery is not available for generic Computer Use targets."
+      };
     case "tmux_supervision":
       return runTmuxRecoveryStage(input, dependencies);
   }

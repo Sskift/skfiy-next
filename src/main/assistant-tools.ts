@@ -73,6 +73,8 @@ function formatCommandRoute(route: CommandRoute): string {
       return "Chrome";
     case "finder":
       return "Finder";
+    case "desktop":
+      return route.appName;
     case "ghostty":
       return "Ghostty";
     case "tmux_supervision":

@@ -4,6 +4,7 @@ export const COMPUTER_USE_PLAN_ROUTES = [
   "ghostty",
   "chrome",
   "finder",
+  "desktop",
   "tmux_supervision"
 ] as const;
 

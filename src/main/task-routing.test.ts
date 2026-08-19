@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { selectCommandRoute } from "./task-routing";
+import {
+  selectCommandRoute,
+  UNRESOLVED_DESKTOP_BUNDLE_ID
+} from "./task-routing";
 
 describe("selectCommandRoute", () => {
   it("routes explicit Chrome test-page commands to Chrome", () => {
@@ -107,9 +110,10 @@ describe("selectCommandRoute", () => {
     });
   });
 
-  it("asks for clarification instead of routing unsupported visible-app requests", () => {
+  it("routes named or frontmost visible-app goals into the generic desktop loop", () => {
     for (const command of [
       "用 TextEdit 输入 hello",
+      "在 Chrome 点击页面上的设置按钮",
       "在 Safari 点击登录按钮",
       "在 Slack 点击发送按钮",
       "点当前屏幕可见按钮",
@@ -120,8 +124,9 @@ describe("selectCommandRoute", () => {
       "inspect the frontmost app"
     ]) {
       expect(selectCommandRoute(command)).toEqual({
-        kind: "needs_clarification",
-        reason: "Generic visible-app control is not a supported product route yet. Name Ghostty, Chrome/Chromium, Finder, or money-run supervision."
+        kind: "desktop",
+        bundleId: UNRESOLVED_DESKTOP_BUNDLE_ID,
+        appName: "Named or frontmost application"
       });
     }
   });
@@ -137,10 +142,15 @@ describe("selectCommandRoute", () => {
     });
   });
 
-  it("keeps unsupported confirmation-gated visible-app requests as clarification", () => {
+  it("keeps the generic desktop target bound across an explicit confirmation gate", () => {
     expect(selectCommandRoute("在 Safari 点击登录按钮，先等我确认")).toEqual({
-      kind: "needs_clarification",
-      reason: "Generic visible-app control is not a supported product route yet. Name Ghostty, Chrome/Chromium, Finder, or money-run supervision."
+      kind: "needs_confirmation",
+      reason: "Route policy requires confirmation before continuing with Named or frontmost application.",
+      targetRoute: {
+        kind: "desktop",
+        bundleId: UNRESOLVED_DESKTOP_BUNDLE_ID,
+        appName: "Named or frontmost application"
+      }
     });
   });
 
@@ -155,10 +165,15 @@ describe("selectCommandRoute", () => {
     });
   });
 
-  it("routes explicit user cancellation of unsupported visible-app control to denial instead of clarification", () => {
+  it("routes explicit user cancellation of generic visible-app control to denial", () => {
     expect(selectCommandRoute("不要在 Safari 点击登录按钮")).toEqual({
       kind: "denied",
-      reason: "User denied this desktop control request."
+      reason: "User denied this desktop control request.",
+      targetRoute: {
+        kind: "desktop",
+        bundleId: UNRESOLVED_DESKTOP_BUNDLE_ID,
+        appName: "Named or frontmost application"
+      }
     });
   });
 
