@@ -464,15 +464,20 @@ function readButtonIconAlignmentDiagnostics() {
         iconRect.top + iconRect.height / 2 - (buttonRect.top + buttonRect.height / 2)
       );
       const maxCenterDelta = roundMetric(Math.max(Math.abs(centerDeltaX), Math.abs(centerDeltaY)));
+      // M1's TaskControlCard and dashboard render icon + label buttons, where
+      // the glyph sits beside the text by design (e.g. "Stop task",
+      // "Approve task plan"). Centering only applies to icon-only buttons.
+      const iconOnly = button.textContent.trim().length === 0;
 
       return [{
         label: button.getAttribute("aria-label") || button.textContent.trim().slice(0, 80),
+        iconOnly,
         button: rectToPlainObject(buttonRect),
         icon: rectToPlainObject(iconRect),
         centerDeltaX,
         centerDeltaY,
         maxCenterDelta,
-        aligned: maxCenterDelta <= 1.5
+        aligned: iconOnly ? maxCenterDelta <= 1.5 : true
       }];
     });
   const maxCenterDelta = roundMetric(
@@ -923,9 +928,12 @@ async function exerciseStopTurnBehavior() {
   try {
     await skfiy.runCommand(command, { mode: "active" });
     const before = await waitForTaskEvent(events, (event) => event.status === "approval_required");
-    const approvalVisible = await waitForDomCondition(() =>
-      document.querySelector('button[aria-label="确认"]')
-    );
+    // M1 routes approvals through TaskControlCard ("Approve task plan" /
+    // "Deny task plan") instead of the legacy 确认/拒绝 approval-actions.
+    const approvalVisible = await waitForDomCondition(() => {
+      const card = document.querySelector('section[aria-label="Computer Use task control"]');
+      return Boolean(card?.querySelector('button[aria-label="Approve task plan"]'));
+    });
 
     if (!approvalVisible) {
       return {
