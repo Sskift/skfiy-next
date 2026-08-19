@@ -1,11 +1,17 @@
-import { mkdir, readdir, rename, rmdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   createFinderOrganizationPlan,
+  isSafeFinderEntryName,
+  type FinderEntry,
   type FinderOrganizationOperation
 } from "../computer-use/finder-organizer.js";
 import { createDesktopSessionDiagnostics } from "../desktop-session-diagnostics.js";
 import type {
+  AtomicCopyFileNoReplaceRequest,
+  AtomicCopyFileNoReplaceResult,
+  AtomicMoveFileNoReplaceRequest,
+  AtomicMoveFileNoReplaceResult,
   DesktopActionResult,
   DesktopExecutableAction,
   DesktopAppState,
@@ -20,10 +26,16 @@ const FINDER_BUNDLE_ID = "com.apple.finder";
 const FINDER_ORGANIZE_PREFIX = "整理 Finder 测试文件夹 ";
 const FINDER_ORGANIZE_CURRENT_FOLDER = "整理 Finder 当前文件夹";
 const FINDER_ORGANIZE_SELECTED_FOLDER = "整理 Finder 选中文件夹";
+const FINDER_ORGANIZE_SELECTED_ITEMS = "整理 Finder 选中项目";
+const FINDER_RENAME_SELECTED_FILE_PREFIX = "重命名 Finder 选中文件为 ";
+const FINDER_COPY_SELECTED_FILE_PREFIX = "复制 Finder 选中文件为 ";
 const FINDER_DRAG_PROBE_PREFIX = "探测 Finder 拖拽测试文件夹 ";
 const FINDER_ITEM_DRAG_DROP_PREFIX = "拖放 Finder 测试文件夹 ";
 const FINDER_CURRENT_FOLDER_COMMAND = "Finder current folder";
 const FINDER_SELECTED_FOLDER_COMMAND = "Finder selected folder";
+const FINDER_SELECTED_ITEMS_COMMAND = "Finder selected items";
+const FINDER_RENAME_SELECTED_FILE_COMMAND = "Finder selected file rename";
+const FINDER_COPY_SELECTED_FILE_COMMAND = "Finder selected file copy";
 const FINDER_DRAG_PROBE_COMMAND = "Finder drag probe";
 const FINDER_ITEM_DRAG_DROP_COMMAND = "Finder item drag/drop";
 const FINDER_DRAG_PROBE_DURATION_MS = 300;
@@ -37,10 +49,13 @@ export const FINDER_ORGANIZATION_RISK: RiskDecision = {
   requiresApproval: true
 };
 
-type FinderOrganizationTarget =
+export type FinderOrganizationTarget =
   | { kind: "absolute_path"; rootPath: string }
   | { kind: "current_finder_folder" }
   | { kind: "selected_finder_folder" }
+  | { kind: "selected_finder_items" }
+  | { kind: "rename_selected_finder_file"; newName: string }
+  | { kind: "copy_selected_finder_file"; newName: string }
   | { kind: "drag_probe"; rootPath: string }
   | { kind: "item_drag_drop"; rootPath: string };
 
@@ -89,7 +104,7 @@ export type FinderTaskEvent =
     }
   | {
       type: "action_verified";
-      actionType: "create_folder" | "move_file" | "drag" | "item_drag_drop";
+      actionType: "create_folder" | "move_file" | "copy_file" | "drag" | "item_drag_drop";
       status: "passed";
       message: string;
     }
@@ -118,6 +133,7 @@ export interface FinderPlanPreview {
   destructiveOperationCount: number;
   createFolders: string[];
   moveFiles: Array<{ from: string; to: string }>;
+  copyFiles?: Array<{ from: string; to: string }>;
 }
 
 export interface FinderDesktopClient {
@@ -125,6 +141,15 @@ export interface FinderDesktopClient {
   getDesktopSessionStatus?(): Promise<DesktopSessionStatus>;
   getFinderSelection?(): Promise<FinderSelectionResult>;
   getFinderItemLayout?(folderPath: string, itemNames: readonly string[]): Promise<FinderItemLayoutResult>;
+}
+
+export interface FinderFileClient {
+  atomicCopyFileNoReplace(
+    request: AtomicCopyFileNoReplaceRequest
+  ): Promise<AtomicCopyFileNoReplaceResult>;
+  atomicMoveFileNoReplace(
+    request: AtomicMoveFileNoReplaceRequest
+  ): Promise<AtomicMoveFileNoReplaceResult>;
 }
 
 export async function* runFinderOrganizationTask(
@@ -160,9 +185,18 @@ export async function* runFinderOrganizationTask(
 
   let rootPath: string;
 
+  let selectedEntries: FinderEntry[] | undefined;
+  let explicitOperations: FinderOrganizationOperation[] | undefined;
+
   let observation: FinderObservationOutcome | undefined;
 
-  if (parsed.target.kind === "current_finder_folder" || parsed.target.kind === "selected_finder_folder") {
+  if (
+    parsed.target.kind === "current_finder_folder"
+    || parsed.target.kind === "selected_finder_folder"
+    || parsed.target.kind === "selected_finder_items"
+    || parsed.target.kind === "rename_selected_finder_file"
+    || parsed.target.kind === "copy_selected_finder_file"
+  ) {
     yield {
       type: "locating_app",
       appName: FINDER_APP_NAME
@@ -174,17 +208,53 @@ export async function* runFinderOrganizationTask(
     }
     observation = finderObservation;
 
-    const semanticFolder = resolveSemanticFinderFolder(parsed.target.kind, finderObservation.selection);
-    if (!semanticFolder.ok) {
-      yield {
-        type: "verification_failed",
-        stage: "selection",
-        reason: semanticFolder.reason
-      };
-      return;
-    }
+    if (
+      parsed.target.kind === "rename_selected_finder_file"
+      || parsed.target.kind === "copy_selected_finder_file"
+    ) {
+      const selectedFile = resolveSelectedFinderFile(finderObservation.selection);
+      if (!selectedFile.ok || selectedFile.entry.name === parsed.target.newName) {
+        yield {
+          type: "verification_failed",
+          stage: "selection",
+          reason: selectedFile.ok
+            ? `Finder selected-file ${parsed.target.kind === "copy_selected_finder_file" ? "copy" : "rename"} needs a different destination name.`
+            : selectedFile.reason
+        };
+        return;
+      }
+      rootPath = selectedFile.rootPath;
+      selectedEntries = [selectedFile.entry];
+      explicitOperations = [{
+        type: parsed.target.kind === "rename_selected_finder_file" ? "move_file" : "copy_file",
+        from: selectedFile.path,
+        to: path.join(selectedFile.rootPath, parsed.target.newName)
+      }];
+    } else if (parsed.target.kind === "selected_finder_items") {
+      const semanticItems = resolveSelectedFinderItems(finderObservation.selection);
+      if (!semanticItems.ok) {
+        yield {
+          type: "verification_failed",
+          stage: "selection",
+          reason: semanticItems.reason
+        };
+        return;
+      }
+      rootPath = semanticItems.rootPath;
+      selectedEntries = semanticItems.entries;
+    } else {
+      const semanticFolder = resolveSemanticFinderFolder(parsed.target.kind, finderObservation.selection);
+      if (!semanticFolder.ok) {
+        yield {
+          type: "verification_failed",
+          stage: "selection",
+          reason: semanticFolder.reason
+        };
+        return;
+      }
 
-    rootPath = semanticFolder.rootPath;
+      rootPath = semanticFolder.rootPath;
+    }
   } else {
     rootPath = parsed.target.rootPath;
   }
@@ -199,15 +269,22 @@ export async function* runFinderOrganizationTask(
     return;
   }
 
-  const entries = (await readdir(rootPath, { withFileTypes: true }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const plan = createFinderOrganizationPlan({
-    rootPath,
-    entries: entries.map((entry) => ({
+  const entries = selectedEntries ?? (await readdir(rootPath, { withFileTypes: true }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => ({
       name: entry.name,
-      kind: entry.isDirectory() ? "directory" : "file"
-    }))
-  });
+      kind: entry.isDirectory() ? "directory" as const : "file" as const
+    }));
+  const plan = explicitOperations
+    ? {
+        risk: "medium" as const,
+        requiresApproval: true,
+        operations: explicitOperations
+      }
+    : createFinderOrganizationPlan({
+        rootPath,
+        entries
+      });
 
   const preview = createFinderPlanPreview(rootPath, plan.operations);
 
@@ -304,6 +381,17 @@ export async function* runFinderOrganizationTask(
       return;
     }
 
+    if (operation.type === "copy_file") {
+      await copyFile(operation.from, operation.to);
+      yield {
+        type: "action_verified",
+        actionType: "copy_file",
+        status: "passed",
+        message: `Copied file: ${operation.from} -> ${operation.to}`
+      };
+      continue;
+    }
+
     await rename(operation.from, operation.to);
     yield {
       type: "action_verified",
@@ -331,10 +419,23 @@ export function requiresFinderPlanConfirmation(input: string): boolean {
 }
 
 function needsFinderPlanConfirmation(target: FinderOrganizationTarget): boolean {
-  return target.kind === "current_finder_folder" || target.kind === "selected_finder_folder";
+  return target.kind === "current_finder_folder"
+    || target.kind === "selected_finder_folder"
+    || target.kind === "selected_finder_items"
+    || target.kind === "rename_selected_finder_file"
+    || target.kind === "copy_selected_finder_file";
 }
 
 function readFinderPlanConfirmationReason(target: FinderOrganizationTarget): string {
+  if (target.kind === "copy_selected_finder_file") {
+    return "Finder selected-file copy needs confirmation after exact source and destination preview.";
+  }
+  if (target.kind === "rename_selected_finder_file") {
+    return "Finder selected-file rename needs confirmation after exact source and destination preview.";
+  }
+  if (target.kind === "selected_finder_items") {
+    return "Finder selected-item organization needs confirmation after exact selection preview.";
+  }
   if (target.kind === "selected_finder_folder") {
     return "Finder selected-folder organization needs confirmation after plan preview.";
   }
@@ -364,16 +465,27 @@ function createFinderPlanPreview(
       .map((operation) => ({
         from: operation.from,
         to: operation.to
-      }))
+      })),
+    ...(operations.some((operation) => operation.type === "copy_file") ? {
+      copyFiles: operations
+        .filter((operation): operation is Extract<FinderOrganizationOperation, { type: "copy_file" }> =>
+          operation.type === "copy_file"
+        )
+        .map((operation) => ({
+          from: operation.from,
+          to: operation.to
+        }))
+    } : {})
   };
 }
 
-function areFinderPlanPreviewsEquivalent(left: FinderPlanPreview, right: FinderPlanPreview): boolean {
+export function areFinderPlanPreviewsEquivalent(left: FinderPlanPreview, right: FinderPlanPreview): boolean {
   return path.resolve(left.rootPath) === path.resolve(right.rootPath)
     && left.operationCount === right.operationCount
     && left.destructiveOperationCount === right.destructiveOperationCount
     && haveSamePathSet(left.createFolders, right.createFolders)
-    && haveSameMoveSet(left.moveFiles, right.moveFiles);
+    && haveSameMoveSet(left.moveFiles, right.moveFiles)
+    && haveSameMoveSet(left.copyFiles ?? [], right.copyFiles ?? []);
 }
 
 function haveSamePathSet(left: readonly string[], right: readonly string[]): boolean {
@@ -703,7 +815,7 @@ async function cleanupEmptyPrecreatedFolders(folderPaths: readonly string[]): Pr
   }
 }
 
-function findFinderItemDragDropMove(
+export function findFinderItemDragDropMove(
   rootPath: string,
   operations: FinderOrganizationOperation[]
 ):
@@ -885,6 +997,44 @@ export function parseFinderOrganizationIntent(input: string):
     };
   }
 
+  if (trimmed === FINDER_ORGANIZE_SELECTED_ITEMS) {
+    return {
+      ok: true,
+      command: FINDER_SELECTED_ITEMS_COMMAND,
+      target: { kind: "selected_finder_items" }
+    };
+  }
+
+  if (trimmed.startsWith(FINDER_RENAME_SELECTED_FILE_PREFIX)) {
+    const newName = trimmed.slice(FINDER_RENAME_SELECTED_FILE_PREFIX.length).trim();
+    if (!isSafeFinderEntryName(newName)) {
+      return {
+        ok: false,
+        reason: "Finder selected-file rename requires one safe destination file name."
+      };
+    }
+    return {
+      ok: true,
+      command: FINDER_RENAME_SELECTED_FILE_COMMAND,
+      target: { kind: "rename_selected_finder_file", newName }
+    };
+  }
+
+  if (trimmed.startsWith(FINDER_COPY_SELECTED_FILE_PREFIX)) {
+    const newName = trimmed.slice(FINDER_COPY_SELECTED_FILE_PREFIX.length).trim();
+    if (!isSafeFinderEntryName(newName)) {
+      return {
+        ok: false,
+        reason: "Finder selected-file copy requires one safe destination file name."
+      };
+    }
+    return {
+      ok: true,
+      command: FINDER_COPY_SELECTED_FILE_COMMAND,
+      target: { kind: "copy_selected_finder_file", newName }
+    };
+  }
+
   if (trimmed.startsWith(FINDER_DRAG_PROBE_PREFIX)) {
     const rootPath = trimmed.slice(FINDER_DRAG_PROBE_PREFIX.length).trim();
     if (!path.isAbsolute(rootPath)) {
@@ -926,7 +1076,7 @@ export function parseFinderOrganizationIntent(input: string):
   if (!trimmed.startsWith(FINDER_ORGANIZE_PREFIX)) {
     return {
       ok: false,
-      reason: "Finder organization requires: 整理 Finder 测试文件夹 <absolute-path>, 整理 Finder 当前文件夹, 整理 Finder 选中文件夹, 探测 Finder 拖拽测试文件夹 <absolute-path>, or 拖放 Finder 测试文件夹 <absolute-path>"
+      reason: "Finder organization requires a supported folder, selected-item, selected-file rename, or drag workflow."
     };
   }
 
@@ -948,7 +1098,7 @@ export function parseFinderOrganizationIntent(input: string):
   };
 }
 
-function resolveSemanticFinderFolder(
+export function resolveSemanticFinderFolder(
   kind: "current_finder_folder" | "selected_finder_folder",
   selection: FinderSelectionResult | undefined
 ):
@@ -959,6 +1109,73 @@ function resolveSemanticFinderFolder(
   }
 
   return resolveSelectedFinderFolder(selection);
+}
+
+export function resolveSelectedFinderItems(
+  selection: FinderSelectionResult | undefined
+):
+  | { ok: true; rootPath: string; entries: FinderEntry[] }
+  | { ok: false; reason: string } {
+  if (!selection?.targetPath || !path.isAbsolute(selection.targetPath)) {
+    return {
+      ok: false,
+      reason: "Finder selected-item organization needs a current Finder folder."
+    };
+  }
+  const rootPath = path.resolve(selection.targetPath);
+  if (selection.selection.length === 0) {
+    return {
+      ok: false,
+      reason: "Finder selected-item organization needs at least one selected file."
+    };
+  }
+  const selectedPaths = new Set<string>();
+  const entries: FinderEntry[] = [];
+  for (const item of selection.selection) {
+    if (item.kind !== "file" || !path.isAbsolute(item.path)) {
+      return {
+        ok: false,
+        reason: "Finder selected-item organization accepts only direct files in the current Finder folder."
+      };
+    }
+    const itemPath = path.resolve(item.path);
+    if (
+      path.dirname(itemPath) !== rootPath
+      || path.basename(itemPath) !== item.name
+      || selectedPaths.has(itemPath)
+    ) {
+      return {
+        ok: false,
+        reason: "Finder selected-item organization could not bind every selected file to the current Finder folder."
+      };
+    }
+    selectedPaths.add(itemPath);
+    entries.push({ name: item.name, kind: "file" });
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  return { ok: true, rootPath, entries };
+}
+
+export function resolveSelectedFinderFile(
+  selection: FinderSelectionResult | undefined
+):
+  | { ok: true; rootPath: string; path: string; entry: FinderEntry }
+  | { ok: false; reason: string } {
+  const resolved = resolveSelectedFinderItems(selection);
+  if (!resolved.ok) return resolved;
+  if (resolved.entries.length !== 1 || !selection) {
+    return {
+      ok: false,
+      reason: "Finder selected-file rename needs exactly one selected direct file."
+    };
+  }
+  const [entry] = resolved.entries;
+  return {
+    ok: true,
+    rootPath: resolved.rootPath,
+    path: path.join(resolved.rootPath, entry.name),
+    entry
+  };
 }
 
 function resolveSelectedFinderFolder(selection: FinderSelectionResult | undefined):

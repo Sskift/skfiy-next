@@ -161,6 +161,12 @@ function readFinderTarget(command: string): string {
       return "Current Finder folder";
     case "selected_finder_folder":
       return "Selected Finder folder";
+    case "selected_finder_items":
+      return "Selected Finder items";
+    case "rename_selected_finder_file":
+      return "Selected Finder file rename";
+    case "copy_selected_finder_file":
+      return "Selected Finder file copy";
     case "absolute_path":
     case "drag_probe":
     case "item_drag_drop":

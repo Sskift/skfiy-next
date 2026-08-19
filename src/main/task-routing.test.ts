@@ -58,6 +58,27 @@ describe("selectCommandRoute", () => {
     });
   });
 
+  it("routes selected Finder item organization commands to Finder", () => {
+    expect(selectCommandRoute("整理 Finder 选中项目")).toEqual({
+      kind: "finder",
+      bundleId: "com.apple.finder"
+    });
+  });
+
+  it("routes an explicit selected Finder file rename to Finder", () => {
+    expect(selectCommandRoute("重命名 Finder 选中文件为 holiday-photo.png")).toEqual({
+      kind: "finder",
+      bundleId: "com.apple.finder"
+    });
+  });
+
+  it("routes an explicit selected Finder file copy to Finder", () => {
+    expect(selectCommandRoute("复制 Finder 选中文件为 holiday-photo.png")).toEqual({
+      kind: "finder",
+      bundleId: "com.apple.finder"
+    });
+  });
+
   it("routes Finder drag probe commands to Finder", () => {
     expect(selectCommandRoute("探测 Finder 拖拽测试文件夹 /tmp/skfiy-demo")).toEqual({
       kind: "finder",

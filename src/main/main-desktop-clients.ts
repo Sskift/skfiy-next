@@ -3,7 +3,7 @@ import type {
   DesktopActionResult
 } from "./computer-use/types.js";
 import type { ChromeDesktopClient } from "./orchestrator/chrome-task.js";
-import type { FinderDesktopClient } from "./orchestrator/finder-task.js";
+import type { FinderDesktopClient, FinderFileClient } from "./orchestrator/finder-task.js";
 import type { DesktopClient } from "./orchestrator/ghostty-task.js";
 
 export function createGhosttyDesktopClient(helper: DesktopHelperClient): DesktopClient {
@@ -22,9 +22,17 @@ export function createGhosttyDesktopClient(helper: DesktopHelperClient): Desktop
 export function createFinderDesktopClient(helper: DesktopHelperClient): FinderDesktopClient {
   return {
     executeAction: async (action) => helper.executeAction(action),
+    getDesktopSessionStatus: async () => helper.getDesktopSessionStatus(),
     getFinderSelection: async () => helper.getFinderSelection(),
     getFinderItemLayout: async (folderPath, itemNames) =>
       helper.getFinderItemLayout(folderPath, itemNames)
+  };
+}
+
+export function createFinderFileClient(helper: DesktopHelperClient): FinderFileClient {
+  return {
+    atomicCopyFileNoReplace: async (request) => helper.atomicCopyFileNoReplace(request),
+    atomicMoveFileNoReplace: async (request) => helper.atomicMoveFileNoReplace(request)
   };
 }
 

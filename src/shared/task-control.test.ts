@@ -110,6 +110,49 @@ describe("task control contract", () => {
     }))).toBe(true);
   });
 
+  it("accepts Finder previews that carry copy operations alongside moves", () => {
+    expect(isTaskControlSnapshot(createSnapshot({
+      phase: "approval",
+      status: "approval_required",
+      approval: {
+        gate: "finder-plan",
+        planId: "plan-1:derived",
+        finderPlanPreview: {
+          rootPath: "/tmp/fixture",
+          operationCount: 2,
+          destructiveOperationCount: 0,
+          createFolders: [],
+          moveFiles: [],
+          copyFiles: [{
+            from: "/tmp/fixture/photo.png",
+            to: "/tmp/fixture/holiday-photo.png"
+          }]
+        }
+      }
+    }))).toBe(true);
+  });
+
+  it("rejects Finder previews with malformed copy operations", () => {
+    expect(isTaskControlSnapshot({
+      ...createSnapshot({
+        phase: "approval",
+        status: "approval_required"
+      }),
+      approval: {
+        gate: "finder-plan",
+        planId: "plan-1:derived",
+        finderPlanPreview: {
+          rootPath: "/tmp/fixture",
+          operationCount: 1,
+          destructiveOperationCount: 0,
+          createFolders: [],
+          moveFiles: [],
+          copyFiles: [{ from: "/tmp/fixture/photo.png" }]
+        }
+      }
+    })).toBe(false);
+  });
+
   it("accepts each canonical terminal outcome", () => {
     for (const outcome of [
       "app_policy_denied",

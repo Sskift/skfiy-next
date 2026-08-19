@@ -576,7 +576,10 @@ function createTaskControlApproval(
       finderPlanPreview: {
         ...approval.approvedPlanPreview,
         createFolders: [...approval.approvedPlanPreview.createFolders],
-        moveFiles: approval.approvedPlanPreview.moveFiles.map((move) => ({ ...move }))
+        moveFiles: approval.approvedPlanPreview.moveFiles.map((move) => ({ ...move })),
+        ...(approval.approvedPlanPreview.copyFiles ? {
+          copyFiles: approval.approvedPlanPreview.copyFiles.map((copy) => ({ ...copy }))
+        } : {})
       }
     } : {})
   };

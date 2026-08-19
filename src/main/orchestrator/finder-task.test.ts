@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runFinderOrganizationTask } from "./finder-task";
+import type { FinderPlanPreview } from "./finder-task";
 import type {
   DesktopActionResult,
   DesktopExecutableAction,
@@ -372,6 +373,304 @@ describe("runFinderOrganizationTask", () => {
         .resolves.toBe("document");
       await expect(readFile(path.join(rootPath, "Code", "script.ts"), "utf8"))
         .resolves.toBe("code");
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("organizes only directly selected Finder files after exact preview confirmation", async () => {
+    const rootPath = await createFixture();
+    const desktopClient = {
+      async executeAction(action: DesktopExecutableAction): Promise<DesktopActionResult> {
+        if (action.type === "observe_app") {
+          return {
+            bundleId: "com.apple.finder",
+            isRunning: true,
+            isActive: true,
+            screenshotPath: action.screenshotOutputPath,
+            frontmostBundleId: "com.apple.finder",
+            accessibilityTrusted: true,
+            windows: []
+          };
+        }
+        return { ok: true };
+      },
+      async getFinderSelection() {
+        return {
+          source: "finder-applescript" as const,
+          frontmostBundleId: "com.apple.finder",
+          targetPath: rootPath,
+          selection: [
+            {
+              path: path.join(rootPath, "photo.png"),
+              name: "photo.png",
+              kind: "file" as const
+            },
+            {
+              path: path.join(rootPath, "notes.pdf"),
+              name: "notes.pdf",
+              kind: "file" as const
+            }
+          ]
+        };
+      }
+    };
+
+    try {
+      const previewEvents = await collectEvents(
+        runFinderOrganizationTask("整理 Finder 选中项目", {
+          approved: true,
+          desktopClient,
+          createScreenshotPath: () => "/tmp/skfiy-finder-before.png"
+        })
+      );
+      const approvedPlanPreview = previewEvents.find((event) => event.type === "plan_preview")
+        ?.preview as FinderPlanPreview | undefined;
+      expect(approvedPlanPreview).toMatchObject({ operationCount: 4 });
+      expect(JSON.stringify(approvedPlanPreview)).not.toContain("script.ts");
+
+      const events = await collectEvents(
+        runFinderOrganizationTask("整理 Finder 选中项目", {
+          approved: true,
+          planApproved: true,
+          approvedPlanPreview,
+          desktopClient,
+          createScreenshotPath: () => "/tmp/skfiy-finder-before.png"
+        })
+      );
+
+      expect(events.map((event) => event.type)).toEqual([
+        "started",
+        "locating_app",
+        "app_activated",
+        "screenshot_before",
+        "finder_selection_observed",
+        "plan_preview",
+        "action_verified",
+        "action_verified",
+        "action_verified",
+        "action_verified",
+        "completed"
+      ]);
+      await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
+        .resolves.toBe("image");
+      await expect(readFile(path.join(rootPath, "Documents", "notes.pdf"), "utf8"))
+        .resolves.toBe("document");
+      await expect(readFile(path.join(rootPath, "script.ts"), "utf8"))
+        .resolves.toBe("code");
+      await expect(stat(path.join(rootPath, "Code"))).rejects.toThrow();
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects selected Finder items when the selection changes after preview", async () => {
+    const rootPath = await createFixture();
+    let selectedNames = ["photo.png"];
+    const desktopClient = {
+      async executeAction(action: DesktopExecutableAction): Promise<DesktopActionResult> {
+        return action.type === "observe_app"
+          ? {
+              bundleId: "com.apple.finder",
+              isRunning: true,
+              isActive: true,
+              screenshotPath: action.screenshotOutputPath,
+              frontmostBundleId: "com.apple.finder",
+              accessibilityTrusted: true,
+              windows: []
+            }
+          : { ok: true };
+      },
+      async getFinderSelection() {
+        return {
+          source: "finder-applescript" as const,
+          targetPath: rootPath,
+          selection: selectedNames.map((name) => ({
+            path: path.join(rootPath, name),
+            name,
+            kind: "file" as const
+          }))
+        };
+      }
+    };
+
+    try {
+      const previewEvents = await collectEvents(
+        runFinderOrganizationTask("整理 Finder 选中项目", {
+          approved: true,
+          desktopClient
+        })
+      );
+      const approvedPlanPreview = previewEvents.find((event) => event.type === "plan_preview")
+        ?.preview as FinderPlanPreview | undefined;
+      expect(approvedPlanPreview).toMatchObject({ operationCount: 2 });
+
+      selectedNames = ["photo.png", "notes.pdf"];
+      const events = await collectEvents(
+        runFinderOrganizationTask("整理 Finder 选中项目", {
+          approved: true,
+          planApproved: true,
+          approvedPlanPreview,
+          desktopClient
+        })
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "verification_failed",
+        stage: "selection",
+        reason: "Finder approved plan no longer matches the current Finder target."
+      });
+      expect(await readdir(rootPath)).toEqual(["notes.pdf", "photo.png", "script.ts"]);
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("renames exactly one selected Finder file after preview confirmation", async () => {
+    const rootPath = await createFixture();
+    const desktopClient = {
+      async executeAction(action: DesktopExecutableAction): Promise<DesktopActionResult> {
+        return action.type === "observe_app"
+          ? {
+              bundleId: "com.apple.finder",
+              isRunning: true,
+              isActive: true,
+              screenshotPath: action.screenshotOutputPath,
+              frontmostBundleId: "com.apple.finder",
+              accessibilityTrusted: true,
+              windows: []
+            }
+          : { ok: true };
+      },
+      async getFinderSelection() {
+        return {
+          source: "finder-applescript" as const,
+          targetPath: rootPath,
+          selection: [{
+            path: path.join(rootPath, "photo.png"),
+            name: "photo.png",
+            kind: "file" as const
+          }]
+        };
+      }
+    };
+
+    try {
+      const command = "重命名 Finder 选中文件为 holiday-photo.png";
+      const previewEvents = await collectEvents(runFinderOrganizationTask(command, {
+        approved: true,
+        desktopClient
+      }));
+      const approvedPlanPreview = previewEvents.find((event) => event.type === "plan_preview")
+        ?.preview as FinderPlanPreview | undefined;
+      expect(approvedPlanPreview).toMatchObject({
+        operationCount: 1,
+        moveFiles: [{
+          from: path.join(rootPath, "photo.png"),
+          to: path.join(rootPath, "holiday-photo.png")
+        }]
+      });
+
+      const events = await collectEvents(runFinderOrganizationTask(command, {
+        approved: true,
+        planApproved: true,
+        approvedPlanPreview,
+        desktopClient
+      }));
+
+      expect(events.map((event) => event.type)).toEqual([
+        "started",
+        "locating_app",
+        "app_activated",
+        "screenshot_before",
+        "finder_selection_observed",
+        "plan_preview",
+        "action_verified",
+        "completed"
+      ]);
+      await expect(readFile(path.join(rootPath, "holiday-photo.png"), "utf8"))
+        .resolves.toBe("image");
+      await expect(stat(path.join(rootPath, "photo.png"))).rejects.toThrow();
+      await expect(readFile(path.join(rootPath, "notes.pdf"), "utf8"))
+        .resolves.toBe("document");
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("copies exactly one selected Finder file after preview confirmation", async () => {
+    const rootPath = await createFixture();
+    const desktopClient = {
+      async executeAction(action: DesktopExecutableAction): Promise<DesktopActionResult> {
+        return action.type === "observe_app"
+          ? {
+              bundleId: "com.apple.finder",
+              isRunning: true,
+              isActive: true,
+              screenshotPath: action.screenshotOutputPath,
+              frontmostBundleId: "com.apple.finder",
+              accessibilityTrusted: true,
+              windows: []
+            }
+          : { ok: true };
+      },
+      async getFinderSelection() {
+        return {
+          source: "finder-applescript" as const,
+          targetPath: rootPath,
+          selection: [{
+            path: path.join(rootPath, "photo.png"),
+            name: "photo.png",
+            kind: "file" as const
+          }]
+        };
+      }
+    };
+
+    try {
+      const command = "复制 Finder 选中文件为 holiday-photo.png";
+      const previewEvents = await collectEvents(runFinderOrganizationTask(command, {
+        approved: true,
+        desktopClient
+      }));
+      const approvedPlanPreview = previewEvents.find((event) => event.type === "plan_preview")
+        ?.preview as FinderPlanPreview | undefined;
+      expect(approvedPlanPreview).toMatchObject({
+        operationCount: 1,
+        moveFiles: [],
+        copyFiles: [{
+          from: path.join(rootPath, "photo.png"),
+          to: path.join(rootPath, "holiday-photo.png")
+        }]
+      });
+
+      const events = await collectEvents(runFinderOrganizationTask(command, {
+        approved: true,
+        planApproved: true,
+        approvedPlanPreview,
+        desktopClient
+      }));
+
+      expect(events.map((event) => event.type)).toEqual([
+        "started",
+        "locating_app",
+        "app_activated",
+        "screenshot_before",
+        "finder_selection_observed",
+        "plan_preview",
+        "action_verified",
+        "completed"
+      ]);
+      expect(events.find((event) => event.type === "action_verified")).toMatchObject({
+        actionType: "copy_file"
+      });
+      await expect(readFile(path.join(rootPath, "holiday-photo.png"), "utf8"))
+        .resolves.toBe("image");
+      await expect(readFile(path.join(rootPath, "photo.png"), "utf8"))
+        .resolves.toBe("image");
+      const source = await lstat(path.join(rootPath, "photo.png"));
+      const destination = await lstat(path.join(rootPath, "holiday-photo.png"));
+      expect(destination.ino).not.toBe(source.ino);
     } finally {
       await rm(rootPath, { recursive: true, force: true });
     }

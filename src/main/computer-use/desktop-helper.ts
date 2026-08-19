@@ -1,5 +1,9 @@
 import { execFile } from "node:child_process";
 import type {
+  AtomicCopyFileNoReplaceRequest,
+  AtomicCopyFileNoReplaceResult,
+  AtomicMoveFileNoReplaceRequest,
+  AtomicMoveFileNoReplaceResult,
   DesktopActionResult,
   DesktopAppInfo,
   DesktopAppState,
@@ -145,6 +149,64 @@ export class DesktopHelperClient {
         checkedItemNames.join(",")
       ],
       readFinderItemLayoutResult
+    );
+  }
+
+  async atomicMoveFileNoReplace(
+    request: AtomicMoveFileNoReplaceRequest
+  ): Promise<AtomicMoveFileNoReplaceResult> {
+    if (!isRecord(request)) {
+      throw new Error("Atomic move request must be a JSON object.");
+    }
+    const sourcePath = requireNonEmptyString(request.sourcePath, "sourcePath");
+    const destinationPath = requireNonEmptyString(request.destinationPath, "destinationPath");
+    const identity = request.expectedSourceIdentity;
+    if (!isRecord(identity)) {
+      throw new Error("expectedSourceIdentity must be a JSON object.");
+    }
+
+    return this.runJson(
+      "atomic-move-no-replace",
+      [
+        "atomic-move-no-replace",
+        "--source", sourcePath,
+        "--destination", destinationPath,
+        "--expected-device", String(requireFiniteNumber(identity.device, "expectedSourceIdentity.device")),
+        "--expected-inode", String(requireFiniteNumber(identity.inode, "expectedSourceIdentity.inode")),
+        "--expected-size", String(requireFiniteNumber(identity.size, "expectedSourceIdentity.size")),
+        "--expected-modified-at-ms", String(requireFiniteNumber(identity.modifiedAtMs, "expectedSourceIdentity.modifiedAtMs")),
+        "--expected-changed-at-ms", String(requireFiniteNumber(identity.changedAtMs, "expectedSourceIdentity.changedAtMs"))
+      ],
+      readAtomicMoveFileNoReplaceResult
+    );
+  }
+
+  async atomicCopyFileNoReplace(
+    request: AtomicCopyFileNoReplaceRequest
+  ): Promise<AtomicCopyFileNoReplaceResult> {
+    if (!isRecord(request)) {
+      throw new Error("Atomic copy request must be a JSON object.");
+    }
+    const sourcePath = requireNonEmptyString(request.sourcePath, "sourcePath");
+    const destinationPath = requireNonEmptyString(request.destinationPath, "destinationPath");
+    const identity = request.expectedSourceIdentity;
+    if (!isRecord(identity)) {
+      throw new Error("expectedSourceIdentity must be a JSON object.");
+    }
+
+    return this.runJson(
+      "atomic-copy-no-replace",
+      [
+        "atomic-copy-no-replace",
+        "--source", sourcePath,
+        "--destination", destinationPath,
+        "--expected-device", String(requireFiniteNumber(identity.device, "expectedSourceIdentity.device")),
+        "--expected-inode", String(requireFiniteNumber(identity.inode, "expectedSourceIdentity.inode")),
+        "--expected-size", String(requireFiniteNumber(identity.size, "expectedSourceIdentity.size")),
+        "--expected-modified-at-ms", String(requireFiniteNumber(identity.modifiedAtMs, "expectedSourceIdentity.modifiedAtMs")),
+        "--expected-changed-at-ms", String(requireFiniteNumber(identity.changedAtMs, "expectedSourceIdentity.changedAtMs"))
+      ],
+      readAtomicCopyFileNoReplaceResult
     );
   }
 
@@ -532,6 +594,49 @@ function readActionResult(payload: unknown, commandName: string): DesktopHelperA
   }
 
   return message === undefined ? { ok: true } : { ok: true, message };
+}
+
+function readAtomicMoveFileNoReplaceResult(
+  payload: unknown,
+  commandName: string
+): AtomicMoveFileNoReplaceResult {
+  const record = readRecord(payload, commandName);
+  const state = readString(record, "state", commandName);
+  const knownStates = new Set([
+    "moved",
+    "destination-exists",
+    "source-missing",
+    "source-changed",
+    "cross-device",
+    "permission-denied",
+    "rollback-incomplete",
+    "filesystem-error"
+  ]);
+  if (!knownStates.has(state)) {
+    throw invalidShape(commandName, `expected a known atomic move state, got ${state}`);
+  }
+  return { state: state as AtomicMoveFileNoReplaceResult["state"] };
+}
+
+function readAtomicCopyFileNoReplaceResult(
+  payload: unknown,
+  commandName: string
+): AtomicCopyFileNoReplaceResult {
+  const record = readRecord(payload, commandName);
+  const state = readString(record, "state", commandName);
+  const knownStates = new Set([
+    "copied",
+    "destination-exists",
+    "source-missing",
+    "source-changed",
+    "permission-denied",
+    "cleanup-incomplete",
+    "filesystem-error"
+  ]);
+  if (!knownStates.has(state)) {
+    throw invalidShape(commandName, `expected a known atomic copy state, got ${state}`);
+  }
+  return { state: state as AtomicCopyFileNoReplaceResult["state"] };
 }
 
 function readActivationMessage(record: Record<string, unknown>): string | undefined {

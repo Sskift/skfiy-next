@@ -133,12 +133,27 @@ describe("Computer Use plan preview", () => {
       command: "整理 Finder 选中文件夹",
       route: route("finder")
     });
+    const selectedItems = createComputerUsePlanPreview({
+      command: "整理 Finder 选中项目",
+      route: route("finder")
+    });
+    const rename = createComputerUsePlanPreview({
+      command: "重命名 Finder 选中文件为 holiday-photo.png",
+      route: route("finder")
+    });
+    const copy = createComputerUsePlanPreview({
+      command: "复制 Finder 选中文件为 holiday-photo.png",
+      route: route("finder")
+    });
     const absolute = createComputerUsePlanPreview({
       command: "整理 Finder 测试文件夹 /Users/tester/Private/skfiy-fixture",
       route: route("finder")
     });
 
     expect(semantic.target).toBe("Selected Finder folder");
+    expect(selectedItems.target).toBe("Selected Finder items");
+    expect(rename.target).toBe("Selected Finder file rename");
+    expect(copy.target).toBe("Selected Finder file copy");
     expect(absolute.target).toBe("Folder skfiy-fixture");
     expect(JSON.stringify(absolute)).not.toContain("/Users/tester");
     expect(absolute.expectedVerification).toContain("file operation");

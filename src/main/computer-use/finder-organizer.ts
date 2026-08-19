@@ -10,7 +10,8 @@ export interface FinderEntry {
 
 export type FinderOrganizationOperation =
   | { type: "create_folder"; path: string }
-  | { type: "move_file"; from: string; to: string };
+  | { type: "move_file"; from: string; to: string }
+  | { type: "copy_file"; from: string; to: string };
 
 export interface FinderOrganizationPlan {
   risk: RiskLevel;
@@ -83,16 +84,19 @@ function readFolderName(fileName: string): string {
   return EXTENSION_FOLDERS.get(path.extname(fileName).toLowerCase()) ?? "Other";
 }
 
+export function isSafeFinderEntryName(name: string): boolean {
+  return name.length > 0
+    && name.length <= 255
+    && name !== "."
+    && name !== ".."
+    && !path.isAbsolute(name)
+    && !name.includes("/")
+    && !name.includes("\\")
+    && !/[\u0000-\u001f\u007f]/u.test(name);
+}
+
 function assertSafeEntryName(name: string): void {
-  if (
-    name.length === 0
-    || path.isAbsolute(name)
-    || name.includes("/")
-    || name.includes("\\")
-    || name.split(path.sep).includes("..")
-    || name === ".."
-    || name.startsWith("../")
-  ) {
+  if (!isSafeFinderEntryName(name)) {
     throw new Error("Finder organization entries must stay inside the root folder.");
   }
 }

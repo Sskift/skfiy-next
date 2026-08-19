@@ -147,8 +147,16 @@ const taskControlFinderPreviewKeys = new Set([
   "operationCount",
   "destructiveOperationCount",
   "createFolders",
-  "moveFiles"
+  "moveFiles",
+  "copyFiles"
 ]);
+const taskControlFinderPreviewRequiredKeys = [
+  "rootPath",
+  "operationCount",
+  "destructiveOperationCount",
+  "createFolders",
+  "moveFiles"
+];
 const taskControlFinderMoveKeys = new Set(["from", "to"]);
 const taskApprovalDecisionKeys = new Set(["executionId", "planId"]);
 const taskControlSnapshotKeys = new Set([
@@ -206,6 +214,10 @@ interface FinderPlanPreview {
   destructiveOperationCount: number;
   createFolders: string[];
   moveFiles: Array<{
+    from: string;
+    to: string;
+  }>;
+  copyFiles?: Array<{
     from: string;
     to: string;
   }>;
@@ -383,6 +395,7 @@ interface TurnTranscript {
     destructiveOperationCount?: number;
     createFolderCount?: number;
     moveFileCount?: number;
+    copyFileCount?: number;
   }>;
   outcome: TurnTranscriptOutcome;
 }
@@ -1533,6 +1546,7 @@ function isTurnTranscriptAction(value: unknown): value is TurnTranscript["action
     && (action.destructiveOperationCount === undefined || typeof action.destructiveOperationCount === "number")
     && (action.createFolderCount === undefined || typeof action.createFolderCount === "number")
     && (action.moveFileCount === undefined || typeof action.moveFileCount === "number")
+    && (action.copyFileCount === undefined || typeof action.copyFileCount === "number")
   );
 }
 
@@ -1711,7 +1725,7 @@ function isTaskControlFinderPlanPreview(value: unknown): boolean {
   if (!preview || !hasStrictTaskControlKeys(
     preview,
     taskControlFinderPreviewKeys,
-    [...taskControlFinderPreviewKeys]
+    taskControlFinderPreviewRequiredKeys
   )) {
     return false;
   }
@@ -1723,7 +1737,12 @@ function isTaskControlFinderPlanPreview(value: unknown): boolean {
     && isTaskControlTextList(preview.createFolders)
     && Array.isArray(preview.moveFiles)
     && preview.moveFiles.length <= 2_000
-    && preview.moveFiles.every(isTaskControlFinderMove);
+    && preview.moveFiles.every(isTaskControlFinderMove)
+    && (preview.copyFiles === undefined || (
+      Array.isArray(preview.copyFiles)
+      && preview.copyFiles.length <= 2_000
+      && preview.copyFiles.every(isTaskControlFinderMove)
+    ));
 }
 
 function isTaskControlFinderMove(value: unknown): boolean {
@@ -1872,7 +1891,10 @@ function cloneTaskControlApproval(
       finderPlanPreview: {
         ...approval.finderPlanPreview,
         createFolders: [...approval.finderPlanPreview.createFolders],
-        moveFiles: approval.finderPlanPreview.moveFiles.map((move) => ({ ...move }))
+        moveFiles: approval.finderPlanPreview.moveFiles.map((move) => ({ ...move })),
+        ...(approval.finderPlanPreview.copyFiles ? {
+          copyFiles: approval.finderPlanPreview.copyFiles.map((copy) => ({ ...copy }))
+        } : {})
       }
     } : {})
   };

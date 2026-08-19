@@ -136,6 +136,10 @@ import Vision
    }
  - open-permission-settings --permission screen-recording|accessibility:
    data = { permission: String, url: String, opened: Boolean }
+ - atomic-move-no-replace --source <path> --destination <path> --expected-* <identity>:
+   data = { state: "moved" | "destination-exists" | "source-missing" | "source-changed" | "cross-device" | "permission-denied" | "rollback-incomplete" | "filesystem-error" }
+ - atomic-copy-no-replace --source <path> --destination <path> --expected-* <identity>:
+   data = { state: "copied" | "destination-exists" | "source-missing" | "source-changed" | "permission-denied" | "cleanup-incomplete" | "filesystem-error" }
 
  Security contract:
  - This helper never executes shell commands.
@@ -165,6 +169,8 @@ let supportedCommands = [
     "double-tap-fn",
     "get-app-state",
     "permissions-status",
+    "atomic-copy-no-replace",
+    "atomic-move-no-replace",
     "open-permission-settings"
 ]
 
@@ -386,6 +392,45 @@ struct OpenPermissionSettingsPayload: Encodable {
     let opened: Bool
 }
 
+struct AtomicMoveNoReplacePayload: Encodable {
+    let state: String
+}
+
+struct AtomicCopyNoReplacePayload: Encodable {
+    let state: String
+}
+
+struct DirectRegularFileIdentity {
+    let device: Int64
+    let inode: Int64
+    let size: Int64
+    let modifiedAtMs: Double
+    let changedAtMs: Double
+
+    func exactlyMatches(_ other: DirectRegularFileIdentity) -> Bool {
+        return device == other.device
+            && inode == other.inode
+            && size == other.size
+            && modifiedAtMs == other.modifiedAtMs
+            && changedAtMs == other.changedAtMs
+    }
+
+    func hasSameObjectAndContent(as other: DirectRegularFileIdentity) -> Bool {
+        return device == other.device
+            && inode == other.inode
+            && size == other.size
+            && modifiedAtMs == other.modifiedAtMs
+    }
+}
+
+enum DirectRegularFileIdentityRead {
+    case found(DirectRegularFileIdentity)
+    case missing
+    case permissionDenied
+    case notRegular
+    case unavailable
+}
+
 struct FrontmostApplicationSnapshot {
     let bundleId: String?
     let localizedName: String?
@@ -478,6 +523,18 @@ func requiredDoubleOption(_ name: String, in options: [String: String]) throws -
         throw HelperFailure(
             "invalid_number",
             "Expected a finite numeric option value.",
+            details: ["option": .string(name), "value": .string(rawValue)]
+        )
+    }
+    return value
+}
+
+func requiredInt64Option(_ name: String, in options: [String: String]) throws -> Int64 {
+    let rawValue = try requiredOption(name, in: options)
+    guard let value = Int64(rawValue), value >= 0 else {
+        throw HelperFailure(
+            "invalid_integer",
+            "Expected a non-negative integer option value.",
             details: ["option": .string(name), "value": .string(rawValue)]
         )
     }
@@ -1780,6 +1837,353 @@ func handlePermissionsStatus(_ arguments: ArraySlice<String>) throws -> Permissi
     )
 }
 
+func readDirectRegularFileIdentity(_ path: String) -> DirectRegularFileIdentityRead {
+    var fileStatus = stat()
+    let result = path.withCString { lstat($0, &fileStatus) }
+    guard result == 0 else {
+        switch errno {
+        case ENOENT:
+            return .missing
+        case EACCES, EPERM:
+            return .permissionDenied
+        default:
+            return .unavailable
+        }
+    }
+    guard (fileStatus.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
+        return .notRegular
+    }
+    return .found(DirectRegularFileIdentity(
+        device: Int64(fileStatus.st_dev),
+        inode: Int64(fileStatus.st_ino),
+        size: Int64(fileStatus.st_size),
+        modifiedAtMs: Double(fileStatus.st_mtimespec.tv_sec) * 1_000
+            + Double(fileStatus.st_mtimespec.tv_nsec) / 1_000_000,
+        changedAtMs: Double(fileStatus.st_ctimespec.tv_sec) * 1_000
+            + Double(fileStatus.st_ctimespec.tv_nsec) / 1_000_000
+    ))
+}
+
+func removeOwnedDirectRegularFile(
+    _ path: String,
+    expectedIdentity: DirectRegularFileIdentity
+) -> Bool {
+    switch readDirectRegularFileIdentity(path) {
+    case .missing:
+        return true
+    case .found(let identity):
+        guard identity.hasSameObjectAndContent(as: expectedIdentity) else {
+            return false
+        }
+    default:
+        return false
+    }
+    guard path.withCString({ unlink($0) }) == 0 else {
+        return false
+    }
+    guard case .missing = readDirectRegularFileIdentity(path) else {
+        return false
+    }
+    return true
+}
+
+func cleanupOwnedTemporaryCopy(_ path: String) -> Bool {
+    switch readDirectRegularFileIdentity(path) {
+    case .missing:
+        return true
+    case .found(let identity):
+        return removeOwnedDirectRegularFile(path, expectedIdentity: identity)
+    default:
+        return false
+    }
+}
+
+func isFilePermissionError(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    if nsError.domain == NSPOSIXErrorDomain {
+        return nsError.code == Int(EACCES) || nsError.code == Int(EPERM)
+    }
+    return nsError.domain == NSCocoaErrorDomain && (
+        nsError.code == CocoaError.Code.fileReadNoPermission.rawValue
+        || nsError.code == CocoaError.Code.fileWriteNoPermission.rawValue
+    )
+}
+
+func handleAtomicCopyNoReplace(
+    _ arguments: ArraySlice<String>
+) throws -> AtomicCopyNoReplacePayload {
+    let optionNames: Set<String> = [
+        "--source",
+        "--destination",
+        "--expected-device",
+        "--expected-inode",
+        "--expected-size",
+        "--expected-modified-at-ms",
+        "--expected-changed-at-ms"
+    ]
+    let options = try parseOptions(arguments, allowed: optionNames)
+    let sourcePath = absolutePath(try requiredOption("--source", in: options))
+    let destinationPath = absolutePath(try requiredOption("--destination", in: options))
+    guard sourcePath != destinationPath else {
+        throw HelperFailure(
+            "invalid_copy_paths",
+            "Atomic copy source and destination must be different paths."
+        )
+    }
+    let expectedIdentity = DirectRegularFileIdentity(
+        device: try requiredInt64Option("--expected-device", in: options),
+        inode: try requiredInt64Option("--expected-inode", in: options),
+        size: try requiredInt64Option("--expected-size", in: options),
+        modifiedAtMs: try requiredDoubleOption("--expected-modified-at-ms", in: options),
+        changedAtMs: try requiredDoubleOption("--expected-changed-at-ms", in: options)
+    )
+
+    switch readDirectRegularFileIdentity(sourcePath) {
+    case .found(let identity):
+        guard identity.exactlyMatches(expectedIdentity) else {
+            return AtomicCopyNoReplacePayload(state: "source-changed")
+        }
+    case .missing:
+        return AtomicCopyNoReplacePayload(state: "source-missing")
+    case .permissionDenied:
+        return AtomicCopyNoReplacePayload(state: "permission-denied")
+    case .notRegular:
+        return AtomicCopyNoReplacePayload(state: "source-changed")
+    case .unavailable:
+        return AtomicCopyNoReplacePayload(state: "filesystem-error")
+    }
+
+    switch readDirectRegularFileIdentity(destinationPath) {
+    case .missing:
+        break
+    case .permissionDenied:
+        return AtomicCopyNoReplacePayload(state: "permission-denied")
+    case .found, .notRegular:
+        return AtomicCopyNoReplacePayload(state: "destination-exists")
+    case .unavailable:
+        return AtomicCopyNoReplacePayload(state: "filesystem-error")
+    }
+
+    let destinationURL = URL(fileURLWithPath: destinationPath)
+    let temporaryPath = destinationURL.deletingLastPathComponent()
+        .appendingPathComponent(
+            ".\(destinationURL.lastPathComponent).skfiy-copy-\(UUID().uuidString)"
+        )
+        .path
+    do {
+        try FileManager.default.copyItem(atPath: sourcePath, toPath: temporaryPath)
+    } catch {
+        guard cleanupOwnedTemporaryCopy(temporaryPath) else {
+            return AtomicCopyNoReplacePayload(state: "cleanup-incomplete")
+        }
+        switch readDirectRegularFileIdentity(sourcePath) {
+        case .missing:
+            return AtomicCopyNoReplacePayload(state: "source-missing")
+        case .found(let identity) where !identity.exactlyMatches(expectedIdentity):
+            return AtomicCopyNoReplacePayload(state: "source-changed")
+        case .notRegular:
+            return AtomicCopyNoReplacePayload(state: "source-changed")
+        case .permissionDenied:
+            return AtomicCopyNoReplacePayload(state: "permission-denied")
+        default:
+            return AtomicCopyNoReplacePayload(
+                state: isFilePermissionError(error) ? "permission-denied" : "filesystem-error"
+            )
+        }
+    }
+
+    let temporaryIdentity: DirectRegularFileIdentity
+    switch readDirectRegularFileIdentity(temporaryPath) {
+    case .found(let identity):
+        temporaryIdentity = identity
+    default:
+        return AtomicCopyNoReplacePayload(
+            state: cleanupOwnedTemporaryCopy(temporaryPath)
+                ? "filesystem-error"
+                : "cleanup-incomplete"
+        )
+    }
+    guard temporaryIdentity.size == expectedIdentity.size,
+          temporaryIdentity.device != expectedIdentity.device
+            || temporaryIdentity.inode != expectedIdentity.inode else {
+        return AtomicCopyNoReplacePayload(
+            state: cleanupOwnedTemporaryCopy(temporaryPath)
+                ? "filesystem-error"
+                : "cleanup-incomplete"
+        )
+    }
+    guard case .found(let currentSource) = readDirectRegularFileIdentity(sourcePath),
+          currentSource.exactlyMatches(expectedIdentity) else {
+        return AtomicCopyNoReplacePayload(
+            state: cleanupOwnedTemporaryCopy(temporaryPath)
+                ? "source-changed"
+                : "cleanup-incomplete"
+        )
+    }
+
+    var publishErrno: Int32 = 0
+    let published = temporaryPath.withCString { temporary in
+        destinationPath.withCString { destination in
+            if renamex_np(temporary, destination, UInt32(RENAME_EXCL)) == 0 {
+                return true
+            }
+            publishErrno = errno
+            return false
+        }
+    }
+    guard published else {
+        guard cleanupOwnedTemporaryCopy(temporaryPath) else {
+            return AtomicCopyNoReplacePayload(state: "cleanup-incomplete")
+        }
+        switch publishErrno {
+        case EEXIST:
+            return AtomicCopyNoReplacePayload(state: "destination-exists")
+        case EACCES, EPERM:
+            return AtomicCopyNoReplacePayload(state: "permission-denied")
+        default:
+            return AtomicCopyNoReplacePayload(state: "filesystem-error")
+        }
+    }
+
+    let sourceStillApproved: Bool
+    if case .found(let sourceIdentity) = readDirectRegularFileIdentity(sourcePath) {
+        sourceStillApproved = sourceIdentity.exactlyMatches(expectedIdentity)
+    } else {
+        sourceStillApproved = false
+    }
+    let destinationIsPublishedCopy: Bool
+    if case .found(let destinationIdentity) = readDirectRegularFileIdentity(destinationPath) {
+        destinationIsPublishedCopy = destinationIdentity.hasSameObjectAndContent(as: temporaryIdentity)
+            && destinationIdentity.size == expectedIdentity.size
+            && (destinationIdentity.device != expectedIdentity.device
+                || destinationIdentity.inode != expectedIdentity.inode)
+    } else {
+        destinationIsPublishedCopy = false
+    }
+    guard sourceStillApproved && destinationIsPublishedCopy else {
+        let cleaned = removeOwnedDirectRegularFile(
+            destinationPath,
+            expectedIdentity: temporaryIdentity
+        )
+        return AtomicCopyNoReplacePayload(
+            state: cleaned
+                ? (sourceStillApproved ? "filesystem-error" : "source-changed")
+                : "cleanup-incomplete"
+        )
+    }
+
+    return AtomicCopyNoReplacePayload(state: "copied")
+}
+
+func handleAtomicMoveNoReplace(
+    _ arguments: ArraySlice<String>
+) throws -> AtomicMoveNoReplacePayload {
+    let optionNames: Set<String> = [
+        "--source",
+        "--destination",
+        "--expected-device",
+        "--expected-inode",
+        "--expected-size",
+        "--expected-modified-at-ms",
+        "--expected-changed-at-ms"
+    ]
+    let options = try parseOptions(arguments, allowed: optionNames)
+    let sourcePath = absolutePath(try requiredOption("--source", in: options))
+    let destinationPath = absolutePath(try requiredOption("--destination", in: options))
+    guard sourcePath != destinationPath else {
+        throw HelperFailure(
+            "invalid_move_paths",
+            "Atomic move source and destination must be different paths."
+        )
+    }
+    let expectedIdentity = DirectRegularFileIdentity(
+        device: try requiredInt64Option("--expected-device", in: options),
+        inode: try requiredInt64Option("--expected-inode", in: options),
+        size: try requiredInt64Option("--expected-size", in: options),
+        modifiedAtMs: try requiredDoubleOption("--expected-modified-at-ms", in: options),
+        changedAtMs: try requiredDoubleOption("--expected-changed-at-ms", in: options)
+    )
+
+    let approvedSource: DirectRegularFileIdentity
+    switch readDirectRegularFileIdentity(sourcePath) {
+    case .found(let identity):
+        approvedSource = identity
+    case .missing:
+        return AtomicMoveNoReplacePayload(state: "source-missing")
+    case .permissionDenied:
+        return AtomicMoveNoReplacePayload(state: "permission-denied")
+    case .notRegular:
+        return AtomicMoveNoReplacePayload(state: "source-changed")
+    case .unavailable:
+        return AtomicMoveNoReplacePayload(state: "filesystem-error")
+    }
+    guard approvedSource.exactlyMatches(expectedIdentity) else {
+        return AtomicMoveNoReplacePayload(state: "source-changed")
+    }
+
+    var moveErrno: Int32 = 0
+    let moved = sourcePath.withCString { source in
+        destinationPath.withCString { destination in
+            if renamex_np(source, destination, UInt32(RENAME_EXCL)) == 0 {
+                return true
+            }
+            moveErrno = errno
+            return false
+        }
+    }
+    guard moved else {
+        switch moveErrno {
+        case EEXIST:
+            return AtomicMoveNoReplacePayload(state: "destination-exists")
+        case ENOENT:
+            return AtomicMoveNoReplacePayload(state: "source-changed")
+        case EXDEV:
+            return AtomicMoveNoReplacePayload(state: "cross-device")
+        case EACCES, EPERM:
+            return AtomicMoveNoReplacePayload(state: "permission-denied")
+        default:
+            return AtomicMoveNoReplacePayload(state: "filesystem-error")
+        }
+    }
+
+    guard case .found(let destinationIdentity) = readDirectRegularFileIdentity(destinationPath),
+          destinationIdentity.hasSameObjectAndContent(as: expectedIdentity) else {
+        return AtomicMoveNoReplacePayload(state: "rollback-incomplete")
+    }
+    switch readDirectRegularFileIdentity(sourcePath) {
+    case .missing:
+        return AtomicMoveNoReplacePayload(state: "moved")
+    default:
+        let rolledBack = performExclusiveRename(
+            from: destinationPath,
+            to: sourcePath,
+            expectedIdentity: expectedIdentity
+        )
+        return AtomicMoveNoReplacePayload(
+            state: rolledBack ? "source-changed" : "rollback-incomplete"
+        )
+    }
+}
+
+func performExclusiveRename(
+    from sourcePath: String,
+    to destinationPath: String,
+    expectedIdentity: DirectRegularFileIdentity
+) -> Bool {
+    let renamed = sourcePath.withCString { source in
+        destinationPath.withCString { destination in
+            renamex_np(source, destination, UInt32(RENAME_EXCL)) == 0
+        }
+    }
+    guard renamed,
+          case .found(let restoredIdentity) = readDirectRegularFileIdentity(destinationPath),
+          restoredIdentity.hasSameObjectAndContent(as: expectedIdentity),
+          case .missing = readDirectRegularFileIdentity(sourcePath) else {
+        return false
+    }
+    return true
+}
+
 func handleOpenPermissionSettings(_ arguments: ArraySlice<String>) throws -> OpenPermissionSettingsPayload {
     let options = try parseOptions(arguments, allowed: ["--permission"])
     let permission = try permissionKind(for: requiredOption("--permission", in: options))
@@ -1847,6 +2251,10 @@ do {
         succeed(command: commandName, data: try handleGetAppState(arguments))
     case "permissions-status":
         succeed(command: commandName, data: try handlePermissionsStatus(arguments))
+    case "atomic-copy-no-replace":
+        succeed(command: commandName, data: try handleAtomicCopyNoReplace(arguments))
+    case "atomic-move-no-replace":
+        succeed(command: commandName, data: try handleAtomicMoveNoReplace(arguments))
     case "open-permission-settings":
         succeed(command: commandName, data: try handleOpenPermissionSettings(arguments))
     default:

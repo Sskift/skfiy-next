@@ -81,6 +81,7 @@ export interface TaskControlFinderPlanPreview {
   destructiveOperationCount: number;
   createFolders: string[];
   moveFiles: Array<{ from: string; to: string }>;
+  copyFiles?: Array<{ from: string; to: string }>;
 }
 
 export interface TaskControlApproval {
@@ -153,9 +154,16 @@ const FINDER_PREVIEW_KEYS = new Set([
   "operationCount",
   "destructiveOperationCount",
   "createFolders",
-  "moveFiles"
+  "moveFiles",
+  "copyFiles"
 ]);
-const FINDER_PREVIEW_REQUIRED_KEYS = [...FINDER_PREVIEW_KEYS];
+const FINDER_PREVIEW_REQUIRED_KEYS = [
+  "rootPath",
+  "operationCount",
+  "destructiveOperationCount",
+  "createFolders",
+  "moveFiles"
+];
 const FINDER_MOVE_KEYS = new Set(["from", "to"]);
 const FINDER_MOVE_REQUIRED_KEYS = [...FINDER_MOVE_KEYS];
 
@@ -268,7 +276,12 @@ export function isTaskControlFinderPlanPreview(
     && isBoundedTextList(preview.createFolders)
     && Array.isArray(preview.moveFiles)
     && preview.moveFiles.length <= MAX_FINDER_OPERATIONS
-    && preview.moveFiles.every(isTaskControlFinderMove);
+    && preview.moveFiles.every(isTaskControlFinderMove)
+    && (preview.copyFiles === undefined || (
+      Array.isArray(preview.copyFiles)
+      && preview.copyFiles.length <= MAX_FINDER_OPERATIONS
+      && preview.copyFiles.every(isTaskControlFinderMove)
+    ));
 }
 
 export function isComputerUsePlanRoute(value: unknown): value is ComputerUsePlanRoute {
@@ -348,7 +361,10 @@ export function cloneTaskControlApproval(
       finderPlanPreview: {
         ...approval.finderPlanPreview,
         createFolders: [...approval.finderPlanPreview.createFolders],
-        moveFiles: approval.finderPlanPreview.moveFiles.map((move) => ({ ...move }))
+        moveFiles: approval.finderPlanPreview.moveFiles.map((move) => ({ ...move })),
+        ...(approval.finderPlanPreview.copyFiles ? {
+          copyFiles: approval.finderPlanPreview.copyFiles.map((copy) => ({ ...copy }))
+        } : {})
       }
     } : {})
   };

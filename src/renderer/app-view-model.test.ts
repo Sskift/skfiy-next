@@ -192,6 +192,8 @@ describe("app view model", () => {
         { from: "/Users/me/Desktop/d.txt", to: "/Users/me/Desktop/folder/d.txt" }
       ]
     })).toEqual({
+      copyCount: 0,
+      copyItems: [],
       destructiveOperationCount: 1,
       moveCount: 4,
       moveItems: [

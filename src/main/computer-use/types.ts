@@ -103,6 +103,53 @@ export interface DesktopHelperActionResult {
   message?: string;
 }
 
+export interface AtomicFileIdentity {
+  device: number;
+  inode: number;
+  size: number;
+  modifiedAtMs: number;
+  changedAtMs: number;
+}
+
+export interface AtomicCopyFileNoReplaceRequest {
+  sourcePath: string;
+  destinationPath: string;
+  expectedSourceIdentity: AtomicFileIdentity;
+}
+
+export type AtomicCopyFileNoReplaceState =
+  | "copied"
+  | "destination-exists"
+  | "source-missing"
+  | "source-changed"
+  | "permission-denied"
+  | "cleanup-incomplete"
+  | "filesystem-error";
+
+export interface AtomicCopyFileNoReplaceResult {
+  state: AtomicCopyFileNoReplaceState;
+}
+
+export interface AtomicMoveFileNoReplaceRequest {
+  sourcePath: string;
+  destinationPath: string;
+  expectedSourceIdentity: AtomicFileIdentity;
+}
+
+export type AtomicMoveFileNoReplaceState =
+  | "moved"
+  | "destination-exists"
+  | "source-missing"
+  | "source-changed"
+  | "cross-device"
+  | "permission-denied"
+  | "rollback-incomplete"
+  | "filesystem-error";
+
+export interface AtomicMoveFileNoReplaceResult {
+  state: AtomicMoveFileNoReplaceState;
+}
+
 export interface OpenGhosttySessionResult {
   bundleId: string;
   title: string;
@@ -126,6 +173,11 @@ export interface PermissionStatus {
 export interface PermissionSummary {
   screenRecording: PermissionStatus;
   accessibility: PermissionStatus;
+}
+
+export interface FinderAutomationStatus {
+  state: PermissionState;
+  finderRunning: boolean;
 }
 
 export interface DesktopAppState {

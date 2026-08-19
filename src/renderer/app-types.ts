@@ -188,6 +188,7 @@ export interface TurnTranscript {
     destructiveOperationCount?: number;
     createFolderCount?: number;
     moveFileCount?: number;
+    copyFileCount?: number;
   }>;
   outcome: TurnTranscriptOutcome;
 }
@@ -361,6 +362,10 @@ export interface FinderPlanPreview {
   destructiveOperationCount: number;
   createFolders: string[];
   moveFiles: Array<{
+    from: string;
+    to: string;
+  }>;
+  copyFiles?: Array<{
     from: string;
     to: string;
   }>;

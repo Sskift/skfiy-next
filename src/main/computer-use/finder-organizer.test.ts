@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFinderOrganizationPlan } from "./finder-organizer";
+import { createFinderOrganizationPlan, isSafeFinderEntryName } from "./finder-organizer";
 
 describe("createFinderOrganizationPlan", () => {
   it("plans safe folder creation and moves for a test folder", () => {
@@ -51,5 +51,12 @@ describe("createFinderOrganizationPlan", () => {
       rootPath: "/tmp/skfiy-demo",
       entries: [{ name: "../secret.txt", kind: "file" }]
     })).toThrow("Finder organization entries must stay inside the root folder.");
+  });
+
+  it("accepts one bounded file name and rejects path, control, and dot names", () => {
+    expect(isSafeFinderEntryName("holiday photo.png")).toBe(true);
+    for (const name of ["", ".", "..", "../photo.png", "folder/photo.png", "bad\nname"]) {
+      expect(isSafeFinderEntryName(name)).toBe(false);
+    }
   });
 });

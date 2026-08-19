@@ -291,13 +291,21 @@ export function getFinderPlanPreviewSummaryViewModel(preview: {
   operationCount: number;
   destructiveOperationCount: number;
   moveFiles: Array<{ from: string; to: string }>;
+  copyFiles?: Array<{ from: string; to: string }>;
 }): {
+  copyCount: number;
+  copyItems: Array<{ key: string; label: string }>;
   destructiveOperationCount: number;
   moveCount: number;
   moveItems: Array<{ key: string; label: string }>;
   operationCount: number;
 } {
   return {
+    copyCount: preview.copyFiles?.length ?? 0,
+    copyItems: (preview.copyFiles ?? []).slice(0, 3).map((copy) => ({
+      key: `${copy.from}->${copy.to}`,
+      label: formatFinderPreviewMove(copy, preview.rootPath)
+    })),
     destructiveOperationCount: preview.destructiveOperationCount,
     moveCount: preview.moveFiles.length,
     moveItems: preview.moveFiles.slice(0, 3).map((move) => ({
@@ -1135,6 +1143,7 @@ export function getLocalReplayViewModel(replay: {
       destructiveOperationCount?: number;
       createFolderCount?: number;
       moveFileCount?: number;
+      copyFileCount?: number;
     }>;
     screenshots: Array<{
       stage: string;
@@ -1315,6 +1324,7 @@ export function formatReplayAction(action: {
   destructiveOperationCount?: number;
   createFolderCount?: number;
   moveFileCount?: number;
+  copyFileCount?: number;
 }): string {
   if (action.type === "plan") {
     return `${action.type}: ${action.providerLabel ?? ""} ${action.command ?? ""}`.trim();
@@ -1394,6 +1404,7 @@ export function formatReplayAction(action: {
       typeof action.destructiveOperationCount === "number" ? `${action.destructiveOperationCount} destructive` : "",
       typeof action.createFolderCount === "number" ? `${action.createFolderCount} folders` : "",
       typeof action.moveFileCount === "number" ? `${action.moveFileCount} moves` : "",
+      typeof action.copyFileCount === "number" ? `${action.copyFileCount} copies` : "",
       sanitizePetRouteOutcomeString(action.rootPath ?? "")
     ]);
   }

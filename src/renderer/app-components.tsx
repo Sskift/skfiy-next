@@ -77,9 +77,11 @@ export function FinderPlanPreviewSummary({ preview }: { preview: FinderPlanPrevi
         <span>{previewViewModel.operationCount} operations</span>
         <span>{previewViewModel.destructiveOperationCount} destructive</span>
         <span>{previewViewModel.moveCount} moves</span>
+        <span>{previewViewModel.copyCount} copies</span>
       </div>
       <div className="finder-plan-moves">
         {previewViewModel.moveItems.map((move) => <em key={move.key}>{move.label}</em>)}
+        {previewViewModel.copyItems.map((copy) => <em key={copy.key}>Copy: {copy.label}</em>)}
       </div>
     </div>
   );

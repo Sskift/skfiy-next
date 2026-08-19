@@ -25,6 +25,44 @@ function createClientWithResponses(responses: DesktopHelperProcessResult[]) {
 }
 
 describe("DesktopHelperClient", () => {
+  it("binds atomic no-replace copies to the exact approved file identity", async () => {
+    const { calls, client } = createClientWithResponses([{
+      stdout: JSON.stringify({
+        ok: true,
+        command: "atomic-copy-no-replace",
+        data: { state: "copied" }
+      }),
+      stderr: "",
+      exitCode: 0
+    }]);
+
+    await expect(client.atomicCopyFileNoReplace({
+      sourcePath: "/tmp/source.txt",
+      destinationPath: "/tmp/destination.txt",
+      expectedSourceIdentity: {
+        device: 1,
+        inode: 2,
+        size: 3,
+        modifiedAtMs: 4.5,
+        changedAtMs: 6.75
+      }
+    })).resolves.toEqual({ state: "copied" });
+
+    expect(calls).toEqual([{
+      command: "/tmp/skfiy-helper",
+      args: [
+        "atomic-copy-no-replace",
+        "--source", "/tmp/source.txt",
+        "--destination", "/tmp/destination.txt",
+        "--expected-device", "1",
+        "--expected-inode", "2",
+        "--expected-size", "3",
+        "--expected-modified-at-ms", "4.5",
+        "--expected-changed-at-ms", "6.75"
+      ]
+    }]);
+  });
+
   it("builds safe argument arrays for each helper command", async () => {
     const ok = { stdout: "{\"ok\":true}", stderr: "", exitCode: 0 };
     const { calls, client } = createClientWithResponses([

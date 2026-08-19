@@ -12,6 +12,7 @@ export interface FinderPlanPreviewTranscriptPayload {
   destructiveOperationCount: number;
   createFolders: string[];
   moveFiles: Array<{ from: string; to: string }>;
+  copyFiles?: Array<{ from: string; to: string }>;
 }
 
 export type ComputerUseTurnEvent =
@@ -156,6 +157,7 @@ export type TurnTranscriptAction =
     destructiveOperationCount: number;
     createFolderCount: number;
     moveFileCount: number;
+    copyFileCount?: number;
   }
   | {
     type: "confirm_finder_plan";
@@ -338,7 +340,8 @@ export function createTurnTranscript(
           operationCount: event.preview.operationCount,
           destructiveOperationCount: event.preview.destructiveOperationCount,
           createFolderCount: event.preview.createFolders.length,
-          moveFileCount: event.preview.moveFiles.length
+          moveFileCount: event.preview.moveFiles.length,
+          copyFileCount: event.preview.copyFiles?.length ?? 0
         });
         mergeApp(apps, {
           name: "Finder",

@@ -98,7 +98,10 @@ function cloneFinderPlanPreview(preview: FinderPlanPreview): FinderPlanPreview {
   return {
     ...preview,
     createFolders: [...preview.createFolders],
-    moveFiles: preview.moveFiles.map((move) => ({ ...move }))
+    moveFiles: preview.moveFiles.map((move) => ({ ...move })),
+    ...(preview.copyFiles ? {
+      copyFiles: preview.copyFiles.map((copy) => ({ ...copy }))
+    } : {})
   };
 }
 
