@@ -51,7 +51,7 @@ export type TaskControlPhase = typeof TASK_CONTROL_PHASES[number];
 export type TaskControlOutcome = typeof TASK_CONTROL_OUTCOMES[number];
 export type TaskControlRecoveryAction = typeof TASK_CONTROL_RECOVERY_ACTIONS[number];
 export type TaskControlSideEffectState = typeof TASK_CONTROL_SIDE_EFFECT_STATES[number];
-export type TaskControlApprovalGate = "action-plan" | "finder-plan";
+export type TaskControlApprovalGate = "action-plan" | "finder-plan" | "chrome-submit";
 
 export type TaskControlStatus =
   | "waiting"
@@ -88,6 +88,14 @@ export interface TaskControlApproval {
   gate: TaskControlApprovalGate;
   planId: string;
   finderPlanPreview?: TaskControlFinderPlanPreview;
+  chromeSubmitBinding?: TaskControlChromeSubmitBinding;
+}
+
+export interface TaskControlChromeSubmitBinding {
+  schemaVersion: 1;
+  url: string;
+  fieldSelectors: string[];
+  submitSelector: string;
 }
 
 export interface TaskControlSnapshot {
@@ -147,8 +155,19 @@ const SNAPSHOT_REQUIRED_KEYS = [
   "replayAvailable",
   "recoveryActions"
 ];
-const APPROVAL_KEYS = new Set(["gate", "planId", "finderPlanPreview"]);
+const APPROVAL_KEYS = new Set([
+  "gate",
+  "planId",
+  "finderPlanPreview",
+  "chromeSubmitBinding"
+]);
 const APPROVAL_REQUIRED_KEYS = ["gate", "planId"];
+const CHROME_SUBMIT_BINDING_KEYS = new Set([
+  "schemaVersion",
+  "url",
+  "fieldSelectors",
+  "submitSelector"
+]);
 const FINDER_PREVIEW_KEYS = new Set([
   "rootPath",
   "operationCount",
@@ -246,7 +265,11 @@ export function isTaskControlApproval(
     return false;
   }
   if (
-    (approval.gate !== "action-plan" && approval.gate !== "finder-plan")
+    (
+      approval.gate !== "action-plan"
+      && approval.gate !== "finder-plan"
+      && approval.gate !== "chrome-submit"
+    )
     || !isBoundedIdentifier(approval.planId)
   ) {
     return false;
@@ -254,11 +277,39 @@ export function isTaskControlApproval(
 
   if (approval.gate === "action-plan") {
     return approval.finderPlanPreview === undefined
+      && approval.chromeSubmitBinding === undefined
       && (!plan || approval.planId === plan.planId);
   }
 
+  if (approval.gate === "chrome-submit") {
+    return approval.finderPlanPreview === undefined
+      && isTaskControlChromeSubmitBinding(approval.chromeSubmitBinding)
+      && (!plan || (
+        plan.route === "chrome"
+        && approval.planId.startsWith(`${plan.planId}:`)
+      ));
+  }
+
   return isTaskControlFinderPlanPreview(approval.finderPlanPreview)
+    && approval.chromeSubmitBinding === undefined
     && (!plan || approval.planId.startsWith(`${plan.planId}:`));
+}
+
+export function isTaskControlChromeSubmitBinding(
+  value: unknown
+): value is TaskControlChromeSubmitBinding {
+  const binding = readRecord(value);
+  return Boolean(binding)
+    && hasStrictKeys(
+      binding!,
+      CHROME_SUBMIT_BINDING_KEYS,
+      ["schemaVersion", "url", "fieldSelectors", "submitSelector"]
+    )
+    && binding!.schemaVersion === 1
+    && isBoundedText(binding!.url, MAX_TEXT_LENGTH)
+    && isBoundedTextList(binding!.fieldSelectors)
+    && (binding!.fieldSelectors as string[]).length > 0
+    && isBoundedText(binding!.submitSelector, MAX_TEXT_LENGTH);
 }
 
 export function isTaskControlFinderPlanPreview(
@@ -365,6 +416,12 @@ export function cloneTaskControlApproval(
         ...(approval.finderPlanPreview.copyFiles ? {
           copyFiles: approval.finderPlanPreview.copyFiles.map((copy) => ({ ...copy }))
         } : {})
+      }
+    } : {}),
+    ...(approval.chromeSubmitBinding ? {
+      chromeSubmitBinding: {
+        ...approval.chromeSubmitBinding,
+        fieldSelectors: [...approval.chromeSubmitBinding.fieldSelectors]
       }
     } : {})
   };

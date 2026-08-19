@@ -61,6 +61,30 @@ describe("buildCdpCommand", () => {
     });
   });
 
+  it("binds selector actions to the approved document identity", () => {
+    const expectedPageIdentity = {
+      url: "https://example.com/form",
+      documentId: "document-123"
+    };
+    const fill = buildCdpCommand({
+      type: "fill_selector",
+      selector: "#name",
+      value: "skfiy",
+      expectedPageIdentity
+    });
+    const click = buildCdpCommand({
+      type: "click_selector",
+      selector: "#submit",
+      expectedPageIdentity
+    });
+
+    expect(fill.params.expression).toEqual(expect.stringContaining("SKFIY_PAGE_TARGET_CHANGED"));
+    expect(fill.params.expression).toEqual(expect.stringContaining("https://example.com/form"));
+    expect(fill.params.expression).toEqual(expect.stringContaining("document-123"));
+    expect(click.params.expression).toEqual(expect.stringContaining("SKFIY_PAGE_TARGET_CHANGED"));
+    expect(click.params.expression).toEqual(expect.stringContaining("document-123"));
+  });
+
   it("builds a selector fill command with input and change events", () => {
     expect(buildCdpCommand({
       type: "fill_selector",
@@ -112,5 +136,8 @@ describe("buildCdpCommand", () => {
     expect(buildCdpCommand({
       type: "extract_page_snapshot"
     }).params.expression).toEqual(expect.stringContaining("document.body"));
+    expect(buildCdpCommand({
+      type: "extract_page_snapshot"
+    }).params.expression).toEqual(expect.stringContaining("performance.timeOrigin"));
   });
 });

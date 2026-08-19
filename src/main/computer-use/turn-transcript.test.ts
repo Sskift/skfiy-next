@@ -450,6 +450,32 @@ describe("createTurnTranscript", () => {
     });
   });
 
+  it("records Chrome submit confirmation without form values", () => {
+    const transcript = createTurnTranscript([{
+      type: "submit_confirmation_required",
+      command: "file:///tmp/skfiy-form.html",
+      binding: {
+        schemaVersion: 1,
+        url: "file:///tmp/skfiy-form.html",
+        fieldSelectors: ["#name", "#role"],
+        submitSelector: "#submit"
+      },
+      reason: "Confirm submitting 2 non-sensitive fields with #submit."
+    }]);
+
+    expect(transcript).toMatchObject({
+      approvalRequired: true,
+      outcome: "approval_required",
+      apps: [{ name: "Chrome", bundleId: "com.google.Chrome" }],
+      actions: [{
+        type: "confirm_chrome_submit",
+        fieldSelectors: ["#name", "#role"],
+        submitSelector: "#submit"
+      }]
+    });
+    expect(JSON.stringify(transcript)).not.toContain("private-value");
+  });
+
   it("uses OCR labels as screenshot grounding when accessibility is blocked", () => {
     expect(createTurnTranscript([
       {

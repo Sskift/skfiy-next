@@ -1,6 +1,11 @@
 import os from "node:os";
 import path from "node:path";
-import { buildCdpCommand, type CdpCommand } from "../computer-use/browser-control.js";
+import {
+  buildCdpCommand,
+  type BrowserPageIdentity,
+  type BrowserStructuredAction,
+  type CdpCommand
+} from "../computer-use/browser-control.js";
 import { createSensitiveTextPatterns } from "../computer-use/sensitive-ui-policy.js";
 import type {
   DesktopActionResult,
@@ -42,8 +47,16 @@ export interface ChromeFormField {
 
 export interface ChromeCurrentPageSnapshot {
   url: string;
+  documentId: string;
   title: string;
   text: string;
+}
+
+export interface ChromeSubmitConfirmationBinding {
+  schemaVersion: 1;
+  url: string;
+  fieldSelectors: string[];
+  submitSelector: string;
 }
 
 type ChromePageIntent =
@@ -68,6 +81,12 @@ export type ChromeTaskEvent =
       type: "approval_required";
       command: string;
       risk: RiskDecision;
+    }
+  | {
+      type: "submit_confirmation_required";
+      command: string;
+      binding: ChromeSubmitConfirmationBinding;
+      reason: string;
     }
   | {
       type: "locating_app";
@@ -104,6 +123,13 @@ export type ChromeTaskEvent =
   | {
       type: "verification_failed";
       stage: "input" | "connection" | "navigation" | "interaction" | "extraction" | "sensitive";
+      code?: "target_changed";
+      reason: string;
+    }
+  | {
+      type: "recovery_attempted";
+      stage: "interaction";
+      action: "reobserve";
       reason: string;
     }
   | {
@@ -114,6 +140,7 @@ export type ChromeTaskEvent =
 
 export interface ChromeTaskOptions {
   approved?: boolean;
+  submitApproved?: boolean;
   desktopClient?: ChromeDesktopClient;
   createScreenshotPath?: (stage: "fallback") => string;
 }
@@ -148,6 +175,16 @@ export async function* runChromePageTask(
   };
 
   if (!options.approved) {
+    return;
+  }
+
+  if (isChromeFormIntent(parsed) && !options.submitApproved) {
+    yield {
+      type: "submit_confirmation_required",
+      command,
+      binding: createChromeSubmitConfirmationBinding(parsed),
+      reason: `Confirm submitting ${parsed.fields.length} non-sensitive fields with ${parsed.submitSelector}.`
+    };
     return;
   }
 
@@ -225,39 +262,58 @@ export async function* runChromePageTask(
     await client.waitForPageReady?.();
 
     if (isChromeFormIntent(parsed)) {
-      try {
-        for (const field of parsed.fields) {
-          await client.sendCdpCommand(buildCdpCommand({
+      const pageSnapshotResult = await client.sendCdpCommand(
+        buildCdpCommand({ type: "extract_page_snapshot" })
+      );
+      const pageSnapshot = readCurrentPageSnapshotResult(pageSnapshotResult);
+      const expectedPageIdentity = readPageIdentity(pageSnapshot);
+      yield {
+        type: "action_verified",
+        actionType: "current_page_snapshot",
+        status: "passed",
+        message: `Bound form actions to: ${pageSnapshot.title || "untitled"} (${pageSnapshot.url})`
+      };
+
+      for (const field of parsed.fields) {
+        const result = await executeBoundChromeSelectorAction(client, {
             type: "fill_selector",
             selector: field.selector,
-            value: field.value
-          }));
-          yield {
-            type: "action_verified",
-            actionType: "fill_selector",
-            status: "passed",
-            message: `Filled ${field.selector}.`
-          };
+            value: field.value,
+            expectedPageIdentity
+        }, field.selector, expectedPageIdentity);
+        if (result.recoveryAttempted) {
+          yield createChromeInteractionRecoveryEvent();
         }
-
-        await client.sendCdpCommand(buildCdpCommand({
-          type: "click_selector",
-          selector: parsed.submitSelector
-        }));
+        if (!result.ok) {
+          yield createChromeInteractionFailureEvent(result);
+          return;
+        }
         yield {
           type: "action_verified",
-          actionType: "click_selector",
+          actionType: "fill_selector",
           status: "passed",
-          message: `Clicked ${parsed.submitSelector}.`
+          message: `Filled ${field.selector}.`
         };
-      } catch (error) {
-        yield {
-          type: "verification_failed",
-          stage: "interaction",
-          reason: readErrorMessage(error, "Chrome form interaction failed.")
-        };
+      }
+
+      const submitResult = await executeBoundChromeSelectorAction(client, {
+        type: "click_selector",
+        selector: parsed.submitSelector,
+        expectedPageIdentity
+      }, parsed.submitSelector, expectedPageIdentity);
+      if (submitResult.recoveryAttempted) {
+        yield createChromeInteractionRecoveryEvent();
+      }
+      if (!submitResult.ok) {
+        yield createChromeInteractionFailureEvent(submitResult);
         return;
       }
+      yield {
+        type: "action_verified",
+        actionType: "click_selector",
+        status: "passed",
+        message: `Clicked ${parsed.submitSelector}.`
+      };
 
       await client.waitForPageReady?.();
     }
@@ -293,9 +349,121 @@ export async function* runChromePageTask(
   }
 }
 
+function createChromeSubmitConfirmationBinding(
+  intent: Extract<ChromePageIntent, { ok: true; kind: "form" }>
+): ChromeSubmitConfirmationBinding {
+  return {
+    schemaVersion: 1,
+    url: intent.url,
+    fieldSelectors: intent.fields.map((field) => field.selector),
+    submitSelector: intent.submitSelector
+  };
+}
+
+type BoundChromeSelectorAction = Extract<
+  BrowserStructuredAction,
+  { type: "fill_selector" | "click_selector" }
+>;
+
+type BoundChromeSelectorActionResult =
+  | { ok: true; recoveryAttempted: boolean }
+  | {
+      ok: false;
+      recoveryAttempted: true;
+      code?: "target_changed";
+      reason: string;
+    };
+
+async function executeBoundChromeSelectorAction(
+  client: ChromeTaskClient,
+  action: BoundChromeSelectorAction,
+  selector: string,
+  expectedPageIdentity: BrowserPageIdentity
+): Promise<BoundChromeSelectorActionResult> {
+  try {
+    await client.sendCdpCommand(buildCdpCommand(action));
+    return { ok: true, recoveryAttempted: false };
+  } catch {
+    let observedPageIdentity: BrowserPageIdentity;
+    try {
+      const snapshotResult = await client.sendCdpCommand(
+        buildCdpCommand({ type: "extract_page_snapshot" })
+      );
+      observedPageIdentity = readPageIdentity(readCurrentPageSnapshotResult(snapshotResult));
+    } catch {
+      return {
+        ok: false,
+        recoveryAttempted: true,
+        reason: `Chrome could not re-observe the page after ${selector} failed.`
+      };
+    }
+
+    if (!isSamePageIdentity(observedPageIdentity, expectedPageIdentity)) {
+      return {
+        ok: false,
+        recoveryAttempted: true,
+        code: "target_changed",
+        reason: `Chrome page target changed before ${selector}; prepare a new plan.`
+      };
+    }
+
+    try {
+      await client.sendCdpCommand(buildCdpCommand(action));
+      return { ok: true, recoveryAttempted: true };
+    } catch (error) {
+      return {
+        ok: false,
+        recoveryAttempted: true,
+        reason: readErrorMessage(error, `Chrome selector action failed twice for ${selector}.`)
+      };
+    }
+  }
+}
+
+function createChromeInteractionRecoveryEvent(): Extract<ChromeTaskEvent, {
+  type: "recovery_attempted";
+}> {
+  return {
+    type: "recovery_attempted",
+    stage: "interaction",
+    action: "reobserve",
+    reason: "Chrome selector action failed; re-observing the bound page once."
+  };
+}
+
+function createChromeInteractionFailureEvent(
+  result: Extract<BoundChromeSelectorActionResult, { ok: false }>
+): Extract<ChromeTaskEvent, { type: "verification_failed" }> {
+  return {
+    type: "verification_failed",
+    stage: "interaction",
+    ...(result.code ? { code: result.code } : {}),
+    reason: result.reason
+  };
+}
+
+function readPageIdentity(snapshot: ChromeCurrentPageSnapshot): BrowserPageIdentity {
+  return {
+    url: snapshot.url,
+    documentId: snapshot.documentId
+  };
+}
+
+function isSamePageIdentity(
+  left: BrowserPageIdentity,
+  right: BrowserPageIdentity
+): boolean {
+  return left.url === right.url && left.documentId === right.documentId;
+}
+
 export function readChromeTaskRisk(input: string): RiskDecision {
   const parsed = parseChromePageIntent(input);
   return parsed.ok ? { ...CHROME_PAGE_RISK } : blockedDecision(parsed.reason);
+}
+
+export function requiresChromeSubmitConfirmation(input: string): boolean {
+  const parsed = parseChromePageIntent(input);
+  return parsed.ok && isChromeFormIntent(parsed);
 }
 
 function hasSensitiveText(value: string): boolean {
@@ -646,6 +814,8 @@ function readCurrentPageSnapshotResult(value: unknown): ChromeCurrentPageSnapsho
     && typeof value.result.value === "object"
     && "url" in value.result.value
     && typeof value.result.value.url === "string"
+    && "documentId" in value.result.value
+    && typeof value.result.value.documentId === "string"
     && "title" in value.result.value
     && typeof value.result.value.title === "string"
     && "text" in value.result.value
@@ -653,12 +823,13 @@ function readCurrentPageSnapshotResult(value: unknown): ChromeCurrentPageSnapsho
   ) {
     return {
       url: value.result.value.url,
+      documentId: value.result.value.documentId,
       title: value.result.value.title,
       text: value.result.value.text
     };
   }
 
-  throw new Error("Chrome CDP current page snapshot did not return url, title, and text.");
+  throw new Error("Chrome CDP current page snapshot did not return url, documentId, title, and text.");
 }
 
 function readErrorMessage(error: unknown, fallback: string): string {

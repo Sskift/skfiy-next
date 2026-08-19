@@ -153,6 +153,54 @@ describe("task control contract", () => {
     })).toBe(false);
   });
 
+  it("accepts only derived Chrome submit approvals with a value-free binding", () => {
+    const chromePlan = { ...createPlan(), route: "chrome" as const };
+    const approval = {
+      gate: "chrome-submit" as const,
+      planId: "plan-1:submit-derived",
+      chromeSubmitBinding: {
+        schemaVersion: 1 as const,
+        url: "https://example.test/form",
+        fieldSelectors: ["#name", "#role"],
+        submitSelector: "#submit"
+      }
+    };
+
+    expect(isTaskControlSnapshot(createSnapshot({
+      phase: "approval",
+      status: "approval_required",
+      plan: chromePlan,
+      approval
+    }))).toBe(true);
+    expect(isTaskControlSnapshot(createSnapshot({
+      phase: "approval",
+      status: "approval_required",
+      plan: chromePlan,
+      approval: { ...approval, planId: chromePlan.planId }
+    }))).toBe(false);
+    expect(isTaskControlSnapshot(createSnapshot({
+      phase: "approval",
+      status: "approval_required",
+      plan: chromePlan,
+      approval: { gate: "chrome-submit", planId: approval.planId }
+    }))).toBe(false);
+    expect(isTaskControlSnapshot(createSnapshot({
+      phase: "approval",
+      status: "approval_required",
+      plan: chromePlan,
+      approval: {
+        ...approval,
+        finderPlanPreview: {
+          rootPath: "/tmp/fixture",
+          operationCount: 0,
+          destructiveOperationCount: 0,
+          createFolders: [],
+          moveFiles: []
+        }
+      }
+    }))).toBe(false);
+  });
+
   it("accepts each canonical terminal outcome", () => {
     for (const outcome of [
       "app_policy_denied",

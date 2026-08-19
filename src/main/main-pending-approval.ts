@@ -2,6 +2,7 @@ import type { AssistantComputerUseToolIdentity } from "./assistant-computer-use-
 import { isSameComputerUseToolIdentity } from "./main-computer-use-tool-result.js";
 import type { ExecutableCommandRoute } from "./task-routing.js";
 import type { FinderPlanPreview } from "./orchestrator/finder-task.js";
+import type { ChromeSubmitConfirmationBinding } from "./orchestrator/chrome-task.js";
 import {
   withRouteTaskEventMetadata,
   type ManualMode,
@@ -9,7 +10,7 @@ import {
 } from "./task-event-view.js";
 
 export type ComputerUseCommandRoute = ExecutableCommandRoute;
-export type ComputerUseApprovalGate = "action-plan" | "finder-plan";
+export type ComputerUseApprovalGate = "action-plan" | "finder-plan" | "chrome-submit";
 
 export interface PendingApproval extends AssistantComputerUseToolIdentity {
   command: string;
@@ -19,7 +20,9 @@ export interface PendingApproval extends AssistantComputerUseToolIdentity {
   planId: string;
   actionApproved: boolean;
   finderPlanApproved: boolean;
+  chromeSubmitApproved: boolean;
   approvedPlanPreview?: FinderPlanPreview;
+  approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
 }
 
 export interface CreatePendingApprovalInput {
@@ -31,12 +34,15 @@ export interface CreatePendingApprovalInput {
   planId: string;
   actionApproved: boolean;
   finderPlanApproved: boolean;
+  chromeSubmitApproved?: boolean;
   approvedPlanPreview?: FinderPlanPreview;
+  approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
 }
 
 export interface ApprovedPendingApprovalContinuation {
   actionApproved: boolean;
   finderPlanApproved: boolean;
+  chromeSubmitApproved: boolean;
 }
 
 export interface ComputerUseToolCallState {
@@ -81,7 +87,11 @@ export function createPendingApproval(
     planId,
     actionApproved: input.actionApproved,
     finderPlanApproved: input.finderPlanApproved,
-    ...(input.approvedPlanPreview ? { approvedPlanPreview: cloneFinderPlanPreview(input.approvedPlanPreview) } : {})
+    chromeSubmitApproved: input.chromeSubmitApproved === true,
+    ...(input.approvedPlanPreview ? { approvedPlanPreview: cloneFinderPlanPreview(input.approvedPlanPreview) } : {}),
+    ...(input.approvedChromeSubmitBinding ? {
+      approvedChromeSubmitBinding: cloneChromeSubmitBinding(input.approvedChromeSubmitBinding)
+    } : {})
   };
 }
 
@@ -90,7 +100,17 @@ export function readApprovedPendingApprovalContinuation(
 ): ApprovedPendingApprovalContinuation {
   return {
     actionApproved: approval.actionApproved === true || approval.gate === "action-plan",
-    finderPlanApproved: approval.finderPlanApproved === true || approval.gate === "finder-plan"
+    finderPlanApproved: approval.finderPlanApproved === true || approval.gate === "finder-plan",
+    chromeSubmitApproved: approval.chromeSubmitApproved === true || approval.gate === "chrome-submit"
+  };
+}
+
+function cloneChromeSubmitBinding(
+  binding: ChromeSubmitConfirmationBinding
+): ChromeSubmitConfirmationBinding {
+  return {
+    ...binding,
+    fieldSelectors: [...binding.fieldSelectors]
   };
 }
 

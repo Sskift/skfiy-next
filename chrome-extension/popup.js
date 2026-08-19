@@ -689,7 +689,8 @@ function createWakeDirectiveFromLocation() {
     wakeAction: readWakeAction(),
     selector: readWakeParam("skfiySelector"),
     text: readWakeParam("skfiyText"),
-    dy: readWakeDy()
+    dy: readWakeDy(),
+    confirmed: readWakeParam("skfiyConfirmed") === "1"
   };
 }
 
@@ -853,7 +854,11 @@ function createPageControlRequestFromWake() {
       return { kind: "fill", selector, value: readWakeParam("skfiyText") };
     }
     if (wakeAction === "submit") {
-      return { kind: "submit", selector, confirmed: true };
+      return {
+        kind: "submit",
+        selector,
+        ...(readWakeParam("skfiyConfirmed") === "1" ? { confirmed: true } : {})
+      };
     }
     if (wakeAction === "scroll") {
       return { kind: "scroll", deltaY: readWakeDy() };

@@ -415,6 +415,10 @@ function runPageAction(action) {
     return { result: "blocked", reason: "missing_action" };
   }
 
+  if (action.kind === "submit" && action.confirmed !== true) {
+    return { result: "blocked", reason: "form_submission_requires_confirmation" };
+  }
+
   const pageSafety = collectPageSafety();
   const sensitivePauseReason = document.documentElement.getAttribute("data-skfiy-sensitive-paused");
   const pauseableAction = ["click", "fill", "submit", "scroll"].includes(action?.kind);

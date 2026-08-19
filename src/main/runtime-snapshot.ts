@@ -628,6 +628,14 @@ function summarizeAction(action: TurnTranscriptAction): Record<string, unknown> 
         destructiveOperationCount: action.destructiveOperationCount,
         reason: sanitizeRuntimeSnapshotText(action.reason)
       };
+    case "confirm_chrome_submit":
+      return {
+        type: action.type,
+        url: sanitizeRuntimeSnapshotText(action.url),
+        fieldSelectors: action.fieldSelectors.map(sanitizeRuntimeSnapshotText),
+        submitSelector: sanitizeRuntimeSnapshotText(action.submitSelector),
+        reason: sanitizeRuntimeSnapshotText(action.reason)
+      };
     case "recover":
       return {
         type: action.type,

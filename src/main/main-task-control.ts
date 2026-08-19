@@ -106,6 +106,8 @@ export function readComputerUseTaskSideEffectState(
     actionApproved?: boolean;
     finderPlanApproved?: boolean;
     finderPlanConfirmationRequired?: boolean;
+    chromeSubmitApproved?: boolean;
+    chromeSubmitConfirmationRequired?: boolean;
   } = {}
 ): TaskControlSideEffectState | undefined {
   if (!plan.mutating) {

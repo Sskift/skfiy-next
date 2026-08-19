@@ -141,7 +141,18 @@ const taskControlPlanKeys = new Set([
   "mutating"
 ]);
 const taskControlRiskKeys = new Set(["level", "reason", "requiresApproval"]);
-const taskControlApprovalKeys = new Set(["gate", "planId", "finderPlanPreview"]);
+const taskControlApprovalKeys = new Set([
+  "gate",
+  "planId",
+  "finderPlanPreview",
+  "chromeSubmitBinding"
+]);
+const taskControlChromeSubmitBindingKeys = new Set([
+  "schemaVersion",
+  "url",
+  "fieldSelectors",
+  "submitSelector"
+]);
 const taskControlFinderPreviewKeys = new Set([
   "rootPath",
   "operationCount",
@@ -1705,7 +1716,11 @@ function isTaskControlApproval(value: unknown, planValue: unknown): boolean {
     return false;
   }
   if (
-    (approval.gate !== "action-plan" && approval.gate !== "finder-plan")
+    (
+      approval.gate !== "action-plan"
+      && approval.gate !== "finder-plan"
+      && approval.gate !== "chrome-submit"
+    )
     || !isTaskControlIdentifier(approval.planId)
     || !isTaskControlIdentifier(plan.planId)
   ) {
@@ -1713,11 +1728,36 @@ function isTaskControlApproval(value: unknown, planValue: unknown): boolean {
   }
 
   if (approval.gate === "action-plan") {
-    return approval.planId === plan.planId && approval.finderPlanPreview === undefined;
+    return approval.planId === plan.planId
+      && approval.finderPlanPreview === undefined
+      && approval.chromeSubmitBinding === undefined;
+  }
+
+  if (approval.gate === "chrome-submit") {
+    return plan.route === "chrome"
+      && approval.planId.startsWith(`${plan.planId}:`)
+      && approval.finderPlanPreview === undefined
+      && isTaskControlChromeSubmitBinding(approval.chromeSubmitBinding);
   }
 
   return approval.planId.startsWith(`${plan.planId}:`)
-    && isTaskControlFinderPlanPreview(approval.finderPlanPreview);
+    && isTaskControlFinderPlanPreview(approval.finderPlanPreview)
+    && approval.chromeSubmitBinding === undefined;
+}
+
+function isTaskControlChromeSubmitBinding(value: unknown): boolean {
+  const binding = readTaskControlRecord(value);
+  return Boolean(binding)
+    && hasStrictTaskControlKeys(
+      binding!,
+      taskControlChromeSubmitBindingKeys,
+      ["schemaVersion", "url", "fieldSelectors", "submitSelector"]
+    )
+    && binding!.schemaVersion === 1
+    && isTaskControlText(binding!.url, 2_000)
+    && isTaskControlTextList(binding!.fieldSelectors)
+    && (binding!.fieldSelectors as unknown[]).length > 0
+    && isTaskControlText(binding!.submitSelector, 2_000);
 }
 
 function isTaskControlFinderPlanPreview(value: unknown): boolean {
@@ -1895,6 +1935,12 @@ function cloneTaskControlApproval(
         ...(approval.finderPlanPreview.copyFiles ? {
           copyFiles: approval.finderPlanPreview.copyFiles.map((copy) => ({ ...copy }))
         } : {})
+      }
+    } : {}),
+    ...(approval.chromeSubmitBinding ? {
+      chromeSubmitBinding: {
+        ...approval.chromeSubmitBinding,
+        fieldSelectors: [...approval.chromeSubmitBinding.fieldSelectors]
       }
     } : {})
   };

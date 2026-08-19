@@ -15,9 +15,22 @@ export interface FinderPlanPreviewTranscriptPayload {
   copyFiles?: Array<{ from: string; to: string }>;
 }
 
+export interface ChromeSubmitConfirmationTranscriptPayload {
+  schemaVersion: 1;
+  url: string;
+  fieldSelectors: string[];
+  submitSelector: string;
+}
+
 export type ComputerUseTurnEvent =
   | { type: "started"; command: string; risk: RiskDecision }
   | { type: "approval_required"; command: string; risk: RiskDecision }
+  | {
+    type: "submit_confirmation_required";
+    command: string;
+    binding: ChromeSubmitConfirmationTranscriptPayload;
+    reason: string;
+  }
   | {
     type: "tool_call";
     turnId: string;
@@ -73,8 +86,13 @@ export type ComputerUseTurnEvent =
     message?: string;
     reason?: string;
   }
-  | { type: "verification_failed"; stage: string; reason: string }
-  | { type: "recovery_attempted"; stage: string; action: "activate" | "open"; reason: string }
+  | { type: "verification_failed"; stage: string; code?: string; reason: string }
+  | {
+    type: "recovery_attempted";
+    stage: string;
+    action: "activate" | "open" | "reobserve";
+    reason: string;
+  }
   | { type: "screenshot_before"; path: string; observation: DesktopAppState }
   | { type: "finder_selection_observed"; context: FinderSelectionResult }
   | { type: "plan_preview"; preview: FinderPlanPreviewTranscriptPayload }
@@ -166,7 +184,19 @@ export type TurnTranscriptAction =
     destructiveOperationCount: number;
     reason: string;
   }
-  | { type: "recover"; action: "activate" | "open"; stage: string; reason: string }
+  | {
+    type: "confirm_chrome_submit";
+    url: string;
+    fieldSelectors: string[];
+    submitSelector: string;
+    reason: string;
+  }
+  | {
+    type: "recover";
+    action: "activate" | "open" | "reobserve";
+    stage: string;
+    reason: string;
+  }
   | {
     type: "verify";
     actionType: string;
@@ -222,6 +252,22 @@ export function createTurnTranscript(
         risk = event.risk;
         approvalRequired = true;
         outcome = "approval_required";
+        break;
+      case "submit_confirmation_required":
+        command = event.command;
+        approvalRequired = true;
+        outcome = "approval_required";
+        actions.push({
+          type: "confirm_chrome_submit",
+          url: event.binding.url,
+          fieldSelectors: [...event.binding.fieldSelectors],
+          submitSelector: event.binding.submitSelector,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
         break;
       case "tool_call":
         command = event.command;

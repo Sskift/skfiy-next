@@ -50,7 +50,8 @@ describe("main pending approval helpers", () => {
     });
     expect(readApprovedPendingApprovalContinuation(actionApproval)).toEqual({
       actionApproved: true,
-      finderPlanApproved: false
+      finderPlanApproved: false,
+      chromeSubmitApproved: false
     });
 
     const finderApproval = createPendingApproval({
@@ -68,8 +69,39 @@ describe("main pending approval helpers", () => {
     });
     expect(readApprovedPendingApprovalContinuation(finderApproval)).toEqual({
       actionApproved: true,
-      finderPlanApproved: true
+      finderPlanApproved: true,
+      chromeSubmitApproved: false
     });
+  });
+
+  it("resumes a Chrome submit gate with both approvals and a value-free binding", () => {
+    const binding = {
+      schemaVersion: 1 as const,
+      url: "https://example.test/form",
+      fieldSelectors: ["#name"],
+      submitSelector: "#submit"
+    };
+    const approval = createBoundPendingApproval({
+      command: "fill Chrome form",
+      mode: "active",
+      identity: { turnId: "turn-chrome", toolCallId: "tool-chrome" },
+      route: { kind: "chrome", bundleId: CHROME_BUNDLE_ID },
+      gate: "chrome-submit",
+      planId: "plan-chrome:submit-derived",
+      actionApproved: true,
+      finderPlanApproved: false,
+      chromeSubmitApproved: false,
+      approvedChromeSubmitBinding: binding
+    });
+
+    expect(readApprovedPendingApprovalContinuation(approval)).toEqual({
+      actionApproved: true,
+      finderPlanApproved: false,
+      chromeSubmitApproved: true
+    });
+    expect(approval.approvedChromeSubmitBinding).toEqual(binding);
+    binding.fieldSelectors[0] = "#mutated";
+    expect(approval.approvedChromeSubmitBinding?.fieldSelectors).toEqual(["#name"]);
   });
 
   it("preserves assistant tool identity and route state for approval resumption", () => {
@@ -110,6 +142,7 @@ describe("main pending approval helpers", () => {
       planId: "test-plan-tool-call-1",
       actionApproved: true,
       finderPlanApproved: false,
+      chromeSubmitApproved: false,
       approvedPlanPreview
     });
   });
@@ -138,7 +171,8 @@ describe("main pending approval helpers", () => {
       gate: "action-plan",
       planId: "test-plan-tool-call-2",
       actionApproved: false,
-      finderPlanApproved: false
+      finderPlanApproved: false,
+      chromeSubmitApproved: false
     });
   });
 

@@ -13,10 +13,24 @@ export interface BrowserControlModeDecision {
   reason: string;
 }
 
+export interface BrowserPageIdentity {
+  url: string;
+  documentId: string;
+}
+
 export type BrowserStructuredAction =
   | { type: "navigate"; url: string }
-  | { type: "fill_selector"; selector: string; value: string }
-  | { type: "click_selector"; selector: string }
+  | {
+      type: "fill_selector";
+      selector: string;
+      value: string;
+      expectedPageIdentity?: BrowserPageIdentity;
+    }
+  | {
+      type: "click_selector";
+      selector: string;
+      expectedPageIdentity?: BrowserPageIdentity;
+    }
   | { type: "extract_text"; selector?: string }
   | { type: "extract_page_snapshot" };
 
@@ -57,10 +71,17 @@ export function buildCdpCommand(action: BrowserStructuredAction): CdpCommand {
       };
     case "fill_selector":
       return createRuntimeEvaluateCommand(
-        createFillSelectorExpression(action.selector, action.value)
+        createFillSelectorExpression(
+          action.selector,
+          action.value,
+          action.expectedPageIdentity
+        )
       );
     case "click_selector":
-      return createRuntimeEvaluateCommand(createClickSelectorExpression(action.selector));
+      return createRuntimeEvaluateCommand(createClickSelectorExpression(
+        action.selector,
+        action.expectedPageIdentity
+      ));
     case "extract_text":
       return createRuntimeEvaluateCommand(createExtractTextExpression(action.selector));
     case "extract_page_snapshot":
@@ -79,8 +100,13 @@ function createRuntimeEvaluateCommand(expression: string): CdpCommand {
   };
 }
 
-function createFillSelectorExpression(selector: string, value: string): string {
+function createFillSelectorExpression(
+  selector: string,
+  value: string,
+  expectedPageIdentity?: BrowserPageIdentity
+): string {
   return `(() => {
+    ${createPageIdentityGuardExpression(expectedPageIdentity)}
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) {
       throw new Error("Selector not found: ${escapeForTemplate(selector)}");
@@ -100,8 +126,12 @@ function createFillSelectorExpression(selector: string, value: string): string {
   })()`;
 }
 
-function createClickSelectorExpression(selector: string): string {
+function createClickSelectorExpression(
+  selector: string,
+  expectedPageIdentity?: BrowserPageIdentity
+): string {
   return `(() => {
+    ${createPageIdentityGuardExpression(expectedPageIdentity)}
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) {
       throw new Error("Selector not found: ${escapeForTemplate(selector)}");
@@ -128,9 +158,25 @@ function createExtractTextExpression(selector: string | undefined): string {
 function createExtractPageSnapshotExpression(): string {
   return `(() => ({
     url: window.location.href,
+    documentId: String(performance.timeOrigin),
     title: document.title,
     text: document.body?.innerText ?? document.body?.textContent ?? ""
   }))()`;
+}
+
+function createPageIdentityGuardExpression(
+  expectedPageIdentity: BrowserPageIdentity | undefined
+): string {
+  if (!expectedPageIdentity) {
+    return "";
+  }
+
+  return `if (
+      window.location.href !== ${JSON.stringify(expectedPageIdentity.url)}
+      || String(performance.timeOrigin) !== ${JSON.stringify(expectedPageIdentity.documentId)}
+    ) {
+      throw new Error("SKFIY_PAGE_TARGET_CHANGED");
+    }`;
 }
 
 function escapeForTemplate(value: string): string {

@@ -1614,7 +1614,8 @@ function readWakeDirective(url) {
     wakeAction: params.get("skfiyWakeAction") ?? "",
     selector: params.get("skfiySelector") ?? "",
     text: params.get("skfiyText") ?? "",
-    dy: Number.isFinite(dy) ? dy : 0
+    dy: Number.isFinite(dy) ? dy : 0,
+    confirmed: params.get("skfiyConfirmed") === "1"
   };
 }
 
@@ -1631,7 +1632,8 @@ function normalizeWakeDirective(directive) {
     wakeAction: readString(record.wakeAction) ?? "",
     selector: readString(record.selector) ?? "",
     text: readString(record.text) ?? "",
-    dy
+    dy,
+    confirmed: record.confirmed === true
   };
 }
 
@@ -1651,7 +1653,8 @@ function mergeWakeDirectives(primary, fallback) {
     wakeAction: primary.wakeAction || fallback.wakeAction,
     selector: primary.selector || fallback.selector,
     text: primary.text || fallback.text,
-    dy: Number.isFinite(primary.dy) ? primary.dy : fallback.dy
+    dy: Number.isFinite(primary.dy) ? primary.dy : fallback.dy,
+    confirmed: primary.confirmed === true || fallback.confirmed === true
   };
 }
 
@@ -1824,7 +1827,11 @@ function createWakePageControlRequest(directive) {
       return { kind: "fill", selector: directive.selector, value: directive.text };
     }
     if (directive.wakeAction === "submit") {
-      return { kind: "submit", selector: directive.selector, confirmed: true };
+      return {
+        kind: "submit",
+        selector: directive.selector,
+        ...(directive.confirmed === true ? { confirmed: true } : {})
+      };
     }
     if (directive.wakeAction === "scroll") {
       return { kind: "scroll", deltaY: directive.dy };

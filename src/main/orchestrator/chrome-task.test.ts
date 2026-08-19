@@ -27,13 +27,14 @@ function createChromeClient(): ChromeTaskClient & {
       if (command.method === "Runtime.evaluate") {
         if (
           typeof command.params?.expression === "string"
-          && command.params.expression.includes("window.location.href")
+          && command.params.expression.includes("title: document.title")
         ) {
           return {
             result: {
               type: "object",
               value: {
                 url: "file:///tmp/skfiy-chrome.html",
+                documentId: "document-1",
                 title: "skfiy current page",
                 text: "skfiy chrome smoke ready"
               }
@@ -371,7 +372,7 @@ describe("runChromePageTask", () => {
       runChromePageTask(
         "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #name=skfiy; #email=agent@skfiy.test; #role=operator 点击 #submit 并提取正文",
         client,
-        { approved: true }
+        { approved: true, submitApproved: true }
       )
     );
 
@@ -379,6 +380,7 @@ describe("runChromePageTask", () => {
       "started",
       "approval_required",
       "locating_app",
+      "action_verified",
       "action_verified",
       "action_verified",
       "action_verified",
@@ -394,28 +396,34 @@ describe("runChromePageTask", () => {
     expect(client.sendCdpCommand).toHaveBeenNthCalledWith(2, {
       method: "Runtime.evaluate",
       params: expect.objectContaining({
-        expression: expect.stringContaining("#name")
+        expression: expect.stringContaining("window.location.href")
       })
     });
     expect(client.sendCdpCommand).toHaveBeenNthCalledWith(3, {
       method: "Runtime.evaluate",
       params: expect.objectContaining({
-        expression: expect.stringContaining("#email")
+        expression: expect.stringContaining("#name")
       })
     });
     expect(client.sendCdpCommand).toHaveBeenNthCalledWith(4, {
       method: "Runtime.evaluate",
       params: expect.objectContaining({
-        expression: expect.stringContaining("#role")
+        expression: expect.stringContaining("#email")
       })
     });
     expect(client.sendCdpCommand).toHaveBeenNthCalledWith(5, {
       method: "Runtime.evaluate",
       params: expect.objectContaining({
-        expression: expect.stringContaining("#submit")
+        expression: expect.stringContaining("#role")
       })
     });
     expect(client.sendCdpCommand).toHaveBeenNthCalledWith(6, {
+      method: "Runtime.evaluate",
+      params: expect.objectContaining({
+        expression: expect.stringContaining("#submit")
+      })
+    });
+    expect(client.sendCdpCommand).toHaveBeenNthCalledWith(7, {
       method: "Runtime.evaluate",
       params: expect.objectContaining({
         expression: expect.stringContaining("document.body")
@@ -445,6 +453,37 @@ describe("runChromePageTask", () => {
     ]));
   });
 
+  it("requires a separate value-free confirmation before submitting a form", async () => {
+    const client = createChromeClient();
+
+    const events = await collectEvents(
+      runChromePageTask(
+        "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #name=private-value; #role=operator 点击 #submit 并提取正文",
+        client,
+        { approved: true }
+      )
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "started",
+      "approval_required",
+      "submit_confirmation_required"
+    ]);
+    expect(events.at(-1)).toEqual({
+      type: "submit_confirmation_required",
+      command: "file:///tmp/skfiy-form.html",
+      binding: {
+        schemaVersion: 1,
+        url: "file:///tmp/skfiy-form.html",
+        fieldSelectors: ["#name", "#role"],
+        submitSelector: "#submit"
+      },
+      reason: "Confirm submitting 2 non-sensitive fields with #submit."
+    });
+    expect(JSON.stringify(events)).not.toContain("private-value");
+    expect(client.sendCdpCommand).not.toHaveBeenCalled();
+  });
+
   it("blocks sensitive form fields before navigating or filling selectors", async () => {
     const client = createChromeClient();
 
@@ -452,7 +491,7 @@ describe("runChromePageTask", () => {
       runChromePageTask(
         "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #password=hunter2 点击 #submit 并提取正文",
         client,
-        { approved: true }
+        { approved: true, submitApproved: true }
       )
     );
 
@@ -476,6 +515,24 @@ describe("runChromePageTask", () => {
         return { frameId: "frame-1" };
       }
 
+      if (
+        command.method === "Runtime.evaluate"
+        && typeof command.params?.expression === "string"
+        && command.params.expression.includes("title: document.title")
+      ) {
+        return {
+          result: {
+            type: "object",
+            value: {
+              url: "file:///tmp/skfiy-form.html",
+              documentId: "document-1",
+              title: "skfiy form",
+              text: "form"
+            }
+          }
+        };
+      }
+
       throw new Error("Selector not found: #name");
     });
 
@@ -483,7 +540,7 @@ describe("runChromePageTask", () => {
       runChromePageTask(
         "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #name=skfiy 点击 #submit 并提取正文",
         client,
-        { approved: true }
+        { approved: true, submitApproved: true }
       )
     );
 
@@ -509,6 +566,24 @@ describe("runChromePageTask", () => {
         throw new Error("Selector not found: #email");
       }
 
+      if (
+        command.method === "Runtime.evaluate"
+        && typeof command.params?.expression === "string"
+        && command.params.expression.includes("title: document.title")
+      ) {
+        return {
+          result: {
+            type: "object",
+            value: {
+              url: "file:///tmp/skfiy-chrome.html",
+              documentId: "document-1",
+              title: "skfiy form",
+              text: "form"
+            }
+          }
+        };
+      }
+
       return {
         result: {
           type: "string",
@@ -521,7 +596,7 @@ describe("runChromePageTask", () => {
       runChromePageTask(
         "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #name=skfiy; #email=agent@skfiy.test; #role=operator 点击 #submit 并提取正文",
         client,
-        { approved: true }
+        { approved: true, submitApproved: true }
       )
     );
 
@@ -537,5 +612,106 @@ describe("runChromePageTask", () => {
         message: "Filled #name."
       })
     ]));
+  });
+
+  it("re-observes the same document once and retries a failed selector action", async () => {
+    const client = createChromeClient();
+    let fillAttempts = 0;
+    client.sendCdpCommand.mockImplementation(async (command) => {
+      const expression = typeof command.params?.expression === "string"
+        ? command.params.expression
+        : "";
+      if (command.method === "Page.navigate") {
+        return { frameId: "frame-1" };
+      }
+      if (expression.includes("title: document.title")) {
+        return {
+          result: {
+            type: "object",
+            value: {
+              url: "file:///tmp/skfiy-form.html",
+              documentId: "document-1",
+              title: "skfiy form",
+              text: "form"
+            }
+          }
+        };
+      }
+      if (expression.includes("#name")) {
+        fillAttempts += 1;
+        if (fillAttempts === 1) {
+          throw new Error("Selector not found: #name");
+        }
+        return { result: { type: "boolean", value: true } };
+      }
+      if (expression.includes("#submit")) {
+        return { result: { type: "boolean", value: true } };
+      }
+      return { result: { type: "string", value: "submitted" } };
+    });
+
+    const events = await collectEvents(runChromePageTask(
+      "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #name=skfiy 点击 #submit 并提取正文",
+      client,
+      { approved: true, submitApproved: true }
+    ));
+
+    expect(events).toEqual(expect.arrayContaining([{
+      type: "recovery_attempted",
+      stage: "interaction",
+      action: "reobserve",
+      reason: "Chrome selector action failed; re-observing the bound page once."
+    }]));
+    expect(fillAttempts).toBe(2);
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("blocks recovery when the document identity changes and does not submit", async () => {
+    const client = createChromeClient();
+    let snapshots = 0;
+    client.sendCdpCommand.mockImplementation(async (command) => {
+      const expression = typeof command.params?.expression === "string"
+        ? command.params.expression
+        : "";
+      if (command.method === "Page.navigate") {
+        return { frameId: "frame-1" };
+      }
+      if (expression.includes("title: document.title")) {
+        snapshots += 1;
+        return {
+          result: {
+            type: "object",
+            value: {
+              url: "file:///tmp/skfiy-form.html",
+              documentId: snapshots === 1 ? "document-1" : "document-2",
+              title: "skfiy form",
+              text: "form"
+            }
+          }
+        };
+      }
+      if (expression.includes("#name")) {
+        throw new Error("Selector not found: #name");
+      }
+      return { result: { type: "string", value: "unexpected" } };
+    });
+
+    const events = await collectEvents(runChromePageTask(
+      "填写 Chrome 测试表单 file:///tmp/skfiy-form.html 字段 #name=skfiy 点击 #submit 并提取正文",
+      client,
+      { approved: true, submitApproved: true }
+    ));
+
+    expect(events.at(-1)).toEqual({
+      type: "verification_failed",
+      stage: "interaction",
+      code: "target_changed",
+      reason: "Chrome page target changed before #name; prepare a new plan."
+    });
+    expect(client.sendCdpCommand.mock.calls.some(([command]) =>
+      command.method === "Runtime.evaluate"
+      && typeof command.params?.expression === "string"
+      && command.params.expression.includes("#submit")
+    )).toBe(false);
   });
 });
