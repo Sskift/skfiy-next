@@ -45,14 +45,15 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — 505 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — 501 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
-- [x] CI (GitHub Actions, macOS: typecheck + vitest + build)
-- [ ] smoke:cli / smoke:chrome runtime adaptation — their tests pass but the scripts still reference the dropped `dist/skfiy` CLI binary and native-host lanes; needs surgery before they run green
+- [x] **smoke:cli passes** — 5 dist-module contract collectors green
+- [x] smoke:chrome adapted (native-host/installed-extension lanes cut, CDP lanes kept)
+- [x] CI green on GitHub Actions (macOS: typecheck + vitest + build)
 - [ ] Electron 39 → 43 upgrade
-- [ ] First-run onboarding (the M1 feature from the old repo's computer-use-loop branch)
+- [ ] First-run onboarding (the M1 feature — reference implementation on the old repo's `codex/computer-use-loop` branch, now backed up to origin)
 
 ## Cut from the old repo (intentionally)
 
