@@ -1,0 +1,250 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1872" viewBox="0 0 1536 1872" shape-rendering="crispEdges">
+  <title>skfiy black cat atlas</title>
+  <defs>
+    <g id="shadow">
+      <rect x="48" y="174" width="94" height="8" rx="4" fill="#05070a" opacity=".32"/>
+    </g>
+    <g id="tail-left">
+      <rect x="22" y="122" width="14" height="36" rx="7" fill="#07080c"/>
+      <rect x="30" y="148" width="48" height="14" rx="7" fill="#07080c"/>
+      <rect x="18" y="118" width="20" height="14" rx="7" fill="#11131a"/>
+    </g>
+    <g id="tail-up">
+      <rect x="24" y="96" width="14" height="56" rx="7" fill="#07080c"/>
+      <rect x="28" y="88" width="34" height="14" rx="7" fill="#07080c"/>
+      <rect x="56" y="88" width="12" height="24" rx="6" fill="#07080c"/>
+    </g>
+    <g id="cat-body">
+      <use href="#shadow"/>
+      <rect x="64" y="96" width="64" height="72" rx="22" fill="#08090d"/>
+      <rect x="55" y="138" width="22" height="30" rx="10" fill="#08090d"/>
+      <rect x="116" y="138" width="22" height="30" rx="10" fill="#08090d"/>
+      <rect x="71" y="160" width="14" height="14" rx="5" fill="#121520"/>
+      <rect x="107" y="160" width="14" height="14" rx="5" fill="#121520"/>
+    </g>
+    <g id="cat-head">
+      <path d="M45 70 L66 34 L82 69 Z" fill="#07080c"/>
+      <path d="M147 70 L126 34 L110 69 Z" fill="#07080c"/>
+      <path d="M59 64 L69 47 L76 65 Z" fill="#76d8c8"/>
+      <path d="M133 64 L123 47 L116 65 Z" fill="#76d8c8"/>
+      <rect x="48" y="60" width="96" height="70" rx="31" fill="#07080c"/>
+      <rect x="54" y="66" width="84" height="56" rx="25" fill="#090a0f"/>
+      <rect x="45" y="76" width="8" height="30" rx="4" fill="#11131a"/>
+      <rect x="139" y="76" width="8" height="30" rx="4" fill="#11131a"/>
+    </g>
+    <g id="eyes-idle">
+      <rect x="65" y="88" width="26" height="13" rx="5" fill="#f7fbff"/>
+      <rect x="101" y="88" width="26" height="13" rx="5" fill="#f7fbff"/>
+      <rect x="84" y="100" width="25" height="3" fill="#171923"/>
+    </g>
+    <g id="eyes-blink">
+      <rect x="65" y="94" width="25" height="4" rx="2" fill="#f7fbff"/>
+      <rect x="102" y="94" width="25" height="4" rx="2" fill="#f7fbff"/>
+    </g>
+    <g id="eyes-happy">
+      <rect x="66" y="88" width="23" height="5" fill="#f7fbff"/>
+      <rect x="103" y="88" width="23" height="5" fill="#f7fbff"/>
+      <rect x="86" y="104" width="20" height="4" fill="#75dccc"/>
+    </g>
+    <g id="eyes-focus">
+      <rect x="62" y="86" width="28" height="12" rx="5" fill="#eef8ff"/>
+      <rect x="104" y="90" width="28" height="12" rx="5" fill="#eef8ff"/>
+      <rect x="91" y="105" width="14" height="3" fill="#75dccc"/>
+    </g>
+    <g id="eyes-wait">
+      <rect x="65" y="88" width="26" height="12" rx="5" fill="#f8e58a"/>
+      <rect x="101" y="88" width="26" height="12" rx="5" fill="#f8e58a"/>
+      <rect x="87" y="106" width="18" height="3" fill="#f8e58a"/>
+    </g>
+    <g id="eyes-failed">
+      <rect x="66" y="86" width="5" height="5" fill="#ff7894"/>
+      <rect x="71" y="91" width="5" height="5" fill="#ff7894"/>
+      <rect x="76" y="96" width="5" height="5" fill="#ff7894"/>
+      <rect x="122" y="86" width="5" height="5" fill="#ff7894"/>
+      <rect x="117" y="91" width="5" height="5" fill="#ff7894"/>
+      <rect x="112" y="96" width="5" height="5" fill="#ff7894"/>
+      <rect x="86" y="108" width="22" height="3" fill="#ff7894"/>
+    </g>
+    <g id="paw-wave-low">
+      <rect x="126" y="112" width="14" height="34" rx="7" fill="#08090d"/>
+    </g>
+    <g id="paw-wave-high">
+      <rect x="132" y="88" width="14" height="46" rx="7" fill="#08090d"/>
+      <rect x="136" y="80" width="14" height="14" rx="7" fill="#11131a"/>
+    </g>
+    <g id="spark">
+      <rect x="148" y="70" width="5" height="5" fill="#8ee8db"/>
+      <rect x="143" y="75" width="15" height="5" fill="#8ee8db"/>
+      <rect x="148" y="80" width="5" height="5" fill="#8ee8db"/>
+    </g>
+    <g id="pose-idle-a">
+      <use href="#tail-left"/>
+      <use href="#cat-body"/>
+      <use href="#cat-head"/>
+      <use href="#eyes-idle"/>
+    </g>
+    <g id="pose-idle-b">
+      <g transform="translate(0 -3)">
+        <use href="#tail-left"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-idle"/>
+      </g>
+    </g>
+    <g id="pose-idle-c">
+      <use href="#tail-left"/>
+      <use href="#cat-body"/>
+      <use href="#cat-head"/>
+      <use href="#eyes-blink"/>
+    </g>
+    <g id="pose-run-a">
+      <g transform="translate(2 -8)">
+        <use href="#tail-up"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-focus"/>
+        <rect x="44" y="148" width="28" height="10" rx="5" fill="#10131b"/>
+        <rect x="120" y="132" width="28" height="10" rx="5" fill="#10131b"/>
+      </g>
+    </g>
+    <g id="pose-run-b">
+      <g transform="translate(-2 2)">
+        <use href="#tail-left"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-focus"/>
+        <rect x="48" y="132" width="28" height="10" rx="5" fill="#10131b"/>
+        <rect x="116" y="150" width="28" height="10" rx="5" fill="#10131b"/>
+      </g>
+    </g>
+    <g id="pose-wave-a">
+      <use href="#tail-left"/>
+      <use href="#cat-body"/>
+      <use href="#cat-head"/>
+      <use href="#eyes-happy"/>
+      <use href="#paw-wave-low"/>
+    </g>
+    <g id="pose-wave-b">
+      <g transform="translate(0 -5)">
+        <use href="#tail-left"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-happy"/>
+        <use href="#paw-wave-high"/>
+        <use href="#spark"/>
+      </g>
+    </g>
+    <g id="pose-jump-a">
+      <g transform="translate(0 -18)">
+        <use href="#tail-up"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-happy"/>
+      </g>
+    </g>
+    <g id="pose-wait-a">
+      <use href="#tail-left"/>
+      <use href="#cat-body"/>
+      <use href="#cat-head"/>
+      <use href="#eyes-wait"/>
+    </g>
+    <g id="pose-wait-b">
+      <g transform="translate(0 4)">
+        <use href="#tail-left"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-wait"/>
+      </g>
+    </g>
+    <g id="pose-review-a">
+      <g transform="translate(-4 0)">
+        <use href="#tail-up"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-focus"/>
+      </g>
+    </g>
+    <g id="pose-review-b">
+      <g transform="translate(4 -2)">
+        <use href="#tail-up"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-focus"/>
+      </g>
+    </g>
+    <g id="pose-failed-a">
+      <g transform="translate(-4 3)">
+        <use href="#tail-left"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-failed"/>
+      </g>
+    </g>
+    <g id="pose-failed-b">
+      <g transform="translate(4 2)">
+        <use href="#tail-left"/>
+        <use href="#cat-body"/>
+        <use href="#cat-head"/>
+        <use href="#eyes-failed"/>
+      </g>
+    </g>
+  </defs>
+  <use href="#pose-idle-a" x="0" y="0"/>
+  <use href="#pose-idle-b" x="192" y="0"/>
+  <use href="#pose-idle-a" x="384" y="0"/>
+  <use href="#pose-idle-c" x="576" y="0"/>
+  <use href="#pose-idle-a" x="768" y="0"/>
+  <use href="#pose-idle-b" x="960" y="0"/>
+  <use href="#pose-run-a" x="0" y="208"/>
+  <use href="#pose-run-b" x="192" y="208"/>
+  <use href="#pose-run-a" x="384" y="208"/>
+  <use href="#pose-run-b" x="576" y="208"/>
+  <use href="#pose-run-a" x="768" y="208"/>
+  <use href="#pose-run-b" x="960" y="208"/>
+  <use href="#pose-run-a" x="1152" y="208"/>
+  <use href="#pose-run-b" x="1344" y="208"/>
+  <g transform="translate(192 416) scale(-1 1)"><use href="#pose-run-a"/></g>
+  <g transform="translate(384 416) scale(-1 1)"><use href="#pose-run-b"/></g>
+  <g transform="translate(576 416) scale(-1 1)"><use href="#pose-run-a"/></g>
+  <g transform="translate(768 416) scale(-1 1)"><use href="#pose-run-b"/></g>
+  <g transform="translate(960 416) scale(-1 1)"><use href="#pose-run-a"/></g>
+  <g transform="translate(1152 416) scale(-1 1)"><use href="#pose-run-b"/></g>
+  <g transform="translate(1344 416) scale(-1 1)"><use href="#pose-run-a"/></g>
+  <g transform="translate(1536 416) scale(-1 1)"><use href="#pose-run-b"/></g>
+  <use href="#pose-wave-a" x="0" y="624"/>
+  <use href="#pose-wave-b" x="192" y="624"/>
+  <use href="#pose-wave-a" x="384" y="624"/>
+  <use href="#pose-wave-b" x="576" y="624"/>
+  <use href="#pose-wave-a" x="768" y="624"/>
+  <use href="#pose-wave-b" x="960" y="624"/>
+  <use href="#pose-jump-a" x="0" y="832"/>
+  <use href="#pose-idle-b" x="192" y="832"/>
+  <use href="#pose-jump-a" x="384" y="832"/>
+  <use href="#pose-idle-b" x="576" y="832"/>
+  <use href="#pose-jump-a" x="768" y="832"/>
+  <use href="#pose-idle-a" x="960" y="832"/>
+  <use href="#pose-failed-a" x="0" y="1040"/>
+  <use href="#pose-failed-b" x="192" y="1040"/>
+  <use href="#pose-failed-a" x="384" y="1040"/>
+  <use href="#pose-failed-b" x="576" y="1040"/>
+  <use href="#pose-wait-a" x="0" y="1248"/>
+  <use href="#pose-wait-b" x="192" y="1248"/>
+  <use href="#pose-wait-a" x="384" y="1248"/>
+  <use href="#pose-wait-b" x="576" y="1248"/>
+  <use href="#pose-wait-a" x="768" y="1248"/>
+  <use href="#pose-wait-b" x="960" y="1248"/>
+  <use href="#pose-run-a" x="0" y="1456"/>
+  <use href="#pose-run-b" x="192" y="1456"/>
+  <use href="#pose-run-a" x="384" y="1456"/>
+  <use href="#pose-run-b" x="576" y="1456"/>
+  <use href="#pose-run-a" x="768" y="1456"/>
+  <use href="#pose-run-b" x="960" y="1456"/>
+  <use href="#pose-run-a" x="1152" y="1456"/>
+  <use href="#pose-run-b" x="1344" y="1456"/>
+  <use href="#pose-review-a" x="0" y="1664"/>
+  <use href="#pose-review-b" x="192" y="1664"/>
+  <use href="#pose-review-a" x="384" y="1664"/>
+  <use href="#pose-review-b" x="576" y="1664"/>
+  <use href="#pose-review-a" x="768" y="1664"/>
+  <use href="#pose-review-b" x="960" y="1664"/>
+</svg>

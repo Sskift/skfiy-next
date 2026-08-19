@@ -1,0 +1,42 @@
+{
+  "name": "skfiy-next",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first macOS desktop pet that fronts a Background Agent, with Computer Use as a permissioned tool layer. Distilled rewrite of skfiy.",
+  "type": "module",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "npm run dev:renderer",
+    "dev:renderer": "vite --host 127.0.0.1",
+    "dev:electron": "SKFIY_DEV_SERVER_URL=${SKFIY_DEV_SERVER_URL:-http://127.0.0.1:5173} electron .",
+    "start": "electron .",
+    "clean": "rm -rf dist",
+    "test": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run clean && vite build && tsc -p tsconfig.electron.json && npm run build:helper",
+    "build:helper": "bash scripts/build-helper.sh",
+    "package:mac": "node scripts/package-macos-app.mjs",
+    "smoke:ui": "node scripts/smoke-ui-product.mjs",
+    "smoke:cli": "node scripts/smoke-cli-product.mjs",
+    "smoke:cli:basic": "node scripts/smoke-cli-product.mjs --profile basic",
+    "smoke:chrome": "node scripts/smoke-chrome-product.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.2",
+    "electron": "^39.2.7",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
+    "@types/node": "^25.0.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^27.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

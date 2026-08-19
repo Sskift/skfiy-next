@@ -1,0 +1,13 @@
+node_modules/
+dist/
+macos-helper/.build/
+.skfiy-smoke/
+.skfiy-alpha/
+.skfiy-release/
+.skfiy-cli-smoke/
+.chromium-skfiy-profile/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example

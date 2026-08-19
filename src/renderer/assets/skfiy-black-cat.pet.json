@@ -1,0 +1,22 @@
+{
+  "displayName": "skfiy black cat",
+  "slug": "skfiy-black-cat",
+  "asset": "skfiy-black-cat-atlas.svg",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 8,
+  "rows": 9,
+  "source": "bundled-original",
+  "notes": "Original bundled placeholder skin. User-provided licensed skins can replace this atlas at runtime.",
+  "states": {
+    "idle": { "row": 0, "frames": 6, "frameMs": 170 },
+    "running-right": { "row": 1, "frames": 8, "frameMs": 90 },
+    "running-left": { "row": 2, "frames": 8, "frameMs": 90 },
+    "waving": { "row": 3, "frames": 6, "frameMs": 120 },
+    "jumping": { "row": 4, "frames": 6, "frameMs": 95 },
+    "failed": { "row": 5, "frames": 4, "frameMs": 150 },
+    "waiting": { "row": 6, "frames": 6, "frameMs": 190 },
+    "running": { "row": 7, "frames": 8, "frameMs": 85 },
+    "review": { "row": 8, "frames": 6, "frameMs": 135 }
+  }
+}
