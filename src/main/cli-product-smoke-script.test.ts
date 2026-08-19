@@ -17,25 +17,19 @@ describe("CLI product smoke script", () => {
     });
   });
 
-  it("parses CLI smoke options for a repeatable binary product run", async () => {
+  it("parses CLI smoke options for a repeatable dist-module contract run", async () => {
     const modulePath = path.join(process.cwd(), "scripts/smoke-cli-plan.mjs");
 
     expect(existsSync(modulePath)).toBe(true);
 
     const {
-      CLI_COMMAND_MATRIX,
-      CLI_BASIC_COMMAND_IDS,
       PRODUCT_PATH,
       createCliSmokeHelpText,
-      createCliSmokeCommandRuns,
       createDefaultCliSmokeOptions,
       parseCliSmokeArgs
     } = await import(pathToFileURL(modulePath).href) as {
-      CLI_COMMAND_MATRIX: Array<{ id: string; args: string[] }>;
-      CLI_BASIC_COMMAND_IDS: string[];
       PRODUCT_PATH: string;
       createCliSmokeHelpText: (defaults: Record<string, unknown>) => string;
-      createCliSmokeCommandRuns: (options: Record<string, unknown>) => Array<{ id: string }>;
       createDefaultCliSmokeOptions: (rootDir: string) => Record<string, unknown>;
       parseCliSmokeArgs: (
         argv: string[],
@@ -44,9 +38,8 @@ describe("CLI product smoke script", () => {
     };
     const defaults = createDefaultCliSmokeOptions("/repo");
 
-    expect(PRODUCT_PATH).toBe("dist/skfiy -> skfiy CLI command matrix");
+    expect(PRODUCT_PATH).toBe("dist/main -> assistant-agent + session-memory + browser-page-context + personal-memory + personal-skills + working-profile contracts");
     expect(defaults).toMatchObject({
-      cliPath: path.join("/repo", "dist", "skfiy"),
       isolatedHomeDir: path.join("/repo", ".skfiy-cli-smoke", "home"),
       timeoutMs: 30_000,
       outputPath: undefined,
@@ -59,8 +52,6 @@ describe("CLI product smoke script", () => {
       requirePassed: false
     });
     expect(parseCliSmokeArgs([
-      "--cli",
-      "dist/skfiy",
       "--isolated-home",
       ".skfiy-cli-smoke/home",
       "--output",
@@ -71,136 +62,44 @@ describe("CLI product smoke script", () => {
       "basic",
       "--require-passed"
     ], defaults)).toMatchObject({
-      cliPath: path.resolve("dist/skfiy"),
       isolatedHomeDir: path.resolve(".skfiy-cli-smoke/home"),
       outputPath: path.resolve(".skfiy-smoke/cli.json"),
       timeoutMs: 1200,
       profile: "basic",
       requirePassed: true
     });
-    expect(CLI_COMMAND_MATRIX.map((command) => command.id)).toEqual([
-      "commands-json",
-      "status-json",
-      "doctor-json",
-      "chrome-status",
-      "mcp-serve-json",
-      "dashboard-json",
-      "release-check-json",
-      "alpha-artifact-json",
-      "smoke-dashboard-json"
-    ]);
-    expect(CLI_BASIC_COMMAND_IDS).toEqual([
-      "commands-json",
-      "status-json",
-      "doctor-json",
-      "chrome-status",
-      "mcp-serve-json",
-      "dashboard-json"
-    ]);
-    expect(createCliSmokeCommandRuns({
-      ...defaults,
-      profile: "basic"
-    }).map((command) => command.id)).toEqual(CLI_BASIC_COMMAND_IDS);
     expect(createCliSmokeHelpText(defaults)).toContain("smoke:cli");
     expect(createCliSmokeHelpText(defaults)).toContain("--isolated-home");
     expect(createCliSmokeHelpText(defaults)).toContain("--profile <full|basic>");
   });
 
-  it("classifies CLI smoke evidence only when built binary commands are stable and isolated", async () => {
+  it("classifies CLI smoke evidence only when dist module contracts pass", async () => {
     const modulePath = path.join(process.cwd(), "scripts/smoke-cli-plan.mjs");
     const {
-      CLI_COMMAND_MATRIX,
       PRODUCT_PATH,
       classifyCliSmokeEvidence
     } = await import(pathToFileURL(modulePath).href) as {
-      CLI_COMMAND_MATRIX: Array<{ id: string; args: string[] }>;
       PRODUCT_PATH: string;
       classifyCliSmokeEvidence: (input: Record<string, unknown>) => string;
     };
     const passedEvidence = {
-      cliPath: "/repo/dist/skfiy",
       isolatedHomeDir: "/repo/.skfiy-cli-smoke/home",
       runnerHasTmux: false,
       productPath: PRODUCT_PATH,
       profile: "full",
-      commands: CLI_COMMAND_MATRIX.map((command) => createPassingCommandEvidence(command)),
       providerPromptContract: createPassingProviderPromptContract(),
       realTurnIdentityContract: createPassingRealTurnIdentityContract(),
       realBrowserContextContract: createPassingRealBrowserContextContract(),
-      repeatedConversationLearningContract: createPassingRepeatedConversationLearningContract(),
-      personalMemoryFallbackContract: createPassingPersonalMemoryFallbackContract(),
       personalMemoryPromptSanitizationContract: createPassingPersonalMemoryPromptSanitizationContract(),
       personalMemoryAtomicBatchContract: createPassingPersonalMemoryAtomicBatchContract(),
-      postTurnPersonalizationContract: createPassingPostTurnPersonalizationContract(),
       result: "passed"
-    };
-    const basicEvidence = {
-      ...passedEvidence,
-      profile: "basic",
-      commands: CLI_COMMAND_MATRIX
-        .filter((command) => [
-          "commands-json",
-          "status-json",
-          "doctor-json",
-          "chrome-status",
-          "mcp-serve-json",
-          "dashboard-json"
-        ].includes(command.id))
-        .map((command) => createPassingCommandEvidence(command))
     };
 
     expect(classifyCliSmokeEvidence(passedEvidence)).toBe("passed");
-    expect(classifyCliSmokeEvidence(basicEvidence)).toBe("passed");
-    expect(classifyCliSmokeEvidence({
-      ...basicEvidence,
-      commands: [...basicEvidence.commands, createPassingCommandEvidence(CLI_COMMAND_MATRIX.at(-1)!)]
-    })).toBe("failed");
     expect(classifyCliSmokeEvidence({
       ...passedEvidence,
-      personalMemoryFallbackContract: {
-        ...createPassingPersonalMemoryFallbackContract(),
-        dashboardStylePreference: { operationCount: 0, operations: [] }
-      }
+      productPath: "dist/main -> other contract"
     })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      personalMemoryFallbackContract: {
-        ...createPassingPersonalMemoryFallbackContract(),
-        secretLikeRequest: {
-          operationCount: 1,
-          operations: [{ action: "add", target: "user", content: "User token=secret" }]
-        }
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      commands: passedEvidence.commands.map((command) => command.id === "chrome-status"
-        ? {
-            ...command,
-            stdoutJson: {
-              ...command.stdoutJson,
-              extension: {
-                state: "connected",
-                bridge: "native-messaging",
-                liveConnection: "connected",
-                nativeHostState: "installed",
-                manifestPath: "/repo/.skfiy-cli-smoke/home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.sskift.skfiy.json",
-                allowedOrigins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop/"],
-                connection: {
-                  state: "connected",
-                  liveConnection: "connected",
-                  path: "/repo/.skfiy-cli-smoke/home/Library/Application Support/skfiy/chrome-extension-connection.json",
-                  ageSeconds: 42,
-                  observedAt: "2026-06-19T23:59:18.000Z",
-                  launchOrigin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
-                  messageType: "skfiy.page.observe",
-                  requestId: "request-smoke"
-                }
-              }
-            }
-          }
-        : command)
-    })).toBe("passed");
     expect(classifyCliSmokeEvidence({
       ...passedEvidence,
       providerPromptContract: undefined
@@ -218,40 +117,6 @@ describe("CLI product smoke script", () => {
       realBrowserContextContract: {
         ...createPassingRealBrowserContextContract(),
         promptIncludesVisibleText: false
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      repeatedConversationLearningContract: undefined
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      repeatedConversationLearningContract: {
-        ...createPassingRepeatedConversationLearningContract(),
-        secondTurn: {
-          ...createPassingRepeatedConversationLearningContract().secondTurn,
-          promptIncludesPersonalSkill: false
-        }
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      repeatedConversationLearningContract: {
-        ...createPassingRepeatedConversationLearningContract(),
-        secondTurn: {
-          ...createPassingRepeatedConversationLearningContract().secondTurn,
-          promptIncludesWorkingProfile: false
-        }
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      repeatedConversationLearningContract: {
-        ...createPassingRepeatedConversationLearningContract(),
-        firstTurn: {
-          ...createPassingRepeatedConversationLearningContract().firstTurn,
-          sessionCount: 0
-        }
       }
     })).toBe("failed");
     expect(classifyCliSmokeEvidence({
@@ -346,10 +211,6 @@ describe("CLI product smoke script", () => {
     })).toBe("failed");
     expect(classifyCliSmokeEvidence({
       ...passedEvidence,
-      personalMemoryFallbackContract: undefined
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
       personalMemoryPromptSanitizationContract: undefined
     })).toBe("failed");
     expect(classifyCliSmokeEvidence({
@@ -375,238 +236,10 @@ describe("CLI product smoke script", () => {
     })).toBe("failed");
     expect(classifyCliSmokeEvidence({
       ...passedEvidence,
-      postTurnPersonalizationContract: undefined
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      postTurnPersonalizationContract: {
-        ...createPassingPostTurnPersonalizationContract(),
-        stagedWhenApprovalEnabled: {
-          ...createPassingPostTurnPersonalizationContract().stagedWhenApprovalEnabled,
-          durableUserEntryCount: 1
-        }
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      postTurnPersonalizationContract: {
-        ...createPassingPostTurnPersonalizationContract(),
-        fallbackWrite: {
-          ...createPassingPostTurnPersonalizationContract().fallbackWrite,
-          memoryJournalSource: "post-turn-review"
-        }
-      }
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
       runnerHasTmux: true
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      cliPath: "/repo/scripts/skfiy-cli.mjs"
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      isolatedHomeDir: "/Users/tester"
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      commands: passedEvidence.commands.slice(0, -1)
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      commands: passedEvidence.commands.map((command, index) => index === 0
-        ? { ...command, exitCode: 1 }
-        : command)
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      commands: passedEvidence.commands.map((command, index) => index === 0
-        ? { ...command, tokenLeakDetected: true }
-        : command)
-    })).toBe("failed");
-    expect(classifyCliSmokeEvidence({
-      ...passedEvidence,
-      commands: passedEvidence.commands.map((command) => command.id === "chrome-status"
-        ? {
-            ...command,
-            stdoutJson: {
-              ...command.stdoutJson,
-              extension: undefined
-            }
-          }
-        : command)
     })).toBe("failed");
   });
 });
-
-function createPassingCommandEvidence(command: { id: string; args: string[] }) {
-  const base = {
-    id: command.id,
-    command: ["/repo/dist/skfiy", ...command.args],
-    exitCode: 0,
-    stdoutJson: {
-      schemaVersion: 1,
-      command: command.args.slice(0, 2).join(" "),
-      result: "not-run"
-    },
-    stderr: "",
-    tokenLeakDetected: false
-  };
-
-  if (command.id === "dashboard-json") {
-    return {
-      ...base,
-      stdoutJson: {
-        schemaVersion: 1,
-        command: "dashboard",
-        result: "running",
-        tokenPrinted: false,
-        bind: { host: "127.0.0.1", port: 51234 }
-      },
-      cleanup: { exited: true }
-    };
-  }
-
-  if (command.id === "commands-json") {
-    return {
-      ...base,
-      stdoutJson: {
-        schemaVersion: 1,
-        command: "commands",
-        result: "available",
-        commandCount: 4,
-        surface: {
-          schemaVersion: 1,
-          commands: [
-            { path: "commands" },
-            { path: "status" },
-            { path: "mcp serve" },
-            { path: "smoke codex-plugin" }
-          ]
-        }
-      }
-    };
-  }
-
-  if (command.id === "status-json") {
-    return {
-      ...base,
-      stdoutJson: {
-        schemaVersion: 1,
-        command: "status",
-        readiness: {
-          state: "needs-action",
-          ready: false,
-          blockers: [
-            {
-              area: "dashboard",
-              code: "dashboard-not-running",
-              state: "not-running"
-            }
-          ],
-          checks: {
-            runtime: {
-              state: "ready",
-              ready: true,
-              blockers: []
-            },
-            dashboard: {
-              state: "needs-action",
-              ready: false,
-              blockers: [
-                {
-                  code: "dashboard-not-running",
-                  state: "not-running"
-                }
-              ]
-            },
-            extension: {
-              state: "unknown",
-              ready: false,
-              blockers: []
-            },
-            moneyRun: {
-              state: "needs-action",
-              ready: false,
-              session: "money-run",
-              moneyRunState: "blocked",
-              mutatesSession: false,
-              blockers: [
-                {
-                  code: "money-run-not-observing",
-                  state: "blocked"
-                }
-              ]
-            }
-          }
-        },
-        moneyRun: {
-          state: "blocked",
-          session: "money-run",
-          source: "tmux-read-only-probe",
-          mutatesSession: false,
-          summary: {
-            windowCount: 0,
-            paneCount: 0,
-            activePaneIds: [],
-            deadPaneIds: []
-          },
-          recommendation: {
-            action: "inspect_state",
-            reason: "tmux session money-run was not found.",
-            mutatesSession: false
-          }
-        }
-      }
-    };
-  }
-
-  if (command.id === "smoke-dashboard-json") {
-    return {
-      ...base,
-      stdoutJson: {
-        schemaVersion: 1,
-        command: "smoke dashboard",
-        result: "passed",
-        exitCode: 0,
-        smoke: {
-          result: "passed",
-          runnerHasTmux: false
-        }
-      }
-    };
-  }
-
-  if (command.id === "chrome-status") {
-    return {
-      ...base,
-      stdoutJson: {
-        schemaVersion: 1,
-        command: "chrome status",
-        executesSystemMutation: false,
-        nativeHost: {
-          state: "missing",
-          hostName: "com.sskift.skfiy",
-          manifestPath: "/repo/.skfiy-cli-smoke/home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.sskift.skfiy.json",
-          cliShimPath: "/repo/dist/skfiy",
-          allowedOrigins: [],
-          reason: "Chrome Native Messaging host manifest is not installed."
-        },
-        extension: {
-          state: "native-host-missing",
-          bridge: "native-messaging",
-          liveConnection: "unknown",
-          nativeHostState: "missing",
-          manifestPath: "/repo/.skfiy-cli-smoke/home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.sskift.skfiy.json",
-          reason: "Chrome Native Messaging host manifest is not installed."
-        }
-      }
-    };
-  }
-
-  return base;
-}
 
 function createPassingProviderPromptContract() {
   return {
@@ -765,80 +398,6 @@ function createPassingRealBrowserContextContract() {
   };
 }
 
-function createPassingRepeatedConversationLearningContract() {
-  return {
-    productPath: "dist/main/assistant-agent.js + dist/main/personalization-learning-loop.js -> repeated conversation learning contract",
-    result: "passed",
-    tokenLeakDetected: false,
-    firstTurn: {
-      providerLabel: "Codex",
-      status: "completed",
-      sessionCount: 1,
-      durableUserEntries: [
-        "User prefers dense Obsidian-like knowledge surfaces for dashboard work.",
-        "User dislikes marketing-style hero/card-heavy dashboard layouts."
-      ]
-    },
-    secondTurn: {
-      providerLabel: "Hermes",
-      status: "completed",
-      responseMessage: "我记得你喜欢 Obsidian 风格的本地知识面板。",
-      recalledSessionCount: 1,
-      promptIncludesMemory: true,
-      promptIncludesRecalledSession: true,
-      promptIncludesPersonalSkill: true,
-      promptIncludesWorkingProfile: true,
-      memoryBeforeRecalledSession: true,
-      recalledSessionBeforePersonalSkill: true,
-      personalSkillBeforeWorkingProfile: true,
-      workingProfileBeforeUser: true,
-      personalSkillBeforeUser: true
-    }
-  };
-}
-
-function createPassingPersonalMemoryFallbackContract() {
-  return {
-    productPath: "dist/main/personal-memory-review.js -> createFallbackPersonalMemoryOperations -> local memory fallback contract",
-    result: "passed",
-    tokenLeakDetected: false,
-    explicitPreference: {
-      operationCount: 1,
-      operations: [
-        { action: "add", target: "user", content: "User prefers concise Chinese progress updates." }
-      ]
-    },
-    dashboardStylePreference: {
-      operationCount: 2,
-      operations: [
-        { action: "add", target: "user", content: "User prefers dense Obsidian-like knowledge surfaces for dashboard work." },
-        { action: "add", target: "user", content: "User dislikes marketing-style hero/card-heavy dashboard layouts." }
-      ]
-    },
-    explicitRemember: {
-      operationCount: 1,
-      operations: [
-        { action: "add", target: "user", content: "User explicitly asked skfiy to remember: 以后回答我时先给结论，再给验证证据." }
-      ]
-    },
-    explicitForget: {
-      operationCount: 1,
-      operations: [
-        { action: "remove", target: "user", content: "User explicitly asked skfiy to remember: 以后回答我时先给结论，再给验证证据." }
-      ]
-    },
-    secretLikeRequest: {
-      operationCount: 0
-    },
-    oneOffRequest: {
-      operationCount: 0
-    },
-    duplicatePreference: {
-      operationCount: 0
-    }
-  };
-}
-
 function createPassingPersonalMemoryPromptSanitizationContract() {
   return {
     productPath: "dist/main/personal-memory.js -> createPersonalMemoryPromptBlock -> prompt sanitization contract",
@@ -873,41 +432,6 @@ function createPassingPersonalMemoryAtomicBatchContract() {
       applied: 0,
       blockedCount: 1,
       durableUserEntryCount: 0
-    }
-  };
-}
-
-function createPassingPostTurnPersonalizationContract() {
-  return {
-    productPath: "dist/main/personalization-learning-loop.js -> recordCompletedAssistantTurnForPersonalization -> post-turn learning contract",
-    result: "passed",
-    tokenLeakDetected: false,
-    durableReviewWrite: {
-      sessionCount: 1,
-      durableUserEntries: ["User prefers dense Obsidian-like dashboard surfaces."],
-      reviewPromptIncludesDurableInstruction: true,
-      reviewPromptReceivesExistingMemory: true,
-      memoryJournalEntryCount: 1,
-      memoryJournalStage: "durable",
-      memoryJournalSource: "post-turn-review",
-      memoryJournalProviderLabel: "Codex"
-    },
-    fallbackWrite: {
-      durableUserEntries: ["User prefers concise Chinese progress updates."],
-      memoryJournalEntryCount: 1,
-      memoryJournalStage: "durable",
-      memoryJournalSource: "local-fallback",
-      memoryJournalProviderLabel: "Hermes"
-    },
-    stagedWhenApprovalEnabled: {
-      durableUserEntryCount: 0,
-      pendingWriteCount: 1,
-      pendingSource: "post-turn-review",
-      pendingContent: "User prefers dense Obsidian-like knowledge surfaces for dashboard work.",
-      memoryJournalEntryCount: 1,
-      memoryJournalStage: "pending",
-      memoryJournalSource: "post-turn-review",
-      memoryJournalProviderLabel: "Claude Code"
     }
   };
 }
