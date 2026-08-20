@@ -506,6 +506,68 @@ describe("automation run normalization", () => {
     expect(serialized).not.toContain("private pane output");
     expect(serialized).not.toContain("token=secret");
   });
+
+  it("honors a configurable per-monitor cap override", () => {
+    const files = new Map<string, string>();
+    const io = createMemoryIo(files);
+    const store = createAutomationRunStore({
+      filePath: "/state/automation-runs.json",
+      io,
+      caps: { perMonitorCap: 3 }
+    });
+    const runs = Array.from({ length: 8 }, (_unused, index) =>
+      succeedRun(startRun(createQueuedRun(index + 1)), FIXED_NOW)
+    );
+
+    store.write({ schemaVersion: 1, sequences: {}, runs });
+
+    const restored = store.read();
+    expect(restored.runs).toHaveLength(3);
+  });
+
+  it("honors a configurable global cap override", () => {
+    const files = new Map<string, string>();
+    const io = createMemoryIo(files);
+    const store = createAutomationRunStore({
+      filePath: "/state/automation-runs.json",
+      io,
+      caps: { globalCap: 5 }
+    });
+    const runs = Array.from({ length: 12 }, (_unused, index) =>
+      succeedRun(
+        startRun(createAutomationRunRecord({
+          monitorId: `tmux-session:session-${index % 6}`,
+          sequence: index + 1,
+          trigger: "manual",
+          now: FIXED_NOW,
+          config: createConfig()
+        })),
+        FIXED_NOW
+      )
+    );
+
+    store.write({ schemaVersion: 1, sequences: {}, runs });
+
+    const restored = store.read();
+    expect(restored.runs.length).toBeLessThanOrEqual(5);
+  });
+
+  it("falls back to the default caps when no override is provided", () => {
+    const files = new Map<string, string>();
+    const io = createMemoryIo(files);
+    const store = createAutomationRunStore({
+      filePath: "/state/automation-runs.json",
+      io
+    });
+    const runs = Array.from(
+      { length: AUTOMATION_RUN_PER_MONITOR_CAP + 5 },
+      (_unused, index) => succeedRun(startRun(createQueuedRun(index + 1)), FIXED_NOW)
+    );
+
+    store.write({ schemaVersion: 1, sequences: {}, runs });
+
+    expect(store.read().runs).toHaveLength(AUTOMATION_RUN_PER_MONITOR_CAP);
+  });
 });
 
 describe("automation run retention", () => {

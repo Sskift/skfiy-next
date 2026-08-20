@@ -86,11 +86,18 @@ import { applyApprovedChromeTaskHostPolicy } from "./chrome-approval-policy.js";
 import { createChromeTurnHostGrantStore } from "./chrome-turn-host-grant.js";
 import { createChromeCdpClient } from "./chrome-cdp-client.js";
 import { readChromeCdpEndpoint } from "./chrome-cdp-settings.js";
-import { readChromeExtensionConnectionStatus } from "./chrome-native-host.js";
+import { CHROME_NATIVE_HOST_NAME, readChromeExtensionConnectionStatus } from "./chrome-native-host.js";
 import { createBrowserContextSourceStore } from "./browser-context-source-store.js";
 import { createBrowserContextSourceActions } from "./browser-context-source-actions.js";
 import { registerBrowserContextSourceIpc } from "./browser-context-source-wiring.js";
 import { createTmuxSupervisionClient } from "./tmux-supervision-client.js";
+import { createTmuxRecoveryClient } from "./tmux-recovery-client.js";
+import {
+  createTmuxRecoveryBudget,
+  parseTmuxRecoveryAction,
+  type TmuxRecoveryAction,
+  type TmuxRecoveryBudget
+} from "./computer-use/tmux-recovery.js";
 import {
   createPlannerProviderSettingsStore,
   readInitialPlannerProviderSettings
@@ -121,6 +128,7 @@ import {
   createGhosttyDesktopClient
 } from "./main-desktop-clients.js";
 import { runTmuxSupervisionTask } from "./orchestrator/tmux-supervision-task.js";
+import { runTmuxRecoveryTask } from "./orchestrator/tmux-recovery-task.js";
 import {
   readPermissionsForRenderer
 } from "./permissions.js";
@@ -162,6 +170,9 @@ import {
   createAutomationRunStatePath,
   createAutomationRunStore
 } from "./automation-run.js";
+import { createDataAdminRuntime } from "./data-admin-runtime.js";
+import { registerDataAdminIpc } from "./main-data-admin-wiring.js";
+import { runStorageMigrations } from "./storage-migration.js";
 import { createAutomationRunSupervisor } from "./automation-run-supervisor.js";
 import {
   createAutomationMonitorNotificationCoordinator
@@ -200,6 +211,11 @@ import {
 import { createFirstRunReadinessController } from "./first-run-readiness.js";
 import { readBrowserReadinessEvidence } from "./main-browser-readiness.js";
 import { testFinderAutomationReadiness } from "./main-finder-automation-readiness.js";
+import {
+  readComponentVersions,
+  readDiagnosticReportForRenderer,
+  resolveHelperInfoPlistPath
+} from "./diagnostic-report.js";
 import { readAppPolicySettingsUpdate, readPlannerProviderSettingsUpdate } from "./main-settings-updates.js";
 import {
   createManualScreenshotCompletedTaskEvent,
@@ -387,21 +403,65 @@ const taskControlStore = createTaskControlStore({
   onChanged: (snapshot) => taskRecoveryRegistry.sync(snapshot)
 });
 const automationMonitorNotificationCoordinator = createAutomationMonitorNotificationCoordinator();
+const automationRunStore = createAutomationRunStore({
+  filePath: createAutomationRunStatePath(os.homedir()),
+  io: createNodeAutomationMonitorStoreIo()
+});
 const automationRunSupervisor = createAutomationRunSupervisor({
   onRunTerminal: showAutomationMonitorNotification,
-  store: createAutomationRunStore({
-    filePath: createAutomationRunStatePath(os.homedir()),
-    io: createNodeAutomationMonitorStoreIo()
-  }),
+  store: automationRunStore,
   tmuxClient: createTmuxSupervisionClient()
 });
+const automationMonitorStore = createAutomationMonitorStore({
+  filePath: createAutomationMonitorStatePath(os.homedir()),
+  io: createNodeAutomationMonitorStoreIo()
+});
 const automationMonitorManager = createAutomationMonitorManager({
-  store: createAutomationMonitorStore({
-    filePath: createAutomationMonitorStatePath(os.homedir()),
-    io: createNodeAutomationMonitorStoreIo()
-  }),
+  store: automationMonitorStore,
   supervisor: automationRunSupervisor
 });
+const dataAdminRuntime = createDataAdminRuntime({
+  baseDir: skfiyAppSupportDir,
+  homeDir: os.homedir(),
+  appVersion: app.getVersion(),
+  profileStore,
+  profileRuntime,
+  resolveMemoryBaseDir: () => {
+    const activeId = profileStore.getActiveId();
+    const profile = activeId ? profileStore.get(activeId) : undefined;
+    return profile && profile.memoryScope === "isolated"
+      ? createIsolatedProfileMemoryBaseDir(skfiyAppSupportDir, profile.id)
+      : skfiyAppSupportDir;
+  },
+  conversationStore: () => conversationSessionStore,
+  conversationStoreBaseDir: skfiyAppSupportDir,
+  automationMonitorManager,
+  automationMonitorStore,
+  automationRunStore,
+  stopMonitorRuns: (monitorId) => automationRunSupervisor.stopMonitorRuns(monitorId, "dashboard"),
+  emitRestored: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("skfiy:data-restored");
+    }
+  }
+});
+// Per-session recovery budgets persist across IPC turns so retry counts
+// accumulate instead of resetting on every task invocation.
+const tmuxRecoveryBudgets = new Map<string, TmuxRecoveryBudget>();
+
+function readTmuxRecoveryBudget(sessionName: string): TmuxRecoveryBudget {
+  const existing = tmuxRecoveryBudgets.get(sessionName);
+  if (existing) {
+    return existing;
+  }
+  const created = createTmuxRecoveryBudget();
+  tmuxRecoveryBudgets.set(sessionName, created);
+  return created;
+}
+
+function persistTmuxRecoveryBudget(sessionName: string, budget: TmuxRecoveryBudget): void {
+  tmuxRecoveryBudgets.set(sessionName, budget);
+}
 const assistantComputerUseExecutor = createAssistantComputerUseExecutor({
   replayStore: turnReplayStore
 });
@@ -1418,7 +1478,7 @@ async function continueComputerUseTask({
     }
   };
 
-  const appPolicyPreflight = route.kind === "tmux_supervision"
+  const appPolicyPreflight = route.kind === "tmux_supervision" || route.kind === "tmux_recovery"
     ? { kind: "continue" as const }
     : createAppPolicyPreflightDecision({
       appPolicy: decideAppPolicy(appPolicySettingsStore.get(), route.bundleId),
@@ -1511,7 +1571,7 @@ async function continueComputerUseTask({
     command
   }, route), toolIdentity, taskControl.sideEffectState);
 
-  if (route.kind === "tmux_supervision") {
+  if (route.kind === "tmux_supervision" || route.kind === "tmux_recovery") {
     markConversationDispatching();
     await runTmuxSupervisionCommandTask(window, {
       command,
@@ -1771,7 +1831,7 @@ async function runTmuxSupervisionCommandTask(
     command: string;
     mode: ManualMode;
     actionApproved: boolean;
-    route: Extract<ComputerUseCommandRoute, { kind: "tmux_supervision" }>;
+    route: Extract<ComputerUseCommandRoute, { kind: "tmux_supervision" | "tmux_recovery" }>;
     toolIdentity: AssistantComputerUseToolIdentity;
   }
 ): Promise<void> {
@@ -1971,6 +2031,7 @@ async function runCommandTask(
   assistantComputerUseExecutor.planToolCall(computerUsePlan.planInput);
   const executionRoute = routeDecision.executionRoute;
   const appPolicyRequiresApproval = executionRoute.kind !== "tmux_supervision"
+    && executionRoute.kind !== "tmux_recovery"
     && decideAppPolicy(appPolicySettingsStore.get(), executionRoute.bundleId).decision === "ask";
   const forceApproval = !actionApproved && (
     routeDecision.kind === "needs_confirmation" || appPolicyRequiresApproval
@@ -2266,6 +2327,69 @@ ipcMain.handle("skfiy:get-permission-diagnostics", async () => {
 
 ipcMain.handle("skfiy:get-desktop-session-diagnostics", async () => {
   return readDesktopSessionDiagnosticsForRenderer({ helper: createDesktopHelper() });
+});
+
+ipcMain.handle("skfiy:get-diagnostic-report", async () => {
+  const settings = assistantAgentSettingsStore.get();
+  const providerStates = await readAssistantAgentProviderStates(settings);
+  const helper = createDesktopHelper();
+  const activePermissions = await readPermissionsForRenderer({ helper });
+
+  return readDiagnosticReportForRenderer({
+    sources: {
+      readPermissions: () => createMainPermissionDiagnosticsResponse({
+        active: activePermissions,
+        appProcess: {
+          screenRecording: systemPreferences.getMediaAccessStatus("screen"),
+          accessibilityTrusted: systemPreferences.isTrustedAccessibilityClient(false)
+        },
+        identity: {
+          appPath: app.getAppPath(),
+          executablePath: process.execPath,
+          helperPath: resolveHelperPath(),
+          resourcesPath: process.resourcesPath,
+          isPackaged: app.isPackaged
+        }
+      }),
+      readDesktopSession: () => readDesktopSessionDiagnosticsForRenderer({ helper: createDesktopHelper() }),
+      readBrowserReadiness: () => readBrowserReadinessEvidence({
+        homeDir: os.homedir(),
+        cliShimPath: resolveCliShimPath()
+      }),
+      readChromeHostPolicy: () => readChromeHostPolicyState({ homeDir: os.homedir() }),
+      readFinderAutomation: () => testFinderAutomationReadiness({
+        getFinderSelection: () => createDesktopHelper().getFinderSelection()
+      }),
+      readProviderStates: async () => providerStates,
+      readStartupWarnings: async () => readStartupWarnings({
+        appPath: app.getAppPath(),
+        devServerUrl,
+        env: process.env,
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath
+      }),
+      readComponentVersions: () => readComponentVersions({
+        appVersion: app.getVersion(),
+        cliShimPath: resolveCliShimPath(),
+        helperInfoPlistPath: resolveHelperInfoPlistPath({
+          appPath: app.getAppPath(),
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath
+        }),
+        extensionManifestPath: path.join(app.getAppPath(), "chrome-extension", "manifest.json"),
+        nativeHostManifestPath: path.join(
+          os.homedir(),
+          "Library",
+          "Application Support",
+          "Google",
+          "Chrome",
+          "NativeMessagingHosts",
+          `${CHROME_NATIVE_HOST_NAME}.json`
+        ),
+        providerStates
+      })
+    }
+  });
 });
 
 ipcMain.handle("skfiy:open-permission-settings", async (event, permission: unknown) => {
@@ -2668,6 +2792,59 @@ ipcMain.handle("skfiy:stop-automation-run", async (_event, runId: unknown) => {
   return automationRunSupervisor.readSnapshot();
 });
 
+ipcMain.handle("skfiy:approve-tmux-recovery", async (_event, input: unknown) => {
+  const request = readTmuxRecoveryApprovalRequest(input);
+  const budget = readTmuxRecoveryBudget(request.sessionName);
+  const events: unknown[] = [];
+  let terminalBudget = budget;
+
+  for await (const event of runTmuxRecoveryTask(request.action, createTmuxRecoveryClient(), {
+    approved: true,
+    budget,
+    sessionName: request.sessionName
+  })) {
+    events.push(event);
+    if ("budget" in event) {
+      terminalBudget = event.budget;
+    }
+  }
+
+  persistTmuxRecoveryBudget(request.sessionName, terminalBudget);
+  return {
+    sessionName: request.sessionName,
+    proposalId: request.proposalId,
+    events
+  };
+});
+
+function readTmuxRecoveryApprovalRequest(input: unknown): {
+  sessionName: string;
+  proposalId: string;
+  action: TmuxRecoveryAction;
+} {
+  if (!input || typeof input !== "object") {
+    throw new Error("tmux recovery approval request must be an object.");
+  }
+  const record = input as Record<string, unknown>;
+  const sessionName = typeof record.sessionName === "string"
+    ? record.sessionName.trim()
+    : "";
+  if (!/^[A-Za-z0-9_.:-]+$/u.test(sessionName)) {
+    throw new Error("tmux recovery session name is invalid.");
+  }
+  const proposalId = typeof record.proposalId === "string" && record.proposalId.trim().length > 0
+    ? record.proposalId
+    : "";
+  if (!proposalId) {
+    throw new Error("tmux recovery proposal id is invalid.");
+  }
+  const action = parseTmuxRecoveryAction(record.action);
+  if (!action) {
+    throw new Error("tmux recovery action is invalid.");
+  }
+  return { sessionName, proposalId, action };
+}
+
 ipcMain.handle("skfiy:get-runtime-status", () => {
   return createRuntimeStatusResponse(stopTurnHotkeyRegistered);
 });
@@ -2686,9 +2863,23 @@ registerProfileIpc({
   runtime: profileRuntime
 });
 
+registerDataAdminIpc({
+  ipcMain,
+  runtime: dataAdminRuntime
+});
+
 app.whenReady().then(async () => {
   automationRunSupervisor.start();
   automationMonitorManager.start();
+  try {
+    runStorageMigrations({ baseDir: skfiyAppSupportDir });
+  } catch (error) {
+    console.error("Storage migrations failed:", error);
+  }
+  void dataAdminRuntime.applyRetention();
+  setInterval(() => {
+    void dataAdminRuntime.applyRetention();
+  }, 24 * 60 * 60 * 1_000).unref();
   await createWindow();
   if (!stopTurnHotkeyRegistered) {
     stopTurnHotkeyRegistered = registerStopTurnHotkey({

@@ -180,8 +180,8 @@ export function createPersonalMemoryStore({
       }
 
       if (applied > 0) {
-        writeMemoryEntries(baseDir, "user", next.user, io);
-        writeMemoryEntries(baseDir, "agent", next.agent, io);
+        writePersonalMemoryEntries(baseDir, "user", next.user, io);
+        writePersonalMemoryEntries(baseDir, "agent", next.agent, io);
       }
 
       return { applied, blocked, ignored };
@@ -293,7 +293,7 @@ function sanitizeMemoryEntriesForPrompt(entries: string[], label: "USER" | "AGEN
     : entry);
 }
 
-function writeMemoryEntries(
+export function writePersonalMemoryEntries(
   baseDir: string,
   target: PersonalMemoryTarget,
   entries: string[],

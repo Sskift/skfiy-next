@@ -430,11 +430,20 @@ export interface AutomationRunTimelineEntry {
   detail?: string;
 }
 
+export interface AutomationRunRecoveryProposal {
+  proposalId: string;
+  actionKind: "send_input" | "restart_step" | "collect_summary";
+  reason: string;
+  risk: "low" | "medium" | "high" | "blocked";
+  mutatesSession: boolean;
+}
+
 export interface AutomationRunVerification {
   at: string;
   kind: "tmux-observation" | "manual" | "none";
   status: "observing" | "needs_attention" | "blocked" | "error";
   summary: string;
+  recoveryProposals?: AutomationRunRecoveryProposal[];
 }
 
 export interface AutomationRunCancellation {

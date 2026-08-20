@@ -12,6 +12,7 @@ import {
   readRouteOutcome,
   type RouteOutcome
 } from "../shared/route-outcome.js";
+import { redactSecrets } from "../shared/redaction.js";
 
 export const RUNTIME_SNAPSHOT_SCHEMA_VERSION = 1;
 export const RUNTIME_TURN_MARKER_SCHEMA_VERSION = 1;
@@ -755,9 +756,7 @@ function readLatestTimelineCurrentTurnFields(
 }
 
 function sanitizeRuntimeSnapshotText(value: string): string {
-  const redacted = value
-    .replace(/\b(token|password|secret|api[_-]?key)=([^\s&]+)/gi, "$1=[redacted]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [redacted]");
+  const redacted = redactSecrets(value);
 
   return redacted.length > MAX_RUNTIME_SNAPSHOT_TEXT_LENGTH
     ? `${redacted.slice(0, MAX_RUNTIME_SNAPSHOT_TEXT_LENGTH - 1)}...`

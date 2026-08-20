@@ -21,6 +21,91 @@ import type {
   ProfileSummary,
   ProfileSwitchResult
 } from "../shared/profile.js";
+import type {
+  DataDomain,
+  DataExportBundle
+} from "../shared/data-export.js";
+import {
+  isDataExportBundle,
+  isDataDomain
+} from "../shared/data-export.js";
+import type {
+  RetentionSettings,
+  RetentionSettingsUpdate
+} from "../shared/retention.js";
+import { isRetentionSettings } from "../shared/retention.js";
+
+type DataAdminDomain = DataDomain;
+
+interface DataRestorePreviewEntry {
+  domain: DataAdminDomain;
+  action: "replace" | "merge" | "skip";
+  currentSummary: string;
+  incomingSummary: string;
+  conflicts: string[];
+  warnings: string[];
+}
+
+interface DataRestorePreview {
+  domains: DataRestorePreviewEntry[];
+  requiresConfirmation: boolean;
+  backupPlan: { path: string; createdAt: string };
+  bundle: DataExportBundle;
+}
+
+interface DataRestoreResult {
+  appliedDomains: DataAdminDomain[];
+  skipped: { domain: DataAdminDomain; reason: string }[];
+  backupPath: string;
+  restoredAt: string;
+}
+
+interface DataDomainResetResult {
+  domain: DataAdminDomain;
+  resetImpact: string;
+  cleared: string[];
+}
+
+interface StorageFileHealth {
+  domain: DataAdminDomain;
+  relativePath: string;
+  status: "ok" | "missing" | "corrupt" | "future-schema";
+  schemaVersion?: number;
+  expectedSchemaVersion?: number;
+  error?: string;
+}
+
+interface StorageHealthSummary {
+  status: "ok" | "corrupt" | "future-schema";
+  files: StorageFileHealth[];
+  counts: {
+    total: number;
+    ok: number;
+    missing: number;
+    corrupt: number;
+    futureSchema: number;
+  };
+  recoveryHint?: string;
+}
+
+interface ApplyRetentionResult {
+  replay: { status: "applied" | "disabled" | "noop"; note: string };
+  screenshots: { status: "applied" | "disabled"; scanned: number; deleted: number };
+  runHistory: { status: "applied" | "disabled"; before: number; after: number };
+}
+import {
+  createUnknownDiagnosticReport,
+  type DiagnosticComponentName,
+  type DiagnosticComponentState,
+  type DiagnosticReport,
+  type DiagnosticReportBlocker,
+  type DiagnosticReportBlockerSeverity,
+  type DiagnosticReportBlockerType,
+  type DiagnosticReportRedaction,
+  type DiagnosticReportSection,
+  type DiagnosticReportSectionId,
+  type DiagnosticReportState
+} from "../shared/diagnostic-report.js";
 
 type ManualMode = "active" | "quiet";
 type PetWindowMode = "compact" | "expanded";
@@ -851,11 +936,20 @@ interface AutomationRunTimelineEntry {
   detail?: string;
 }
 
+interface AutomationRunRecoveryProposal {
+  proposalId: string;
+  actionKind: "send_input" | "restart_step" | "collect_summary";
+  reason: string;
+  risk: "low" | "medium" | "high" | "blocked";
+  mutatesSession: boolean;
+}
+
 interface AutomationRunVerification {
   at: string;
   kind: "tmux-observation" | "manual" | "none";
   status: "observing" | "needs_attention" | "blocked" | "error";
   summary: string;
+  recoveryProposals?: AutomationRunRecoveryProposal[];
 }
 
 interface AutomationRunCancellation {
@@ -956,6 +1050,7 @@ interface DesktopApi {
   getPermissions: () => Promise<PermissionSummary>;
   getPermissionDiagnostics: () => Promise<PermissionDiagnostics>;
   getDesktopSessionDiagnostics: () => Promise<DesktopSessionDiagnostics>;
+  getDiagnosticReport: () => Promise<DiagnosticReport>;
   openPermissionSettings: (permission: PermissionSettingsTarget) => Promise<void>;
   getStartupWarnings: () => Promise<StartupWarning[]>;
   getAppPolicySettings: () => Promise<AppPolicySettings>;
@@ -1076,6 +1171,18 @@ interface DesktopApi {
   onProfileChanged: (
     callback: (snapshot: ProfileRuntimeSnapshot) => void
   ) => () => void;
+  exportData: (input?: { domains?: DataDomain[] }) => Promise<DataExportBundle>;
+  previewRestoreData: (bundle: DataExportBundle) => Promise<DataRestorePreview>;
+  restoreData: (preview: DataRestorePreview) => Promise<DataRestoreResult>;
+  resetDataDomain: (input: {
+    domain: DataDomain;
+    confirm: true;
+  }) => Promise<DataDomainResetResult>;
+  getStorageHealth: () => Promise<StorageHealthSummary>;
+  getRetention: () => Promise<RetentionSettings>;
+  setRetention: (update: RetentionSettingsUpdate) => Promise<RetentionSettings>;
+  applyRetention: () => Promise<ApplyRetentionResult>;
+  onDataRestored: (callback: () => void) => () => void;
 }
 
 const taskStatuses = new Set<TaskStatus>([
@@ -1351,6 +1458,12 @@ const api: DesktopApi = {
     return isDesktopSessionDiagnostics(payload)
       ? payload
       : createUnknownDesktopSessionDiagnostics();
+  },
+  async getDiagnosticReport() {
+    const payload = await ipcRenderer.invoke("skfiy:get-diagnostic-report");
+    return isDiagnosticReport(payload)
+      ? payload
+      : createUnknownDiagnosticReport();
   },
   async openPermissionSettings(permission) {
     if (!isPermissionSettingsTarget(permission)) {
@@ -1881,6 +1994,74 @@ const api: DesktopApi = {
 
     ipcRenderer.on("skfiy:profile-changed", listener);
     return () => ipcRenderer.removeListener("skfiy:profile-changed", listener);
+  },
+  async exportData(input) {
+    const payload = await ipcRenderer.invoke("skfiy:export-data", {
+      domains: Array.isArray(input?.domains) ? input.domains : undefined
+    });
+    if (!isDataExportBundle(payload)) {
+      throw new Error("Data export is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async previewRestoreData(bundle) {
+    const payload = await ipcRenderer.invoke("skfiy:preview-restore-data", bundle);
+    if (!isDataRestorePreview(payload)) {
+      throw new Error("Restore preview is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async restoreData(preview) {
+    const payload = await ipcRenderer.invoke("skfiy:restore-data", preview);
+    if (!isDataRestoreResult(payload)) {
+      throw new Error("Data restore is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async resetDataDomain(input) {
+    const payload = await ipcRenderer.invoke("skfiy:reset-data-domain", {
+      domain: typeof input?.domain === "string" ? input.domain : undefined,
+      confirm: input?.confirm === true
+    });
+    if (!isDataDomainResetResult(payload)) {
+      throw new Error("Data domain reset is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async getStorageHealth() {
+    const payload = await ipcRenderer.invoke("skfiy:get-storage-health");
+    if (!isStorageHealthSummary(payload)) {
+      throw new Error("Storage health is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async getRetention() {
+    const payload = await ipcRenderer.invoke("skfiy:get-retention");
+    if (!isRetentionSettings(payload)) {
+      throw new Error("Retention settings are unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async setRetention(update) {
+    const payload = await ipcRenderer.invoke("skfiy:set-retention", update);
+    if (!isRetentionSettings(payload)) {
+      throw new Error("Retention settings are unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async applyRetention() {
+    const payload = await ipcRenderer.invoke("skfiy:apply-retention");
+    if (!isApplyRetentionResult(payload)) {
+      throw new Error("Retention enforcement is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  onDataRestored(callback) {
+    const listener = () => {
+      callback();
+    };
+    ipcRenderer.on("skfiy:data-restored", listener);
+    return () => ipcRenderer.removeListener("skfiy:data-restored", listener);
   }
 };
 
@@ -3317,6 +3498,179 @@ function isDesktopSessionDiagnostics(value: unknown): value is DesktopSessionDia
   );
 }
 
+const DIAGNOSTIC_REPORT_BLOCKER_TYPES = new Set<string>([
+  "desktop-session-locked",
+  "desktop-session-asleep",
+  "desktop-session-not-controllable",
+  "desktop-session-unknown",
+  "screen-recording-denied",
+  "screen-recording-not-determined",
+  "screen-recording-unknown",
+  "accessibility-denied",
+  "accessibility-not-determined",
+  "accessibility-unknown",
+  "permission-mismatch",
+  "provider-unconfigured",
+  "provider-unavailable",
+  "provider-auth-blocked",
+  "provider-not-proven",
+  "provider-unknown",
+  "chrome-native-host-missing",
+  "chrome-native-host-mismatched",
+  "chrome-native-host-cli-missing",
+  "chrome-native-host-invalid",
+  "chrome-host-policy-invalid",
+  "chrome-extension-disconnected",
+  "chrome-extension-stale",
+  "chrome-extension-invalid",
+  "browser-context-blocked",
+  "browser-context-partial",
+  "browser-context-not-probed",
+  "browser-context-unknown",
+  "finder-automation-denied",
+  "finder-automation-not-tested",
+  "finder-automation-test-failed"
+]);
+
+const DIAGNOSTIC_REPORT_SECTION_IDS = new Set<string>([
+  "desktop-session",
+  "permissions",
+  "provider",
+  "chrome",
+  "browser-context",
+  "finder-automation",
+  "startup"
+]);
+
+const DIAGNOSTIC_COMPONENT_NAMES = new Set<string>([
+  "app",
+  "cli",
+  "helper",
+  "provider",
+  "chrome-extension",
+  "native-host"
+]);
+
+function isDiagnosticReportState(value: unknown): value is DiagnosticReportState {
+  return value === "ready"
+    || value === "action-required"
+    || value === "blocked"
+    || value === "unknown";
+}
+
+function isDiagnosticReportBlockerSeverity(
+  value: unknown
+): value is DiagnosticReportBlockerSeverity {
+  return value === "blocked"
+    || value === "action-required"
+    || value === "unknown";
+}
+
+function isDiagnosticReportBlockerType(
+  value: unknown
+): value is DiagnosticReportBlockerType {
+  return typeof value === "string" && DIAGNOSTIC_REPORT_BLOCKER_TYPES.has(value);
+}
+
+function isDiagnosticReportSectionId(
+  value: unknown
+): value is DiagnosticReportSectionId {
+  return typeof value === "string" && DIAGNOSTIC_REPORT_SECTION_IDS.has(value);
+}
+
+function isDiagnosticComponentName(value: unknown): value is DiagnosticComponentName {
+  return typeof value === "string" && DIAGNOSTIC_COMPONENT_NAMES.has(value);
+}
+
+function isDiagnosticComponentState(value: unknown): value is DiagnosticComponentState {
+  return value === "available" || value === "missing" || value === "unknown";
+}
+
+function isDiagnosticReportBlocker(value: unknown): value is DiagnosticReportBlocker {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const blocker = value as Partial<DiagnosticReportBlocker>;
+  return (
+    typeof blocker.id === "string"
+    && isDiagnosticReportBlockerType(blocker.type)
+    && isDiagnosticReportBlockerSeverity(blocker.severity)
+    && typeof blocker.title === "string"
+    && typeof blocker.detail === "string"
+    && typeof blocker.nextAction === "string"
+    && typeof blocker.copyable === "string"
+  );
+}
+
+function isDiagnosticReportSection(value: unknown): value is DiagnosticReportSection {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const section = value as Partial<DiagnosticReportSection>;
+  return (
+    isDiagnosticReportSectionId(section.id)
+    && isDiagnosticReportState(section.state)
+    && typeof section.summary === "string"
+    && Array.isArray(section.blockers)
+    && section.blockers.every(isDiagnosticReportBlocker)
+  );
+}
+
+function isDiagnosticComponentVersion(
+  value: unknown
+): value is DiagnosticReport["componentVersions"][number] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const component = value as Partial<DiagnosticReport["componentVersions"][number]>;
+  return (
+    isDiagnosticComponentName(component.component)
+    && (component.version === null || typeof component.version === "string")
+    && typeof component.source === "string"
+    && isDiagnosticComponentState(component.state)
+    && (component.detail === undefined || typeof component.detail === "string")
+  );
+}
+
+function isDiagnosticReportRedaction(
+  value: unknown
+): value is DiagnosticReportRedaction {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const redaction = value as Partial<DiagnosticReportRedaction>;
+  return (
+    typeof redaction.rule === "string"
+    && typeof redaction.count === "number"
+  );
+}
+
+function isDiagnosticReport(value: unknown): value is DiagnosticReport {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const report = value as Partial<DiagnosticReport>;
+  return (
+    report.schemaVersion === 1
+    && typeof report.generatedAt === "string"
+    && isDiagnosticReportState(report.overallState)
+    && Array.isArray(report.sections)
+    && report.sections.every(isDiagnosticReportSection)
+    && Array.isArray(report.blockers)
+    && report.blockers.every(isDiagnosticReportBlocker)
+    && Array.isArray(report.componentVersions)
+    && report.componentVersions.every(isDiagnosticComponentVersion)
+    && Array.isArray(report.redactionSummary)
+    && report.redactionSummary.every(isDiagnosticReportRedaction)
+    && typeof report.exportPreview === "string"
+  );
+}
+
 function isDesktopSessionStatus(value: unknown): value is DesktopSessionStatus {
   if (!value || typeof value !== "object") {
     return false;
@@ -3660,6 +4014,36 @@ function isAutomationRunVerification(value: unknown): value is AutomationRunVeri
       || verification.status === "error"
     )
     && typeof verification.summary === "string"
+    && (
+      verification.recoveryProposals === undefined
+      || (
+        Array.isArray(verification.recoveryProposals)
+        && verification.recoveryProposals.every(isAutomationRunRecoveryProposal)
+      )
+    )
+  );
+}
+
+function isAutomationRunRecoveryProposal(value: unknown): value is AutomationRunRecoveryProposal {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const proposal = value as Partial<AutomationRunRecoveryProposal>;
+  return (
+    typeof proposal.proposalId === "string"
+    && (
+      proposal.actionKind === "send_input"
+      || proposal.actionKind === "restart_step"
+      || proposal.actionKind === "collect_summary"
+    )
+    && typeof proposal.reason === "string"
+    && (
+      proposal.risk === "low"
+      || proposal.risk === "medium"
+      || proposal.risk === "high"
+      || proposal.risk === "blocked"
+    )
+    && typeof proposal.mutatesSession === "boolean"
   );
 }
 
@@ -4250,6 +4634,130 @@ function isProfileExportBundle(value: unknown): value is ProfileExportBundle {
   }
 
   return true;
+}
+
+function isDataRestorePreview(value: unknown): value is DataRestorePreview {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const preview = value as Partial<DataRestorePreview>;
+  return Array.isArray(preview.domains)
+    && preview.domains.every(isDataRestorePreviewEntry)
+    && typeof preview.requiresConfirmation === "boolean"
+    && isBackupPlan(preview.backupPlan)
+    && isDataExportBundle(preview.bundle);
+}
+
+function isDataRestorePreviewEntry(value: unknown): value is DataRestorePreviewEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const entry = value as Partial<DataRestorePreviewEntry>;
+  return isDataDomain(entry.domain)
+    && (entry.action === "replace" || entry.action === "merge" || entry.action === "skip")
+    && typeof entry.currentSummary === "string"
+    && typeof entry.incomingSummary === "string"
+    && Array.isArray(entry.conflicts)
+    && entry.conflicts.every((conflict) => typeof conflict === "string")
+    && Array.isArray(entry.warnings)
+    && entry.warnings.every((warning) => typeof warning === "string");
+}
+
+function isBackupPlan(value: unknown): value is { path: string; createdAt: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const plan = value as Record<string, unknown>;
+  return typeof plan.path === "string" && typeof plan.createdAt === "string";
+}
+
+function isDataRestoreResult(value: unknown): value is DataRestoreResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Partial<DataRestoreResult>;
+  return Array.isArray(result.appliedDomains)
+    && result.appliedDomains.every(isDataDomain)
+    && Array.isArray(result.skipped)
+    && result.skipped.every(
+      (entry) => isDataDomain(entry?.domain) && typeof entry?.reason === "string"
+    )
+    && typeof result.backupPath === "string"
+    && typeof result.restoredAt === "string";
+}
+
+function isDataDomainResetResult(value: unknown): value is DataDomainResetResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Partial<DataDomainResetResult>;
+  return isDataDomain(result.domain)
+    && typeof result.resetImpact === "string"
+    && Array.isArray(result.cleared)
+    && result.cleared.every((entry) => typeof entry === "string");
+}
+
+function isStorageHealthSummary(value: unknown): value is StorageHealthSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const summary = value as Partial<StorageHealthSummary>;
+  return (summary.status === "ok"
+    || summary.status === "corrupt"
+    || summary.status === "future-schema")
+    && Array.isArray(summary.files)
+    && summary.files.every(isStorageFileHealth)
+    && isStorageHealthCounts(summary.counts)
+    && (summary.recoveryHint === undefined || typeof summary.recoveryHint === "string");
+}
+
+function isStorageFileHealth(value: unknown): value is StorageFileHealth {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const file = value as Partial<StorageFileHealth>;
+  return isDataDomain(file.domain)
+    && typeof file.relativePath === "string"
+    && (file.status === "ok"
+      || file.status === "missing"
+      || file.status === "corrupt"
+      || file.status === "future-schema");
+}
+
+function isStorageHealthCounts(
+  value: unknown
+): value is StorageHealthSummary["counts"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const counts = value as Record<string, unknown>;
+  return typeof counts.total === "number"
+    && typeof counts.ok === "number"
+    && typeof counts.missing === "number"
+    && typeof counts.corrupt === "number"
+    && typeof counts.futureSchema === "number";
+}
+
+function isApplyRetentionResult(value: unknown): value is ApplyRetentionResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Partial<ApplyRetentionResult>;
+  return isRetentionPhase(result.replay, ["applied", "disabled", "noop"])
+    && isRetentionPhase(result.screenshots, ["applied", "disabled"])
+    && isRetentionPhase(result.runHistory, ["applied", "disabled"]);
+}
+
+function isRetentionPhase(
+  value: unknown,
+  statuses: readonly string[]
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const phase = value as Record<string, unknown>;
+  return typeof phase.status === "string"
+    && statuses.includes(phase.status);
 }
 
 function createDefaultProfileRuntimeSnapshot(): ProfileRuntimeSnapshot {

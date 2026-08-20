@@ -4,6 +4,8 @@ import type {
 } from "./computer-use/types.js";
 import type { TurnReplayTaskEvent } from "./computer-use/turn-replay-store.js";
 import type { TmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
+import type { TmuxRecoveryAction, TmuxRecoveryOutcome } from "./computer-use/tmux-recovery.js";
+import { describeTmuxRecoveryAction } from "./computer-use/tmux-recovery.js";
 import type { GhosttyTaskEvent } from "./orchestrator/events.js";
 import type {
   ChromeTaskEvent,
@@ -15,6 +17,10 @@ import type {
 } from "./orchestrator/finder-task.js";
 import type { FinderTaskResult } from "./orchestrator/finder-task-result.js";
 import type { TmuxSupervisionTaskEvent } from "./orchestrator/tmux-supervision-task.js";
+import {
+  formatTmuxRecoveryProposals,
+  type TmuxRecoveryTaskEvent
+} from "./orchestrator/tmux-recovery-task.js";
 import type { CommandRoute, ExecutableCommandRoute } from "./task-routing.js";
 import {
   createTaskEventRouteMetadata,
@@ -47,7 +53,8 @@ export type ComputerUseTaskEvent =
   | GhosttyTaskEvent
   | ChromeTaskEvent
   | FinderTaskEvent
-  | TmuxSupervisionTaskEvent;
+  | TmuxSupervisionTaskEvent
+  | TmuxRecoveryTaskEvent;
 
 export interface ObserveAppReplayRecord extends DesktopAppState {
   stage: "before" | "after";
@@ -71,6 +78,7 @@ export interface TaskEvent {
   finderTaskResult?: FinderTaskResult;
   chromeWorkflowPreview?: ChromeWorkflowPlanPreview;
   tmuxSupervisionReport?: TmuxSupervisionReport;
+  tmuxRecoveryOutcome?: TmuxRecoveryOutcome;
 }
 
 export interface TaskEventStopTurnBehavior {
@@ -93,19 +101,25 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         message: `${prefix}Risk ${event.risk.level}: ${event.risk.reason}`,
         replayReset: true
       };
+    case "recovery_started":
+      return {
+        status: "waiting",
+        message: `${prefix}Risk ${event.risk.level}: ${event.risk.reason}`,
+        replayReset: true
+      };
     case "approval_required":
       if (event.risk.level === "blocked") {
         return {
           status: "blocked",
           message: event.risk.reason,
-          command: "command" in event ? event.command : `监督 tmux ${event.sessionName}`
+          command: readTaskEventCommand(event)
         };
       }
 
       return {
         status: "approval_required",
         message: `Approval required (${event.risk.level}): ${event.risk.reason}`,
-        command: "command" in event ? event.command : `监督 tmux ${event.sessionName}`
+        command: readTaskEventCommand(event)
       };
     case "observing":
       return {
@@ -154,12 +168,28 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         status: "verifying",
         message: `${prefix}Verified ${event.actionType}: ${event.message ?? "passed."}`
       };
+    case "executing":
+      return {
+        status: "executing",
+        message: `${prefix}Recovering tmux (attempt ${event.attempt}): ${describeTmuxRecoveryAction(event.action)}.`
+      };
     case "verification_failed":
       return {
         status: "failed",
         message: event.stage === "permissions"
           ? `${prefix}${event.reason}`
           : `${prefix}Verification failed (${event.stage}): ${event.reason}`
+      };
+    case "failed":
+      return {
+        status: "failed",
+        message: `${prefix}${event.summary}`,
+        tmuxRecoveryOutcome: event.outcome
+      };
+    case "budget_exhausted":
+      return {
+        status: "blocked",
+        message: `${prefix}${event.reason}`
       };
     case "recovery_attempted":
       return {
@@ -265,13 +295,20 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         message: `${prefix}Captured after screenshot: ${event.path}`,
         replayRecord: createObserveAppReplayRecord("after", event.observation)
       };
-    case "completed":
+    case "completed": {
+      const proposalSummary = "report" in event
+        ? formatTmuxRecoveryProposals(event.report)
+        : "";
       return {
         status: "completed",
-        message: event.summary,
+        message: proposalSummary
+          ? `${event.summary}\n${proposalSummary}`
+          : event.summary,
         ...("report" in event ? { tmuxSupervisionReport: event.report } : {}),
+        ...("outcome" in event ? { tmuxRecoveryOutcome: event.outcome } : {}),
         ...("result" in event ? { finderTaskResult: event.result } : {})
       };
+    }
   }
 
   return {
@@ -344,6 +381,19 @@ function formatFinderSelectionSummary(context: FinderSelectionResult): string {
 
 function formatControlChannel(channel: string): string {
   return channel.toLowerCase() === "cdp" ? "CDP" : channel;
+}
+
+function readTaskEventCommand(event: ComputerUseTaskEvent): string {
+  if ("command" in event && typeof event.command === "string") {
+    return event.command;
+  }
+  if ("sessionName" in event && typeof event.sessionName === "string") {
+    return `监督 tmux ${event.sessionName}`;
+  }
+  if ("action" in event && typeof event.action === "object" && event.action !== null) {
+    return `恢复 tmux ${describeTmuxRecoveryAction(event.action as TmuxRecoveryAction)}`;
+  }
+  return "tmux task";
 }
 
 function createObserveAppReplayRecord(

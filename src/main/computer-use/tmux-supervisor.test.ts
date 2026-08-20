@@ -147,7 +147,8 @@ describe("createTmuxSupervisionReport", () => {
         action: "continue_observing",
         reason: "money-run has 2 windows, 3 panes, and no obvious block markers.",
         mutatesSession: false
-      }
+      },
+      recoveryProposals: []
     });
   });
 
@@ -356,5 +357,201 @@ describe("createTmuxSupervisionReport", () => {
         mutatesSession: false
       }
     });
+  });
+
+  it("flags a stalled pane when its tail is unchanged across observations", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: "@1\t0\tagent\t1\t1",
+      panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tnode\tmain",
+      paneTails: {
+        "%1": "step 3/9: training"
+      },
+      previousTails: {
+        "%1": "step 3/9: training"
+      }
+    });
+
+    expect(report.status).toBe("needs_attention");
+    expect(report.signals).toContainEqual({
+      type: "stalled",
+      severity: "attention",
+      paneId: "%1",
+      message: "tmux pane %1 tail is unchanged since the last observation; the run may be stalled."
+    });
+  });
+
+  it("does not flag a stalled pane when the tail changed", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: "@1\t0\tagent\t1\t1",
+      panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tnode\tmain",
+      paneTails: {
+        "%1": "step 4/9: training"
+      },
+      previousTails: {
+        "%1": "step 3/9: training"
+      }
+    });
+
+    expect(report.signals).toEqual([]);
+    expect(report.status).toBe("observing");
+  });
+
+  it("flags a waiting pane when the shell is idle at a prompt", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: "@1\t0\tagent\t1\t1",
+      panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tzsh\tmain",
+      paneTails: {
+        "%1": "last command finished\n~/money-run $"
+      }
+    });
+
+    expect(report.status).toBe("needs_attention");
+    expect(report.signals).toContainEqual({
+      type: "waiting",
+      severity: "attention",
+      paneId: "%1",
+      message: "tmux pane %1 appears idle at a shell prompt."
+    });
+  });
+
+  it("flags a completed pane when the tail contains a completion marker", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: "@1\t0\tagent\t1\t1",
+      panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tnode\tmain",
+      paneTails: {
+        "%1": "Run completed successfully ✓"
+      }
+    });
+
+    expect(report.status).toBe("needs_attention");
+    expect(report.signals).toContainEqual({
+      type: "completed",
+      severity: "attention",
+      paneId: "%1",
+      matchedText: "completed successfully",
+      message: "tmux pane %1 recent output contains a completion marker."
+    });
+  });
+});
+
+describe("tmux supervision recovery proposals", () => {
+  it("attaches a send_input proposal for approval-needed reports", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: "@1\t0\tagent\t1\t1",
+      panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tcodex\tmain",
+      paneTails: {
+        "%1": "Do you want to allow this command?\nApprove or deny"
+      }
+    });
+
+    expect(report.status).toBe("needs_attention");
+    expect(report.recoveryProposals).toHaveLength(1);
+    expect(report.recoveryProposals[0]).toMatchObject({
+      signalType: "approval-needed",
+      mutatesSession: true,
+      action: {
+        kind: "send_input",
+        paneId: "%1",
+        keys: "y"
+      },
+      risk: { level: "high" }
+    });
+    // The read-only recommendation never implies mutation.
+    expect(report.recommendation.mutatesSession).toBe(false);
+  });
+
+  it("attaches a restart_step proposal for blocked reports", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: false,
+      commandError: "can't find session: money-run"
+    });
+
+    expect(report.status).toBe("blocked");
+    expect(report.recoveryProposals).toHaveLength(1);
+    expect(report.recoveryProposals[0]).toMatchObject({
+      signalType: "no-session",
+      mutatesSession: true,
+      action: {
+        kind: "restart_step",
+        stepId: "restart-money-run"
+      },
+      risk: { level: "high" }
+    });
+    expect(report.recommendation.mutatesSession).toBe(false);
+  });
+
+  it("attaches a read-only collect_summary proposal for error-marker reports", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: "@1\t0\tagent\t1\t1",
+      panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tnode\tmain",
+      paneTails: {
+        "%1": "Traceback (most recent call last):"
+      }
+    });
+
+    expect(report.recoveryProposals).toHaveLength(1);
+    expect(report.recoveryProposals[0]).toMatchObject({
+      signalType: "error-marker",
+      mutatesSession: false,
+      action: { kind: "collect_summary" },
+      risk: { level: "medium" }
+    });
+  });
+
+  it("carries no recovery proposals on observing reports", () => {
+    const report = createTmuxSupervisionReport({
+      sessionName: "money-run",
+      hasSession: true,
+      windowsOutput: WINDOW_LINES,
+      panesOutput: PANE_LINES,
+      paneTails: {
+        "%1": "building...",
+        "%2": "worker ready",
+        "%3": "logs streaming"
+      }
+    });
+
+    expect(report.status).toBe("observing");
+    expect(report.recoveryProposals).toEqual([]);
+    expect(report.recommendation.mutatesSession).toBe(false);
+  });
+
+  it("keeps recommendation.mutatesSession false for every report", () => {
+    const cases = [
+      createTmuxSupervisionReport({
+        sessionName: "money-run",
+        hasSession: false
+      }),
+      createTmuxSupervisionReport({
+        sessionName: "money-run",
+        hasSession: true,
+        windowsOutput: "@1\t0\tagent\t1\t1",
+        panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t1\tzsh\tmain"
+      }),
+      createTmuxSupervisionReport({
+        sessionName: "money-run",
+        hasSession: true,
+        windowsOutput: "@1\t0\tagent\t1\t1",
+        panesOutput: "money-run\t@1\t0\tagent\t%1\t0\t1\t0\tcodex\tmain",
+        paneTails: { "%1": "Approve or deny?" }
+      })
+    ];
+
+    for (const report of cases) {
+      expect(report.recommendation.mutatesSession).toBe(false);
+    }
   });
 });

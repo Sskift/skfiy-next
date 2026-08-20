@@ -1,4 +1,5 @@
 import type { AutomationMonitorDefinition } from "./automation-monitor.js";
+import type { TmuxRecoveryProposal } from "./computer-use/tmux-recovery.js";
 import type { TmuxSupervisionClient } from "./tmux-supervision-client.js";
 import type { TmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
 import {
@@ -14,8 +15,13 @@ import {
   transitionAutomationRun,
   MAX_AUTOMATION_RUN_ERROR_LENGTH,
   MAX_AUTOMATION_RUN_SUMMARY_LENGTH,
+  MAX_AUTOMATION_RUN_RECOVERY_PROPOSALS,
+  MAX_AUTOMATION_RUN_RECOVERY_REASON_LENGTH,
+  MAX_AUTOMATION_RUN_ID_LENGTH,
   type AutomationRunCancellationSource,
   type AutomationRunConfig,
+  type AutomationRunRecoveryActionKind,
+  type AutomationRunRecoveryProposal,
   type AutomationRunRecord,
   type AutomationRunSnapshot,
   type AutomationRunStore,
@@ -416,11 +422,17 @@ export function createAutomationRunSupervisor({
 
     if (outcome.ok) {
       const report = outcome.report;
+      const recoveryProposals = readVerificationRecoveryProposals(
+        report.recoveryProposals
+      );
       const verification = {
         at: now(),
         kind: "tmux-observation" as const,
         status: report.status,
-        summary: boundString(report.recommendation.reason, MAX_AUTOMATION_RUN_SUMMARY_LENGTH)
+        summary: boundString(report.recommendation.reason, MAX_AUTOMATION_RUN_SUMMARY_LENGTH),
+        // Surface proposals through the existing verification channel. The
+        // supervisor stays read-only: it never executes recovery itself.
+        ...(recoveryProposals.length > 0 ? { recoveryProposals } : {})
       };
       applyTransition(runId, { type: "verification", verification });
       releaseSlot();
@@ -776,4 +788,24 @@ function boundString(value: string, maxLength: number): string {
     .replace(/\s+/gu, " ")
     .trim();
   return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
+}
+
+function readVerificationRecoveryProposals(
+  proposals: readonly TmuxRecoveryProposal[]
+): AutomationRunRecoveryProposal[] {
+  const result: AutomationRunRecoveryProposal[] = [];
+  for (const proposal of proposals) {
+    if (result.length >= MAX_AUTOMATION_RUN_RECOVERY_PROPOSALS) {
+      break;
+    }
+    const actionKind: AutomationRunRecoveryActionKind = proposal.action.kind;
+    result.push({
+      proposalId: boundString(proposal.proposalId, MAX_AUTOMATION_RUN_ID_LENGTH),
+      actionKind,
+      reason: boundString(proposal.reason, MAX_AUTOMATION_RUN_RECOVERY_REASON_LENGTH),
+      risk: proposal.risk.level,
+      mutatesSession: proposal.mutatesSession
+    });
+  }
+  return result;
 }

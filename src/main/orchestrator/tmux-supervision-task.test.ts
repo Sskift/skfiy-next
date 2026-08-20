@@ -71,7 +71,8 @@ describe("runTmuxSupervisionTask", () => {
           action: "continue_observing",
           reason: "money-run has 1 window, 1 pane, and no obvious block markers.",
           mutatesSession: false
-        }
+        },
+        recoveryProposals: []
       })
     };
 

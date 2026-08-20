@@ -134,6 +134,36 @@ describe("automation run outcome descriptions", () => {
     }))).toBe("money-run-goal has 1 window, 1 pane.");
   });
 
+  it("appends a recovery proposal hint when the verification carries proposals", () => {
+    expect(describeAutomationRunOutcome(createRecord({
+      state: "attention",
+      latestVerification: {
+        at: "2026-08-20T09:00:00.000Z",
+        kind: "tmux-observation",
+        status: "needs_attention",
+        summary: "money-run appears to be waiting for approval in pane %1.",
+        recoveryProposals: [
+          {
+            proposalId: "money-run:send_input:%1",
+            actionKind: "send_input",
+            reason: "Pane %1 is waiting for approval.",
+            risk: "high",
+            mutatesSession: true
+          },
+          {
+            proposalId: "money-run:collect_summary:%1",
+            actionKind: "collect_summary",
+            reason: "Collect a summary.",
+            risk: "medium",
+            mutatesSession: false
+          }
+        ]
+      }
+    }))).toBe(
+      "money-run appears to be waiting for approval in pane %1. · 2 个恢复建议待审批（1 个会修改会话）。"
+    );
+  });
+
   it("describes active and terminal states in Chinese", () => {
     expect(describeAutomationRunOutcome(createRecord({ state: "queued" }))).toBe("等待并发槽位。");
     expect(describeAutomationRunOutcome(createRecord({ state: "running", attempt: 2 })))

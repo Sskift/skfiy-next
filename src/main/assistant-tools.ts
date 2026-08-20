@@ -79,6 +79,8 @@ function formatCommandRoute(route: CommandRoute): string {
       return "Ghostty";
     case "tmux_supervision":
       return "money-run supervision";
+    case "tmux_recovery":
+      return "money-run recovery";
     case "chat":
       return "chat";
     case "needs_clarification":

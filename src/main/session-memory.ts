@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { redactSecrets } from "../shared/redaction.js";
 
 const SESSION_SEARCH_STOP_WORDS = new Set([
   "a",
@@ -238,12 +239,7 @@ function formatBrowserContextLabel(browserContext: SessionMemoryBrowserContext |
 }
 
 function sanitizePromptText(value: string, maxLength: number): string {
-  const redacted = value
-    .trim()
-    .replace(/\s+/gu, " ")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gu, "Bearer [redacted]")
-    .replace(/\btoken\s+[A-Za-z0-9._~+/=-]{10,}/giu, "token [redacted]")
-    .replace(/\bsk-[A-Za-z0-9._~+/=-]{10,}/gu, "[redacted]");
+  const redacted = redactSecrets(value.trim().replace(/\s+/gu, " "));
 
   return truncate(redacted, maxLength);
 }

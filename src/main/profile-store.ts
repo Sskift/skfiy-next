@@ -44,6 +44,7 @@ export interface ProfileStore {
   delete(profileId: string): void;
   captureActive(settings: ProfileSettings): Profile | undefined;
   upsert(profile: Profile): Profile;
+  resetDefaultToSeed(seed: ProfileSettings): Profile;
   snapshot(): ProfileRuntimeSnapshot;
 }
 
@@ -186,6 +187,25 @@ export function createProfileStore({
       const stored: Profile = { ...profile };
       writeRegistry({ ...registry, profiles: [...registry.profiles, stored] });
       return { ...stored };
+    },
+
+    resetDefaultToSeed(seed: ProfileSettings): Profile {
+      const timestamp = now().toISOString();
+      const seeded: Profile = {
+        ...seed,
+        id: DEFAULT_PROFILE_ID,
+        name: DEFAULT_PROFILE_NAME,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        memoryScope: "shared"
+      };
+      writeRegistry({
+        ...registry,
+        profiles: registry.profiles.map((profile) =>
+          profile.id === DEFAULT_PROFILE_ID ? seeded : profile
+        )
+      });
+      return { ...seeded };
     },
 
     snapshot(): ProfileRuntimeSnapshot {

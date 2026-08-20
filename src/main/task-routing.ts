@@ -21,7 +21,8 @@ export type ExecutableCommandRoute =
       appName: string;
       pid?: number;
     }
-  | { kind: "tmux_supervision"; sessionName: string };
+  | { kind: "tmux_supervision"; sessionName: string }
+  | { kind: "tmux_recovery"; sessionName: string };
 
 export type CommandRoute =
   | ExecutableCommandRoute
@@ -89,6 +90,14 @@ function selectBaseCommandRoute(command: string, registry: AdapterRegistry): Com
     };
   }
 
+  const recoverySessionName = readMoneyRunRecoverySessionName(command);
+  if (recoverySessionName) {
+    return {
+      kind: "tmux_recovery",
+      sessionName: recoverySessionName
+    };
+  }
+
   if (isShortGreetingPrompt(command)) {
     return createChatRoute();
   }
@@ -153,7 +162,8 @@ function isExecutableCommandRoute(route: CommandRoute): route is ExecutableComma
     || route.kind === "chrome"
     || route.kind === "finder"
     || route.kind === "desktop"
-    || route.kind === "tmux_supervision";
+    || route.kind === "tmux_supervision"
+    || route.kind === "tmux_recovery";
 }
 
 function createRouteConfirmationReason(route: ExecutableCommandRoute): string {
@@ -168,6 +178,8 @@ function createRouteConfirmationReason(route: ExecutableCommandRoute): string {
       return `Route policy requires confirmation before continuing with ${route.appName}.`;
     case "tmux_supervision":
       return "Route policy requires confirmation before continuing with money-run supervision.";
+    case "tmux_recovery":
+      return "Route policy requires confirmation before continuing with money-run recovery.";
   }
 }
 
@@ -210,6 +222,39 @@ function normalizeConversationalPrompt(command: string): string {
     .toLowerCase()
     .replace(/^[\s,，。.!！?？、]+|[\s,，。.!！?？、]+$/g, "")
     .replace(/\s+/g, " ");
+}
+
+/**
+ * Detect an explicit long-horizon recovery request for a money-run tmux
+ * session ("recover money-run", "restart money-run session", "恢复 money-run").
+ * Recovery itself never runs from this route: the route runs a read-only
+ * observation so recovery proposals surface, and the user then approves a
+ * specific proposal through the skfiy:approve-tmux-recovery IPC.
+ */
+export function readMoneyRunRecoverySessionName(command: string): string | undefined {
+  const normalized = command.trim().toLowerCase();
+
+  if (!normalized.includes("money-run")) {
+    return undefined;
+  }
+
+  const mentionsTmuxContext = /\btmux\b|\bsession\b|\bpane\b|会话/u.test(normalized);
+  const asksForRecovery = [
+    "恢复",
+    "重启",
+    "重跑",
+    "修复",
+    "recover",
+    "restart",
+    "retry",
+    "fix"
+  ].some((phrase) => normalized.includes(phrase));
+
+  if (!mentionsTmuxContext || !asksForRecovery) {
+    return undefined;
+  }
+
+  return command.match(/\b[A-Za-z0-9_.-]*money-run[A-Za-z0-9_.-]*\b/iu)?.[0] ?? "money-run";
 }
 
 function isRouteLevelConfirmationRequest(command: string): boolean {

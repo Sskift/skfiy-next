@@ -51,6 +51,10 @@ export function createTmuxSupervisionClient({
   tailLines = 120,
   runTmux = createDefaultTmuxRunner()
 }: CreateTmuxSupervisionClientOptions = {}): TmuxSupervisionClient {
+  // Cross-observation state lives here (the report builder stays pure): the
+  // previous pane tails feed stalled detection on the next observation.
+  const previousTailsBySession = new Map<string, Record<string, string | undefined>>();
+
   return {
     async observeSession(sessionName: string): Promise<TmuxSupervisionReport> {
       const sessionProbe = await runTmux(["has-session", "-t", sessionName], {
@@ -58,6 +62,7 @@ export function createTmuxSupervisionClient({
       });
 
       if (sessionProbe.exitCode !== 0) {
+        previousTailsBySession.delete(sessionName);
         return createTmuxSupervisionReport({
           sessionName,
           hasSession: false,
@@ -97,13 +102,16 @@ export function createTmuxSupervisionClient({
         paneTails[pane.id] = tail.exitCode === 0 ? tail.stdout : tail.stderr;
       }
 
-      return createTmuxSupervisionReport({
+      const report = createTmuxSupervisionReport({
         sessionName,
         hasSession: true,
         windowsOutput: windows.stdout,
         panesOutput: panes.stdout,
-        paneTails
+        paneTails,
+        previousTails: previousTailsBySession.get(sessionName)
       });
+      previousTailsBySession.set(sessionName, paneTails);
+      return report;
     }
   };
 }

@@ -90,6 +90,7 @@ export async function runTaskRecoveryStage(
         state: "blocked",
         message: "Read-only recovery is not available for generic Computer Use targets."
       };
+    case "tmux_recovery":
     case "tmux_supervision":
       return runTmuxRecoveryStage(input, dependencies);
   }
@@ -315,7 +316,10 @@ async function runTmuxRecoveryStage(
   dependencies: TaskRecoveryStageDependencies
 ): Promise<TaskRecoveryStageResult> {
   const probeTmuxSession = dependencies.probeTmuxSession;
-  if (!probeTmuxSession || input.context.route.kind !== "tmux_supervision") {
+  if (
+    !probeTmuxSession
+    || (input.context.route.kind !== "tmux_supervision" && input.context.route.kind !== "tmux_recovery")
+  ) {
     return {
       state: "failed",
       message: "The read-only tmux observation probe is unavailable."

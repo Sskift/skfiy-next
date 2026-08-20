@@ -34,7 +34,8 @@ const EXPECTED_VERIFICATION = {
   chrome: "Confirm the approved page action and inspect the resulting page snapshot.",
   finder: "Confirm the approved plan still matches the target and verify each file operation.",
   desktop: "Confirm a fresh target-app observation verifies the requested goal after each action.",
-  tmux_supervision: "Confirm a fresh read-only pane snapshot and supervision recommendation."
+  tmux_supervision: "Confirm a fresh read-only pane snapshot and supervision recommendation.",
+  tmux_recovery: "Confirm the approved recovery action and re-observe the session state."
 } as const;
 
 export function createComputerUsePlanPreview({
@@ -108,6 +109,8 @@ function readRouteRisk(command: string, route: ExecutableCommandRoute) {
       };
     case "tmux_supervision":
       return readTmuxSupervisionTaskRisk();
+    case "tmux_recovery":
+      return readTmuxSupervisionTaskRisk();
   }
 }
 
@@ -123,6 +126,8 @@ function readRouteAppName(route: ExecutableCommandRoute): string {
       return boundedLabel(route.appName, "Approved app");
     case "tmux_supervision":
       return "tmux";
+    case "tmux_recovery":
+      return "tmux";
   }
 }
 
@@ -137,6 +142,8 @@ function readRouteTarget(command: string, route: ExecutableCommandRoute): string
     case "desktop":
       return `${boundedLabel(route.appName, "Approved app")} · ${boundedLabel(route.bundleId, "bound process")}`;
     case "tmux_supervision":
+      return `Session ${boundedLabel(route.sessionName, "money-run")}`;
+    case "tmux_recovery":
       return `Session ${boundedLabel(route.sessionName, "money-run")}`;
   }
 }
@@ -190,7 +197,7 @@ function readRouteMutation(
   route: ExecutableCommandRoute,
   riskLevel: ComputerUsePlanPreview["risk"]["level"]
 ): boolean {
-  if (riskLevel === "blocked" || route.kind === "tmux_supervision") {
+  if (riskLevel === "blocked" || route.kind === "tmux_supervision" || route.kind === "tmux_recovery") {
     return false;
   }
   if (route.kind === "ghostty") {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { DEFAULT_RETENTION_SETTINGS } from "../shared/retention.js";
 import { createSkfiyApplicationSupportPath } from "./personal-memory.js";
 
 export type AutomationRunState =
@@ -36,6 +37,25 @@ export type AutomationRunVerificationStatus =
   | "blocked"
   | "error";
 
+export type AutomationRunRecoveryActionKind =
+  | "send_input"
+  | "restart_step"
+  | "collect_summary";
+
+/**
+ * Bounded projection of a tmux recovery proposal, surfaced through the
+ * existing verification channel so the Dashboard/pet can show that recovery
+ * is available. The Background Agent never executes recovery — it only
+ * observes and transitions attention runs to "review-in-skfiy".
+ */
+export interface AutomationRunRecoveryProposal {
+  proposalId: string;
+  actionKind: AutomationRunRecoveryActionKind;
+  reason: string;
+  risk: "low" | "medium" | "high" | "blocked";
+  mutatesSession: boolean;
+}
+
 export interface AutomationRunTimelineEntry {
   at: string;
   step: string;
@@ -47,6 +67,7 @@ export interface AutomationRunVerification {
   kind: AutomationRunVerificationKind;
   status: AutomationRunVerificationStatus;
   summary: string;
+  recoveryProposals?: AutomationRunRecoveryProposal[];
 }
 
 export interface AutomationRunCancellation {
@@ -147,8 +168,10 @@ export const MAX_AUTOMATION_RUN_ERROR_LENGTH = 300;
 export const MAX_AUTOMATION_RUN_NEXT_ACTION_LENGTH = 300;
 export const MAX_AUTOMATION_RUN_SUMMARY_LENGTH = 300;
 export const MAX_AUTOMATION_RUN_TIMELINE_ENTRIES = 50;
-export const AUTOMATION_RUN_PER_MONITOR_CAP = 20;
-export const AUTOMATION_RUN_GLOBAL_CAP = 200;
+export const MAX_AUTOMATION_RUN_RECOVERY_PROPOSALS = 4;
+export const MAX_AUTOMATION_RUN_RECOVERY_REASON_LENGTH = 240;
+export const AUTOMATION_RUN_PER_MONITOR_CAP = DEFAULT_RETENTION_SETTINGS.runHistory.perMonitorCap;
+export const AUTOMATION_RUN_GLOBAL_CAP = DEFAULT_RETENTION_SETTINGS.runHistory.globalCap;
 
 const AUTOMATION_RUN_ID_PATTERN = /^tmux-session:[A-Za-z0-9_.:-]+:run:\d+$/u;
 const AUTOMATION_RUN_MONITOR_ID_PATTERN = /^tmux-session:[A-Za-z0-9_.:-]+$/u;
@@ -170,13 +193,22 @@ export function isAutomationRunActive(state: AutomationRunState): boolean {
   return AUTOMATION_RUN_ACTIVE_STATES.includes(state);
 }
 
+export interface AutomationRunStoreCaps {
+  perMonitorCap?: number;
+  globalCap?: number;
+}
+
 export function createAutomationRunStore({
   filePath,
-  io
+  io,
+  caps
 }: {
   filePath: string;
   io: AutomationRunStoreIo;
+  caps?: AutomationRunStoreCaps;
 }): AutomationRunStore {
+  const perMonitorCap = caps?.perMonitorCap;
+  const globalCap = caps?.globalCap;
   return {
     read() {
       if (!io.exists(filePath)) {
@@ -191,7 +223,7 @@ export function createAutomationRunStore({
     },
     write(snapshot) {
       const normalized = normalizeAutomationRunStoreSnapshot(snapshot);
-      const retained = retainAutomationRuns(normalized.runs);
+      const retained = retainAutomationRuns(normalized.runs, { perMonitorCap, globalCap });
       const tempPath = `${filePath}.tmp-${Date.now()}`;
       io.mkdir(path.dirname(filePath));
       io.writeFile(tempPath, `${JSON.stringify({ ...normalized, runs: retained }, null, 2)}\n`);
@@ -766,12 +798,61 @@ function normalizeAutomationRunVerification(
   if (!summary) {
     return undefined;
   }
+  const recoveryProposals = normalizeAutomationRunRecoveryProposals(
+    record.recoveryProposals
+  );
   return {
     at: readIsoTimestamp(record.at),
     kind,
     status,
-    summary
+    summary,
+    ...(recoveryProposals.length > 0 ? { recoveryProposals } : {})
   };
+}
+
+function normalizeAutomationRunRecoveryProposals(
+  value: unknown
+): AutomationRunRecoveryProposal[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const proposals: AutomationRunRecoveryProposal[] = [];
+  for (const entry of value) {
+    if (proposals.length >= MAX_AUTOMATION_RUN_RECOVERY_PROPOSALS) {
+      break;
+    }
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const proposalId = readBoundedString(record.proposalId, MAX_AUTOMATION_RUN_ID_LENGTH, "");
+    const actionKind = record.actionKind === "send_input"
+      || record.actionKind === "restart_step"
+      || record.actionKind === "collect_summary"
+      ? record.actionKind
+      : undefined;
+    const risk = record.risk === "low"
+      || record.risk === "medium"
+      || record.risk === "high"
+      || record.risk === "blocked"
+      ? record.risk
+      : undefined;
+    if (!proposalId || !actionKind || !risk) {
+      continue;
+    }
+    proposals.push({
+      proposalId,
+      actionKind,
+      reason: readBoundedString(
+        record.reason,
+        MAX_AUTOMATION_RUN_RECOVERY_REASON_LENGTH,
+        ""
+      ),
+      risk,
+      mutatesSession: record.mutatesSession === true
+    });
+  }
+  return proposals;
 }
 
 function normalizeAutomationRunCancellation(

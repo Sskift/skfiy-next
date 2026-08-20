@@ -1,3 +1,8 @@
+import {
+  createTmuxRecoveryProposals,
+  type TmuxRecoveryProposal
+} from "./tmux-recovery.js";
+
 export interface TmuxWindowState {
   id: string;
   index: number;
@@ -53,6 +58,13 @@ export type TmuxSignal =
       paneId: string;
       matchedText: string;
       message: string;
+    }
+  | {
+      type: "stalled" | "waiting" | "completed";
+      severity: "attention";
+      paneId: string;
+      matchedText?: string;
+      message: string;
     };
 
 export type TmuxRecommendationAction =
@@ -83,6 +95,13 @@ export interface TmuxSupervisionReport {
   panes: TmuxPaneSummary[];
   signals: TmuxSignal[];
   recommendation: TmuxRecommendation;
+  /**
+   * Recovery proposals derived from signals. SEPARATE from `recommendation`
+   * (which stays mutatesSession: false): the read-only observation path
+   * never implies mutation, and every proposal requires its own explicit
+   * approval through the recovery task's "recovery" gate.
+   */
+  recoveryProposals: TmuxRecoveryProposal[];
 }
 
 export interface CreateTmuxSupervisionReportInput {
@@ -91,6 +110,11 @@ export interface CreateTmuxSupervisionReportInput {
   windowsOutput?: string;
   panesOutput?: string;
   paneTails?: Record<string, string | undefined>;
+  /**
+   * Pane tails from the previous observation, fed by the task/client layer so
+   * the report builder stays pure. Enables stalled detection.
+   */
+  previousTails?: Record<string, string | undefined>;
   commandError?: string;
   maxTailCharacters?: number;
 }
@@ -119,6 +143,17 @@ const ERROR_MARKERS: RegExp[] = [
   /failed/i,
   /exception/i
 ];
+
+const COMPLETION_MARKERS: RegExp[] = [
+  /completed successfully/i,
+  /\ball steps completed\b/i,
+  /\brun completed\b/i,
+  /✓/u,
+  /✅/u
+];
+
+const SHELL_COMMANDS = new Set(["zsh", "bash", "sh", "fish"]);
+const PROMPT_TAIL_PATTERN = /[$#>%]\s*$/u;
 
 export function parseTmuxWindowList(output: string | undefined): TmuxWindowState[] {
   return splitNonEmptyLines(output).map((line) => {
@@ -191,11 +226,15 @@ export function createTmuxSupervisionReport(
     recentTail: truncateTail(input.paneTails?.[pane.id] ?? "", input.maxTailCharacters)
   }));
   const summary = createSummary(windows, panes);
-  const signals = detectSignals(sessionName, panes);
+  const signals = detectSignals(sessionName, panes, input.previousTails);
   const status = readStatus(signals);
   const recommendation = createRecommendation({
     sessionName,
     summary,
+    signals
+  });
+  const recoveryProposals = createTmuxRecoveryProposals({
+    sessionName,
     signals
   });
 
@@ -206,7 +245,8 @@ export function createTmuxSupervisionReport(
     windows,
     panes,
     signals,
-    recommendation
+    recommendation,
+    recoveryProposals
   };
 }
 
@@ -238,6 +278,10 @@ function createNoSessionReport(sessionName: string): TmuxSupervisionReport {
         deadPaneIds: []
       },
       signals: [signal]
+    }),
+    recoveryProposals: createTmuxRecoveryProposals({
+      sessionName,
+      signals: [signal]
     })
   };
 }
@@ -256,7 +300,8 @@ function createSummary(
 
 function detectSignals(
   sessionName: string,
-  panes: readonly TmuxPaneSummary[]
+  panes: readonly TmuxPaneSummary[],
+  previousTails?: Record<string, string | undefined>
 ): TmuxSignal[] {
   if (panes.length === 0) {
     return [
@@ -329,10 +374,71 @@ function detectSignals(
         matchedText: errorMatch,
         message: `tmux pane ${pane.id} recent output contains an obvious error marker.`
       });
+      continue;
+    }
+
+    const stalled = readStalledSignal(pane, previousTails?.[pane.id]);
+    if (stalled) {
+      signals.push(stalled);
+      continue;
+    }
+
+    const waiting = readWaitingSignal(pane);
+    if (waiting) {
+      signals.push(waiting);
+      continue;
+    }
+
+    const completionMatch = findMarker(pane.recentTail, COMPLETION_MARKERS);
+    if (completionMatch) {
+      signals.push({
+        type: "completed",
+        severity: "attention",
+        paneId: pane.id,
+        matchedText: completionMatch,
+        message: `tmux pane ${pane.id} recent output contains a completion marker.`
+      });
     }
   }
 
   return signals;
+}
+
+function readStalledSignal(
+  pane: TmuxPaneSummary,
+  previousTail: string | undefined
+): TmuxSignal | undefined {
+  if (previousTail === undefined || previousTail.length === 0) {
+    return undefined;
+  }
+  if (pane.recentTail.length === 0 || pane.recentTail !== previousTail) {
+    return undefined;
+  }
+  return {
+    type: "stalled",
+    severity: "attention",
+    paneId: pane.id,
+    message: `tmux pane ${pane.id} tail is unchanged since the last observation; the run may be stalled.`
+  };
+}
+
+function readWaitingSignal(pane: TmuxPaneSummary): TmuxSignal | undefined {
+  if (!SHELL_COMMANDS.has(pane.currentCommand)) {
+    return undefined;
+  }
+  const lastLine = pane.recentTail
+    .split(/\r?\n/u)
+    .filter((line) => line.trim().length > 0)
+    .pop();
+  if (!lastLine || !PROMPT_TAIL_PATTERN.test(lastLine)) {
+    return undefined;
+  }
+  return {
+    type: "waiting",
+    severity: "attention",
+    paneId: pane.id,
+    message: `tmux pane ${pane.id} appears idle at a shell prompt.`
+  };
 }
 
 function readStatus(signals: readonly TmuxSignal[]): TmuxSupervisionStatus {

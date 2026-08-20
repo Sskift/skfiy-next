@@ -70,13 +70,17 @@ export interface AdapterPermission {
 // 4. Risk and approval policy
 // ---------------------------------------------------------------------------
 
-export type AdapterApprovalGate = "action" | "submit" | "plan";
+export type AdapterApprovalGate = "action" | "submit" | "plan" | "recovery";
 
 export interface AdapterApprovalPolicy {
   /**
    * The approval gates this adapter raises, in order.
    * Ghostty: ["action"]; Chrome: ["action", "submit"];
-   * Finder: ["action", "plan"]; tmux: ["action"].
+   * Finder: ["action", "plan"]; tmux supervision: ["action", "recovery"].
+   *
+   * "recovery" is a SEPARATE gate from "action": observing a tmux session
+   * (the "action" gate) never implies approval to mutate it, and recovery
+   * proposals each require their own explicit per-action approval.
    */
   readonly gates: readonly AdapterApprovalGate[];
 }

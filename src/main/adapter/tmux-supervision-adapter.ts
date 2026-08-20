@@ -95,7 +95,7 @@ export function createTmuxSupervisionAdapter(): TmuxSupervisionAdapter {
     },
 
     approvalPolicy: {
-      gates: ["action"]
+      gates: ["action", "recovery"]
     },
 
     planSchema: {

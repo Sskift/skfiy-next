@@ -72,6 +72,8 @@ export class ConversationSessionStorageError extends Error {
   }
 }
 
+export type ConversationSessionStore = ReturnType<typeof createConversationSessionStore>;
+
 export function createConversationSessionStorePath(baseDir: string): string {
   return path.join(baseDir, "memory", "conversation-sessions.json");
 }
@@ -90,7 +92,7 @@ export function readConversationSessionRecallRecords({
     return undefined;
   }
 
-  return createRecallRecords(parseCanonicalSnapshot(io.readFile(filePath)), { sessionId });
+  return createRecallRecords(parseConversationHistorySnapshot(io.readFile(filePath)), { sessionId });
 }
 
 export function createConversationSessionStore({
@@ -108,7 +110,7 @@ export function createConversationSessionStore({
   let state: ConversationHistorySnapshot;
 
   if (io.exists(filePath)) {
-    state = parseCanonicalSnapshot(io.readFile(filePath));
+    state = parseConversationHistorySnapshot(io.readFile(filePath));
   } else {
     state = migrateLegacySnapshot({ baseDir, io, now, createId });
     ensureAvailableSession(state, { now, createId });
@@ -518,6 +520,15 @@ export function createConversationSessionStore({
 
     readRecallableRecords(options: { sessionId?: string } = {}): SessionMemoryRecord[] {
       return createRecallRecords(state, options);
+    },
+
+    replaceSnapshot(snapshot: ConversationHistorySnapshot): ConversationHistorySnapshot {
+      // Re-parse through the strict reader so a restore can never persist a
+      // structurally invalid snapshot underneath the live store.
+      const normalized = parseConversationHistorySnapshot(JSON.stringify(snapshot));
+      writeSnapshot(filePath, normalized, io);
+      state = normalized;
+      return clone(normalized);
     }
   };
 }
@@ -827,7 +838,7 @@ function parseLegacyRecords(content: string): SessionMemoryRecord[] {
   });
 }
 
-function parseCanonicalSnapshot(content: string): ConversationHistorySnapshot {
+export function parseConversationHistorySnapshot(content: string): ConversationHistorySnapshot {
   let value: unknown;
   try {
     value = JSON.parse(content);

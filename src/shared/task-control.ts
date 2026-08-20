@@ -5,7 +5,8 @@ export const COMPUTER_USE_PLAN_ROUTES = [
   "chrome",
   "finder",
   "desktop",
-  "tmux_supervision"
+  "tmux_supervision",
+  "tmux_recovery"
 ] as const;
 
 export const TASK_CONTROL_RISK_LEVELS = [

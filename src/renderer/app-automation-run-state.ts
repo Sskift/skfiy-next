@@ -3,7 +3,8 @@ import type {
   AutomationRunRecord,
   AutomationRunSnapshot,
   AutomationRunState,
-  AutomationRunTimelineEntry
+  AutomationRunTimelineEntry,
+  AutomationRunVerification
 } from "./app-types";
 
 export const DEFAULT_AUTOMATION_RUN_SNAPSHOT: AutomationRunSnapshot = {
@@ -124,7 +125,10 @@ export function describeAutomationRunOutcome(record: AutomationRunRecord): strin
     return record.error;
   }
   if (record.latestVerification?.summary) {
-    return record.latestVerification.summary;
+    const proposalSuffix = readRecoveryProposalSuffix(record.latestVerification);
+    return proposalSuffix
+      ? `${record.latestVerification.summary}${proposalSuffix}`
+      : record.latestVerification.summary;
   }
   if (record.state === "queued") {
     return "等待并发槽位。";
@@ -152,6 +156,17 @@ export function describeAutomationRunOutcome(record: AutomationRunRecord): strin
     return "运行超时未完成。";
   }
   return "—";
+}
+
+function readRecoveryProposalSuffix(
+  verification: AutomationRunVerification
+): string {
+  const proposals = verification.recoveryProposals;
+  if (!proposals || proposals.length === 0) {
+    return "";
+  }
+  const mutatingCount = proposals.filter((proposal) => proposal.mutatesSession).length;
+  return ` · ${proposals.length} 个恢复建议待审批（${mutatingCount} 个会修改会话）。`;
 }
 
 function readAutomationRunCancellationSourceLabel(

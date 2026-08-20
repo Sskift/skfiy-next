@@ -38,8 +38,8 @@ describe("tmux supervision adapter", () => {
     expect(adapter.capabilities).toEqual(["tmux_observe"]);
   });
 
-  it("declares a single action approval gate", () => {
-    expect(adapter.approvalPolicy.gates).toEqual(["action"]);
+  it("declares action and recovery approval gates", () => {
+    expect(adapter.approvalPolicy.gates).toEqual(["action", "recovery"]);
   });
 
   it("declares no plan schema", () => {
