@@ -684,6 +684,29 @@ function summarizeAction(action: TurnTranscriptAction): Record<string, unknown> 
       };
     case "verify":
       return summarizeVerification(action);
+    case "observe_terminal_context":
+      return {
+        type: action.type,
+        workingDirectory: sanitizeRuntimeSnapshotText(action.workingDirectory),
+        promptReady: action.promptReady,
+        sensitiveContentDetected: action.sensitiveContentDetected
+      };
+    case "preview_terminal_command":
+      return {
+        type: action.type,
+        command: sanitizeRuntimeSnapshotText(action.command),
+        workingDirectory: sanitizeRuntimeSnapshotText(action.workingDirectory),
+        mutating: action.mutating,
+        riskLevel: action.riskLevel,
+        expectedResult: sanitizeRuntimeSnapshotText(action.expectedResult)
+      };
+    case "retry_observation":
+      return {
+        type: action.type,
+        stage: action.stage,
+        attempt: action.attempt,
+        reason: sanitizeRuntimeSnapshotText(action.reason)
+      };
     case "switch_control":
       return {
         type: action.type,

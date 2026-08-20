@@ -1119,6 +1119,8 @@ interface DesktopApi {
   stopAutomationRun: (runId: string) => Promise<AutomationRunSnapshot>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetSkinManifest | null>;
+  importPetSkin: () => Promise<PetSkinManifest | null>;
+  resetPetSkin: () => Promise<void>;
   getWindowBounds: () => Promise<WindowBounds | null>;
   moveWindowBy: (deltaX: number, deltaY: number, visibleRect?: VisiblePetRect) => void;
   setWindowMode: (mode: PetWindowMode) => void;
@@ -1766,6 +1768,13 @@ const api: DesktopApi = {
   async getPetSkin() {
     const payload = await ipcRenderer.invoke("skfiy:get-pet-skin");
     return isPetSkinManifest(payload) ? payload : null;
+  },
+  async importPetSkin() {
+    const payload = await ipcRenderer.invoke("skfiy:import-pet-skin");
+    return isPetSkinManifest(payload) ? payload : null;
+  },
+  async resetPetSkin() {
+    await ipcRenderer.invoke("skfiy:reset-pet-skin");
   },
   async getWindowBounds() {
     const payload = await ipcRenderer.invoke("skfiy:get-window-bounds");

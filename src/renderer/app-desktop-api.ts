@@ -110,6 +110,8 @@ export const fallbackDesktopApi: DesktopApi = {
     }
   }),
   getPetSkin: async () => null,
+  importPetSkin: async () => null,
+  resetPetSkin: async () => undefined,
   getWindowBounds: async () => null,
   moveWindowBy: () => undefined,
   setWindowMode: () => undefined,

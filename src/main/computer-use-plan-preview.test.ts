@@ -69,6 +69,33 @@ describe("Computer Use plan preview", () => {
     });
   });
 
+  it("includes the observed cwd in the Ghostty target when context is available", () => {
+    expect(createComputerUsePlanPreview({
+      command: "在 Ghostty 执行 pwd",
+      route: route("ghostty"),
+      workingDirectory: "/Users/foo"
+    })).toMatchObject({
+      target: "skfiy-shell · /Users/foo · 在 Ghostty 执行 pwd"
+    });
+  });
+
+  it("falls back to the session label in the Ghostty target when cwd is unobservable", () => {
+    expect(createComputerUsePlanPreview({
+      command: "在 Ghostty 执行 pwd",
+      route: route("ghostty"),
+      workingDirectory: "unknown"
+    })).toMatchObject({
+      target: "skfiy-shell · 在 Ghostty 执行 pwd"
+    });
+
+    expect(createComputerUsePlanPreview({
+      command: "在 Ghostty 执行 pwd",
+      route: route("ghostty")
+    })).toMatchObject({
+      target: "skfiy-shell · 在 Ghostty 执行 pwd"
+    });
+  });
+
   it("binds a delayed planner result against the latest app policy", async () => {
     let policy: "allow" | "ask" = "allow";
     let resolvePlanner: (command: string) => void = () => undefined;

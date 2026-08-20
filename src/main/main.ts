@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   globalShortcut,
   ipcMain,
   Notification as ElectronNotification,
@@ -141,6 +142,7 @@ import {
 import { createScreenshotPathFactory } from "./screenshot-path.js";
 import {
   calculatePetWindowBounds,
+  clampWindowBoundsToNearestDisplay,
   readWindowPositionOverride,
   type Point,
   type Size
@@ -155,7 +157,11 @@ import {
 import {
   persistMainRuntimeSnapshot
 } from "./main-runtime-snapshot-writer.js";
-import { readDefaultLocalOriginPetSkin } from "./pet-skin.js";
+import {
+  importPetSkin,
+  readDefaultLocalOriginPetSkin,
+  resetPetSkin
+} from "./pet-skin.js";
 import { readDefaultApprovalBypass } from "./approval-bypass.js";
 import {
   createAutomationMonitorManager,
@@ -177,6 +183,15 @@ import { createAutomationRunSupervisor } from "./automation-run-supervisor.js";
 import {
   createAutomationMonitorNotificationCoordinator
 } from "./automation-monitor-notification.js";
+import {
+  createTaskEventNotificationCoordinator,
+  isTaskEventNotificationStatus
+} from "./task-event-notification.js";
+import {
+  createTaskAttentionWatchdog,
+  isTaskAttentionActiveStatus,
+  isTaskAttentionTerminalStatus
+} from "./task-attention-watchdog.js";
 import {
   readAutomationMonitorId,
   readAutomationRunId,
@@ -271,6 +286,14 @@ import {
 } from "./task-recovery-stage.js";
 import { readTaskRecoveryPathStatus } from "./task-recovery-stage-runtime.js";
 import { createStopTaskEventDecision } from "./main-stop-task.js";
+import {
+  createControlServer,
+  generateControlToken,
+  removeControlTokenFile,
+  writeControlTokenFile,
+  type ControlServerHandle,
+  type ControlServerLive
+} from "./control-server.js";
 import { createSmokeAssistantAgentTaskTurn } from "./main-smoke-assistant-turn.js";
 import {
   createTaskEvent,
@@ -403,6 +426,12 @@ const taskControlStore = createTaskControlStore({
   onChanged: (snapshot) => taskRecoveryRegistry.sync(snapshot)
 });
 const automationMonitorNotificationCoordinator = createAutomationMonitorNotificationCoordinator();
+const taskEventNotificationCoordinator = createTaskEventNotificationCoordinator();
+const taskAttentionWatchdog = createTaskAttentionWatchdog({
+  onAttention: (taskId) => {
+    showTaskAttentionNotification(taskId);
+  }
+});
 const automationRunStore = createAutomationRunStore({
   filePath: createAutomationRunStatePath(os.homedir()),
   io: createNodeAutomationMonitorStoreIo()
@@ -493,6 +522,58 @@ function showAutomationMonitorNotification(event: AutomationMonitorNotificationE
   });
   notification.show();
 }
+
+function showTaskEventNotification(event: { taskId: string; status: string }) {
+  if (smokeWindowHidden || !isTaskEventNotificationStatus(event.status)) {
+    return;
+  }
+
+  const window = mainWindow;
+  const notice = taskEventNotificationCoordinator.take(event, {
+    windowFocused: Boolean(window && !window.isDestroyed() && window.isFocused())
+  });
+  if (!notice || !ElectronNotification.isSupported()) {
+    return;
+  }
+
+  const notification = new ElectronNotification({
+    title: notice.title,
+    body: notice.body,
+    silent: true
+  });
+  notification.on("click", () => {
+    if (!window || window.isDestroyed()) return;
+    window.show();
+    window.focus();
+  });
+  notification.show();
+}
+
+function showTaskAttentionNotification(taskId: string) {
+  if (smokeWindowHidden) {
+    return;
+  }
+
+  const window = mainWindow;
+  if (window && !window.isDestroyed() && window.isFocused()) {
+    return;
+  }
+  if (!ElectronNotification.isSupported()) {
+    return;
+  }
+
+  const notification = new ElectronNotification({
+    title: "Task still running",
+    body: "A task has been running for a while in skfiy.",
+    silent: true
+  });
+  notification.on("click", () => {
+    if (!window || window.isDestroyed()) return;
+    window.show();
+    window.focus();
+  });
+  notification.show();
+}
 let currentPetAnchor: Point | null = null;
 let currentPetSize: Size | null = null;
 let currentTaskId = 0;
@@ -537,6 +618,16 @@ function persistRuntimeSnapshot(
 
 function emitTaskEvent(window: BrowserWindow | null, event: TaskEvent) {
   persistRuntimeSnapshot(turnReplayStore.getReplay(), event);
+
+  const taskId = String(currentTaskId);
+  if (isTaskEventNotificationStatus(event.status)) {
+    showTaskEventNotification({ taskId, status: event.status });
+  }
+  if (isTaskAttentionActiveStatus(event.status)) {
+    taskAttentionWatchdog.start(taskId);
+  } else if (isTaskAttentionTerminalStatus(event.status)) {
+    taskAttentionWatchdog.reset();
+  }
 
   if (!window || window.isDestroyed()) {
     return;
@@ -837,6 +928,7 @@ function clearPendingComputerUseTask(): void {
   activeTaskController?.abort();
   activeTaskController = null;
   currentTaskId = nextState.currentTaskId;
+  taskAttentionWatchdog.reset();
 }
 
 function clearActiveComputerUseTask(): void {
@@ -855,6 +947,7 @@ function clearActiveComputerUseTask(): void {
   activeTaskController?.abort();
   activeTaskController = null;
   currentTaskId = nextState.currentTaskId;
+  taskAttentionWatchdog.reset();
 }
 
 function startComputerUseTaskEpoch() {
@@ -870,6 +963,7 @@ function startComputerUseTaskEpoch() {
 
   const controller = new AbortController();
   activeTaskController = controller;
+  taskAttentionWatchdog.start(String(nextState.taskId));
 
   return { controller, taskId: nextState.taskId };
 }
@@ -2185,6 +2279,144 @@ ipcMain.handle(
   }
 );
 
+// ---------------------------------------------------------------------------
+// Loopback control server — the bridge for the standalone CLI and MCP server.
+// Live closures reuse the EXISTING approve/stop logic; the control server
+// validates approve requests with readControlApprovalMismatch (the same
+// checks as the skfiy:approve-task IPC handler) before delegating.
+// ---------------------------------------------------------------------------
+
+const controlServerToken = generateControlToken();
+let controlServerHandle: ControlServerHandle | null = null;
+
+const controlServerLive: ControlServerLive = {
+  readTaskControl: () => taskControlStore.read(),
+  readTurnReplay: () => turnReplayStore.getReplay(),
+  readApprovalState: () => ({
+    pendingApproval: pendingApproval
+      ? { planId: pendingApproval.planId, gate: pendingApproval.gate }
+      : null,
+    taskControl: taskControlStore.read()
+  }),
+  resumeTask: async () => {
+    const approval = pendingApproval;
+    if (!approval) {
+      throw new Error("No pending approval to resume.");
+    }
+    await resumePendingApprovalTask(mainWindow, approval);
+    return taskControlStore.read();
+  },
+  denyTask: async () => {
+    const approval = pendingApproval;
+    if (!approval) {
+      throw new Error("No pending approval to deny.");
+    }
+    assistantComputerUseExecutor.resumeApproval({
+      turnId: approval.turnId,
+      toolCallId: approval.toolCallId,
+      decision: "denied",
+      reason: USER_DENIED_COMPUTER_USE_REASON
+    });
+    if (conversationSessionStore && activeConversationTurn?.turnId === approval.turnId) {
+      conversationSessionStore.recordApproval({
+        ...activeConversationTurn,
+        toolCallId: approval.toolCallId,
+        decision: "denied",
+        text: "Computer Use denied.",
+        reason: USER_DENIED_COMPUTER_USE_REASON
+      });
+      emitConversationHistoryChanged(mainWindow);
+    }
+    clearActiveComputerUseTask();
+    const denialEvent = createPendingApprovalDeniedTaskEvent(approval);
+    const deniedControl = taskControlStore.read();
+    return emitTaskControlTurnReplayTaskEvent(mainWindow, denialEvent, {
+      executionId: deniedControl?.executionId ?? approval.toolCallId
+    });
+  },
+  stopTask: async (reason) => {
+    const taskControl = taskControlStore.read();
+    const hasLiveProviderTurn = activeAssistantTurnController !== null
+      || conversationRetryInProgress
+      || activeConversationTurn !== null;
+    if (taskControl?.phase === "terminal" && !hasLiveProviderTurn) {
+      const stopDecision = createStopTaskEventDecision({
+        activeRoute: activeComputerUseRoute,
+        pendingApproval
+      });
+      return {
+        result: "no-active-task",
+        stopDecision: {
+          cancellationReason: stopDecision.cancellationReason,
+          delivery: stopDecision.delivery,
+          route: stopDecision.route ? stopDecision.route.kind : null
+        },
+        taskControl
+      };
+    }
+    const activeTaskControl = taskControl?.phase === "terminal" ? null : taskControl;
+    const hadActiveConversationTurn = hasLiveProviderTurn;
+    const stopTask = createStopTaskEventDecision({
+      activeRoute: activeComputerUseRoute,
+      pendingApproval,
+      ...(reason
+        ? { message: reason }
+        : activeTaskControl
+          ? { message: createTaskControlStopMessage(activeTaskControl) }
+          : {})
+    });
+    activeAssistantTurnController?.abort(new Error(stopTask.cancellationReason));
+    activeAssistantTurnController = null;
+    stopActiveConversationTurn(mainWindow, stopTask.cancellationReason);
+    cancelActiveComputerUseToolCall(stopTask.cancellationReason);
+    clearActiveComputerUseTask();
+
+    if (activeTaskControl) {
+      emitTaskControlTurnReplayTaskEvent(mainWindow, stopTask.event, {
+        executionId: activeTaskControl.executionId
+      });
+    } else if (stopTask.delivery === "turn-replay" || hadActiveConversationTurn) {
+      emitTurnReplayTaskEvent(mainWindow, stopTask.event);
+    } else {
+      emitTaskEvent(mainWindow, stopTask.event);
+    }
+
+    return {
+      result: "stopped",
+      stopDecision: {
+        cancellationReason: stopTask.cancellationReason,
+        delivery: stopTask.delivery,
+        route: stopTask.route ? stopTask.route.kind : null
+      },
+      taskControl: taskControlStore.read()
+    };
+  }
+};
+
+async function startControlServer(): Promise<void> {
+  if (controlServerHandle) {
+    return;
+  }
+  const handle = createControlServer({
+    token: controlServerToken,
+    live: controlServerLive,
+    logger: (message) => console.error("Control server error:", message)
+  });
+  const { url } = await handle.start();
+  writeControlTokenFile(skfiyAppSupportDir, { url, token: controlServerToken });
+  controlServerHandle = handle;
+}
+
+async function stopControlServer(): Promise<void> {
+  if (!controlServerHandle) {
+    return;
+  }
+  const handle = controlServerHandle;
+  controlServerHandle = null;
+  await handle.stop();
+  removeControlTokenFile(skfiyAppSupportDir);
+}
+
 ipcMain.handle("skfiy:approve-task", async (event, value: unknown) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   const request = readTaskApprovalDecisionRequest(value);
@@ -2853,6 +3085,35 @@ ipcMain.handle("skfiy:get-pet-skin", async () => {
   return readDefaultLocalOriginPetSkin({ homeDir: os.homedir() });
 });
 
+ipcMain.handle("skfiy:import-pet-skin", async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions = {
+    properties: ["openFile" as const],
+    filters: [
+      {
+        name: "Pet skin",
+        extensions: ["gif", "jpg", "jpeg", "png", "svg", "webp"]
+      }
+    ]
+  };
+  const dialogResult = window
+    ? await dialog.showOpenDialog(window, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+    return null;
+  }
+
+  const imported = await importPetSkin({
+    homeDir: os.homedir(),
+    sourcePath: dialogResult.filePaths[0]
+  });
+  return imported.manifest;
+});
+
+ipcMain.handle("skfiy:reset-pet-skin", async () => {
+  await resetPetSkin({ homeDir: os.homedir() });
+});
+
 registerBrowserContextSourceIpc({
   ipcMain,
   actions: browserContextSourceActions
@@ -2881,12 +3142,32 @@ app.whenReady().then(async () => {
     void dataAdminRuntime.applyRetention();
   }, 24 * 60 * 60 * 1_000).unref();
   await createWindow();
+  try {
+    await startControlServer();
+  } catch (error) {
+    console.error("Control server failed to start:", error);
+  }
   if (!stopTurnHotkeyRegistered) {
     stopTurnHotkeyRegistered = registerStopTurnHotkey({
       registry: globalShortcut,
       getWindow: () => mainWindow
     });
   }
+
+  const reclampPetWindowToDisplays = () => {
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) {
+      return;
+    }
+    const bounds = window.getBounds();
+    const nextBounds = clampWindowBoundsToNearestDisplay(bounds, screen.getAllDisplays());
+    if (nextBounds.x !== bounds.x || nextBounds.y !== bounds.y) {
+      window.setPosition(nextBounds.x, nextBounds.y);
+    }
+  };
+  screen.on("display-added", reclampPetWindowToDisplays);
+  screen.on("display-removed", reclampPetWindowToDisplays);
+  screen.on("display-metrics-changed", reclampPetWindowToDisplays);
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -2907,6 +3188,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  void stopControlServer();
   if (stopTurnHotkeyRegistered) {
     globalShortcut.unregister(STOP_TURN_ACCELERATOR);
     stopTurnHotkeyRegistered = false;

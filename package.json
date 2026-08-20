@@ -5,6 +5,9 @@
   "description": "Local-first macOS desktop pet that fronts a Background Agent, with Computer Use as a permissioned tool layer. Distilled rewrite of skfiy.",
   "type": "module",
   "main": "dist/main/main.js",
+  "bin": {
+    "skfiy": "bin/skfiy.mjs"
+  },
   "scripts": {
     "dev": "npm run dev:renderer",
     "dev:renderer": "vite --host 127.0.0.1",
@@ -15,12 +18,14 @@
     "test": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "npm run clean && vite build && tsc -p tsconfig.electron.json && npm run build:preload && npm run build:helper && npm run package:mac",
+    "build:cli": "tsc -p tsconfig.cli.json",
     "build:preload": "esbuild src/main/preload.cts --bundle --platform=node --format=cjs --external:electron --outfile=dist/main/preload.cjs",
     "build:helper": "bash scripts/build-helper.sh",
     "package:mac": "node scripts/package-macos-app.mjs",
     "smoke:ui": "node scripts/smoke-ui-product.mjs",
     "smoke:cli": "node scripts/smoke-cli-product.mjs",
     "smoke:cli:basic": "node scripts/smoke-cli-product.mjs --profile basic",
+    "smoke:cli:contract": "node scripts/smoke-cli-contract.mjs",
     "smoke:chrome": "node scripts/smoke-chrome-product.mjs"
   },
   "dependencies": {

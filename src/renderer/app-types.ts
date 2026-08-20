@@ -781,6 +781,8 @@ export interface DesktopApi {
   stopAutomationRun: (runId: string) => Promise<AutomationRunSnapshot>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetAtlasManifest | null>;
+  importPetSkin: () => Promise<PetAtlasManifest | null>;
+  resetPetSkin: () => Promise<void>;
   getWindowBounds: () => Promise<WindowBounds | null>;
   moveWindowBy: (deltaX: number, deltaY: number, visibleRect?: VisiblePetRect) => void;
   setWindowMode: (mode: PetWindowMode) => void;

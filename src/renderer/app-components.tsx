@@ -11,6 +11,7 @@ import {
   ShieldQuestion
 } from "lucide-react";
 import type {
+  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode
@@ -141,6 +142,7 @@ export function TaskControlCard({
       aria-label="Computer Use task control"
       data-phase={snapshot.phase}
       data-status={snapshot.status}
+      tabIndex={-1}
     >
       <div className="task-control-heading">
         <div>
@@ -501,38 +503,49 @@ export function UserDashboardPanel({
 export function DesktopPet({
   state,
   atlas,
+  accessibilityLabel,
   onClick,
   onContextMenu,
+  onKeyDown,
   onPointerDown,
   onPointerMove,
-  onPointerUp
+  onPointerUp,
+  panelOpen
 }: {
   state: PetAtlasState;
   atlas: PetAtlas;
+  accessibilityLabel: string;
   onClick: () => void;
   onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  panelOpen: boolean;
 }) {
   const animation = atlas.states[state];
 
   return (
     <div
-      aria-label="skfiy Codex-style pet"
+      aria-expanded={panelOpen}
+      aria-label={accessibilityLabel}
       className={`skfiy-pet pet-state-${state}`}
       data-pet-skin={atlas.slug}
       data-atlas-state={state}
       data-frame-count={animation.frames}
       data-drag-mode="manual"
       data-agent-entry="left-click"
+      data-pet-entry="true"
       data-settings-entry="right-click"
       onClick={onClick}
       onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      role="button"
+      tabIndex={0}
       style={getPetSpriteStyle(state, atlas)}
     >
       <span className="pet-sprite-frame" aria-hidden="true" />

@@ -14,8 +14,8 @@ export interface AppRecoveryTarget {
   bundleId: string;
   pid?: number;
   marker?: string;
-  sensitiveTitlePatterns?: RegExp[];
-  sensitiveTextPatterns?: RegExp[];
+  sensitiveTitlePatterns?: readonly RegExp[];
+  sensitiveTextPatterns?: readonly RegExp[];
 }
 
 export function decideAppRecovery(

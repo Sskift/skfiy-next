@@ -18,6 +18,14 @@ import type {
   OpenGhosttySessionResult,
   PermissionSummary,
 } from "../computer-use/types.js";
+import { createTerminalCommandPreview } from "./terminal-command-preview.js";
+import {
+  GHOSTTY_SENSITIVE_TEXT_PATTERNS,
+  normalizeTerminalText,
+  readTerminalContext,
+  type TerminalContextObservation
+} from "./terminal-context.js";
+import { readTerminalExitStatus } from "./terminal-exit-status.js";
 import type { GhosttyTaskEvent } from "./events.js";
 
 const GHOSTTY_APP_NAME = "Ghostty";
@@ -37,20 +45,29 @@ const SESSION_INIT_SETTLE_WAIT_MS = 90;
 const TYPE_SETTLE_WAIT_MS = 90;
 const SUBMIT_SETTLE_WAIT_MS = 300;
 const OBSERVE_RETRY_WAIT_MS = 350;
-const SHELL_READY_OBSERVE_ATTEMPTS = 8;
-const COMMAND_COMPLETION_OBSERVE_ATTEMPTS = 8;
+export const SHELL_READY_OBSERVE_ATTEMPTS = 8;
+export const COMMAND_COMPLETION_OBSERVE_ATTEMPTS = 8;
 const SENSITIVE_GHOSTTY_TITLE_PATTERNS = [/password/i, /keychain/i];
-const SENSITIVE_GHOSTTY_TEXT_PATTERNS = [
-  /password/i,
-  /passphrase/i,
-  /api\s+token/i,
-  /access\s+token/i,
-  /private\s+key/i,
-  /secret/i,
-  /credential/i,
-  /recovery\s+key/i
-];
+const READY_MARKER_RETRY_REASON = "Shell ready marker was not observed; re-observing Ghostty.";
+const COMPLETION_MARKER_RETRY_REASON =
+  "Command completion marker was not observed; re-observing Ghostty output.";
+const EXIT_STATUS_RETRY_REASON =
+  "Exit status was not readable from the completion marker; re-observing Ghostty output.";
 let completionMarkerSerial = 0;
+
+/**
+ * Degraded context used for the pre-approval preview: the terminal has not
+ * been observed yet at approval time, so every context field is its honest
+ * unobservable value. The observed context (and a refreshed preview) is
+ * emitted after the before-screenshot passes.
+ */
+const UNOBSERVABLE_TERMINAL_CONTEXT: TerminalContextObservation = {
+  workingDirectory: "unknown",
+  promptReady: false,
+  lastCommandEcho: "",
+  recentOutputTail: "",
+  sensitiveContentDetected: false
+};
 
 export interface DesktopApp {
   name: string;
@@ -88,6 +105,17 @@ export async function* runGhosttyCommandTask(
   };
 
   if (effectiveRisk.requiresApproval) {
+    if (effectiveRisk.level !== "blocked") {
+      yield {
+        type: "command_preview",
+        preview: createTerminalCommandPreview({
+          command,
+          context: UNOBSERVABLE_TERMINAL_CONTEXT,
+          risk: effectiveRisk
+        })
+      };
+    }
+
     yield {
       type: "approval_required",
       command,
@@ -330,6 +358,7 @@ export async function* runGhosttyCommandTask(
       SKFIY_GHOSTTY_READY_MARKER,
       SHELL_READY_OBSERVE_ATTEMPTS
     );
+    yield* readRetryEvents(readyResult.retryAttempts, "observation", READY_MARKER_RETRY_REASON);
     before = readyResult.observation;
 
     if (readyResult.markerObserved) {
@@ -410,6 +439,7 @@ export async function* runGhosttyCommandTask(
           SKFIY_GHOSTTY_READY_MARKER,
           SHELL_READY_OBSERVE_ATTEMPTS
         );
+        yield* readRetryEvents(recoveredReadyResult.retryAttempts, "observation", READY_MARKER_RETRY_REASON);
         before = recoveredReadyResult.observation;
 
         if (!recoveredReadyResult.markerObserved) {
@@ -483,6 +513,7 @@ export async function* runGhosttyCommandTask(
         SKFIY_GHOSTTY_READY_MARKER,
         SHELL_READY_OBSERVE_ATTEMPTS
       );
+      yield* readRetryEvents(retryReadyResult.retryAttempts, "observation", READY_MARKER_RETRY_REASON);
       before = retryReadyResult.observation;
 
       if (!retryReadyResult.markerObserved) {
@@ -561,6 +592,7 @@ export async function* runGhosttyCommandTask(
           SKFIY_GHOSTTY_READY_MARKER,
           SHELL_READY_OBSERVE_ATTEMPTS
         );
+        yield* readRetryEvents(recoveredRetryReadyResult.retryAttempts, "observation", READY_MARKER_RETRY_REASON);
         before = recoveredRetryReadyResult.observation;
 
         if (!recoveredRetryReadyResult.markerObserved) {
@@ -615,6 +647,20 @@ export async function* runGhosttyCommandTask(
     }
   }
 
+  const terminalContext = readTerminalContext(before);
+  yield {
+    type: "terminal_context_observed",
+    context: terminalContext
+  };
+  yield {
+    type: "command_preview",
+    preview: createTerminalCommandPreview({
+      command,
+      context: terminalContext,
+      risk: effectiveRisk
+    })
+  };
+
   const typingResults = await runDesktopActionPlan(
     client,
     [
@@ -666,6 +712,7 @@ export async function* runGhosttyCommandTask(
     completionMarker,
     COMMAND_COMPLETION_OBSERVE_ATTEMPTS
   );
+  yield* readRetryEvents(afterResult.retryAttempts, "verification", COMPLETION_MARKER_RETRY_REASON);
   const after = afterResult.observation;
   yield {
     type: "screenshot_after",
@@ -695,10 +742,34 @@ export async function* runGhosttyCommandTask(
     return;
   }
 
+  const exitStatusSerial = completionMarker.replace(/^SKFIY_DONE_/, "");
+  let exitStatus = readTerminalExitStatus(after, exitStatusSerial);
+
+  if (exitStatus.code === "unknown") {
+    yield {
+      type: "retry_attempted",
+      stage: "verification",
+      attempt: 1,
+      reason: EXIT_STATUS_RETRY_REASON
+    };
+    const retriedAfter = await observeApp(
+      client,
+      session.bundleId,
+      createScreenshotPath("after", options),
+      options.signal,
+      OBSERVE_RETRY_WAIT_MS,
+      session.pid
+    );
+    exitStatus = readTerminalExitStatus(retriedAfter, exitStatusSerial);
+  }
+
   yield {
     type: "completed",
     command,
-    summary: "Command completed in Ghostty."
+    summary: exitStatus.code === "unknown"
+      ? "Command completed in Ghostty with exit code unknown."
+      : `Command completed in Ghostty with exit code ${exitStatus.code}.`,
+    exitCode: exitStatus.code
   };
 }
 
@@ -829,7 +900,7 @@ async function observeAppUntilMarker(
   pid: number | undefined,
   marker: string,
   maxAttempts: number
-): Promise<{ observation: DesktopAppState; markerObserved: boolean }> {
+): Promise<{ observation: DesktopAppState; markerObserved: boolean; retryAttempts: number[] }> {
   let observation = await observeApp(
     client,
     bundleId,
@@ -840,14 +911,16 @@ async function observeAppUntilMarker(
   );
 
   if (hasTerminalTextMarker(observation, marker)) {
-    return { observation, markerObserved: true };
+    return { observation, markerObserved: true, retryAttempts: [] };
   }
 
+  const retryAttempts: number[] = [];
   for (let attempt = 1; attempt < maxAttempts; attempt += 1) {
     if (isAborted(signal)) {
       break;
     }
 
+    retryAttempts.push(attempt);
     observation = await observeApp(
       client,
       bundleId,
@@ -858,11 +931,11 @@ async function observeAppUntilMarker(
     );
 
     if (hasTerminalTextMarker(observation, marker)) {
-      return { observation, markerObserved: true };
+      return { observation, markerObserved: true, retryAttempts };
     }
   }
 
-  return { observation, markerObserved: false };
+  return { observation, markerObserved: false, retryAttempts };
 }
 
 function readAppStateResult(step: DesktopActionPlanStepResult): DesktopAppState {
@@ -946,6 +1019,16 @@ function readActionVerifiedEvents(
   });
 }
 
+function* readRetryEvents(
+  retryAttempts: readonly number[],
+  stage: "observation" | "verification",
+  reason: string
+): Generator<GhosttyTaskEvent> {
+  for (const attempt of retryAttempts) {
+    yield { type: "retry_attempted", stage, attempt, reason };
+  }
+}
+
 function isOpenGhosttySessionResult(
   result: DesktopActionResult
 ): result is OpenGhosttySessionResult {
@@ -1025,10 +1108,6 @@ function isTerminalMarkerLabel(text: string, normalizedMarker: string): boolean 
   return normalizedText === normalizedMarker || normalizedText.startsWith(normalizedMarker);
 }
 
-function normalizeTerminalText(value: string): string {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
 function isFailedActionResult(
   result: DesktopActionResult
 ): result is { ok: false; message?: string } {
@@ -1057,7 +1136,7 @@ function createGhosttyRecoveryTarget(pid: number | undefined) {
     pid,
     marker: SKFIY_GHOSTTY_SESSION_MARKER,
     sensitiveTitlePatterns: SENSITIVE_GHOSTTY_TITLE_PATTERNS,
-    sensitiveTextPatterns: SENSITIVE_GHOSTTY_TEXT_PATTERNS
+    sensitiveTextPatterns: GHOSTTY_SENSITIVE_TEXT_PATTERNS
   };
 }
 

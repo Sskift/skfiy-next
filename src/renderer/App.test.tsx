@@ -371,6 +371,8 @@ beforeEach(() => {
       }
     }),
     getPetSkin: vi.fn<DesktopApi["getPetSkin"]>().mockResolvedValue(null),
+    importPetSkin: vi.fn<DesktopApi["importPetSkin"]>().mockResolvedValue(null),
+    resetPetSkin: vi.fn<DesktopApi["resetPetSkin"]>().mockResolvedValue(undefined),
     getWindowBounds: vi.fn<DesktopApi["getWindowBounds"]>().mockResolvedValue({
       x: 100,
       y: 100,
@@ -707,7 +709,7 @@ describe("App", () => {
   it("starts as a Codex-style pet overlay with controls tucked away", () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     expect(pet).toBeInTheDocument();
     expect(pet).toHaveAttribute("data-pet-skin", "skfiy-black-cat");
     expect(pet).toHaveAttribute("data-atlas-state", "idle");
@@ -730,12 +732,12 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/skfiy codex-style pet/i)).toHaveAttribute(
+      expect(screen.getByRole("button", { name: /skfiy desktop pet/i })).toHaveAttribute(
         "data-pet-skin",
         "luoxiaohei-local"
       );
     });
-    expect(screen.getByLabelText(/skfiy codex-style pet/i).getAttribute("style")).toContain(
+    expect(screen.getByRole("button", { name: /skfiy desktop pet/i }).getAttribute("style")).toContain(
       "source.png"
     );
   });
@@ -743,7 +745,7 @@ describe("App", () => {
   it("opens the agent panel from a plain left click on the pet without obsolete audio controls", async () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     fireEvent.click(pet);
 
     expect(pet).toHaveAttribute("data-drag-mode", "manual");
@@ -764,7 +766,7 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     expect(screen.getByLabelText(/skfiy agent status/i)).toBeInTheDocument();
     expect(screen.queryByLabelText("权限引导")).not.toBeInTheDocument();
@@ -774,7 +776,7 @@ describe("App", () => {
   it("opens settings details from a right click on the pet without starting legacy input capture", () => {
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     expect(screen.getByLabelText(/skfiy settings/i)).toBeInTheDocument();
     expect(screen.queryByLabelText("语音转写")).not.toBeInTheDocument();
@@ -782,10 +784,127 @@ describe("App", () => {
     expect(screen.queryByText("右键")).not.toBeInTheDocument();
   });
 
+  it("is focusable in the tab order with role button and aria-expanded", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    expect(pet).toHaveAttribute("tabindex", "0");
+    expect(pet).toHaveAttribute("role", "button");
+    expect(pet).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(pet);
+    expect(pet).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("opens the assistant panel when Enter is pressed on the focused pet", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    fireEvent.keyDown(pet, { key: "Enter" });
+
+    expect(screen.getByLabelText(/skfiy assistant panel/i)).toBeInTheDocument();
+    expect(pet).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("opens the assistant panel when Space is pressed on the focused pet", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    fireEvent.keyDown(pet, { key: " " });
+
+    expect(screen.getByLabelText(/skfiy assistant panel/i)).toBeInTheDocument();
+  });
+
+  it("toggles settings details when Shift+F10 is pressed on the pet", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    fireEvent.keyDown(pet, { key: "F10", shiftKey: true });
+
+    expect(screen.getByLabelText(/skfiy settings/i)).toBeInTheDocument();
+    expect(pet).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("does not toggle settings on plain F10", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    fireEvent.keyDown(pet, { key: "F10", shiftKey: false });
+
+    expect(screen.queryByLabelText(/skfiy settings/i)).not.toBeInTheDocument();
+  });
+
+  it("closes settings details with Escape before stopping the turn", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    fireEvent.keyDown(pet, { key: "F10", shiftKey: true });
+    expect(screen.getByLabelText(/skfiy settings/i)).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByLabelText(/skfiy settings/i)).not.toBeInTheDocument();
+    expect((window.skfiy as DesktopApi).stopTask).not.toHaveBeenCalled();
+  });
+
+  it("moves focus to the task control card when an approval is required", async () => {
+    render(<App />);
+
+    act(() => emitTaskEvent({
+      status: "approval_required",
+      message: "Needs a human check",
+      taskControl: {
+        schemaVersion: 1,
+        executionId: "exec-1",
+        phase: "approval",
+        status: "approval_required",
+        message: "Needs a human check",
+        plan: {
+          planId: "plan-1",
+          route: "ghostty",
+          appName: "Ghostty",
+          target: "active terminal session",
+          risk: {
+            level: "medium",
+            reason: "This command changes local files.",
+            requiresApproval: true
+          },
+          approvalRequired: true,
+          expectedVerification: "Confirm the command result appears.",
+          mutating: true
+        },
+        sideEffectState: "none",
+        replayAvailable: false,
+        recoveryActions: [],
+        approval: { gate: "action-plan", planId: "plan-1" }
+      }
+    }));
+
+    const card = await screen.findByLabelText(/computer use task control/i);
+    await waitFor(() => {
+      expect(card).toHaveFocus();
+    });
+  });
+
+  it("reflects task state in the pet aria-label", () => {
+    render(<App />);
+
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
+    expect(pet.getAttribute("aria-label")).toContain("idle");
+
+    act(() => emitTaskEvent({ status: "running", message: "Running" }));
+    expect(pet.getAttribute("aria-label")).toContain("task running");
+
+    act(() => emitTaskEvent({ status: "approval_required", message: "Approval required" }));
+    expect(pet.getAttribute("aria-label")).toContain("waiting for approval");
+
+    act(() => emitTaskEvent({ status: "failed", message: "Failed" }));
+    expect(pet.getAttribute("aria-label")).toContain("task failed");
+  });
+
   it("renders right-click settings as clear user sections before advanced diagnostics", async () => {
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     const settings = await screen.findByLabelText(/skfiy settings/i);
     expect(within(settings).getByText("日常设置")).toBeInTheDocument();
@@ -798,7 +917,7 @@ describe("App", () => {
   it("keeps the daily right-click settings lightweight until advanced is opened", async () => {
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     const settings = await screen.findByLabelText(/skfiy settings/i);
     expect(within(settings).getByText("日常设置")).toBeInTheDocument();
@@ -814,7 +933,7 @@ describe("App", () => {
   it("renders the automation control center inside right-click details", async () => {
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     const settings = await screen.findByLabelText(/skfiy settings/i);
     expect(within(settings).getByLabelText("自动化监控")).toBeInTheDocument();
@@ -825,7 +944,7 @@ describe("App", () => {
     const api = window.skfiy as DesktopApi;
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     const settings = await screen.findByLabelText(/skfiy settings/i);
 
     fireEvent.click(within(settings).getByRole("button", { name: "新建自动化监控" }));
@@ -862,7 +981,7 @@ describe("App", () => {
       .mockResolvedValue(createAutomationPanelSnapshot([createAutomationPanelMonitor()]));
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     const settings = await screen.findByLabelText(/skfiy settings/i);
     await within(settings).findByText("money-run goal");
 
@@ -914,7 +1033,7 @@ describe("App", () => {
       .mockResolvedValue(createAutomationPanelSnapshot());
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     const settings = await screen.findByLabelText(/skfiy settings/i);
     await within(settings).findByText("money-run goal");
 
@@ -946,7 +1065,7 @@ describe("App", () => {
   it("shows a user-mode dashboard summary before advanced diagnostics", async () => {
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     const dashboard = await screen.findByLabelText("用户态 dashboard");
     expect(within(dashboard).getByText("助手状态")).toBeInTheDocument();
@@ -969,7 +1088,7 @@ describe("App", () => {
       denialKind: "app_policy",
       policyKind: "app-policy"
     }));
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     const dashboard = await screen.findByLabelText("用户态 dashboard");
     expect(within(dashboard).getByText("应用策略拒绝")).toBeInTheDocument();
@@ -996,7 +1115,7 @@ describe("App", () => {
         policyKind: "chrome-host-policy"
       }
     }));
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     const dashboard = await screen.findByLabelText("用户态 dashboard");
     expect(within(dashboard).getByText("Chrome 站点策略拒绝")).toBeInTheDocument();
@@ -1044,7 +1163,7 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(screen.getByText("权限")).toBeInTheDocument();
@@ -1082,7 +1201,7 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(screen.getByText("桌面会话")).toBeInTheDocument();
@@ -1096,7 +1215,7 @@ describe("App", () => {
   it("does not load or expose obsolete audio provider settings in the pet settings bubble", async () => {
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(screen.getByText("日常设置")).toBeInTheDocument();
@@ -1111,7 +1230,7 @@ describe("App", () => {
     const api = window.skfiy as DesktopApi;
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(screen.getByText("应用策略")).toBeInTheDocument();
@@ -1143,7 +1262,7 @@ describe("App", () => {
     const api = window.skfiy as DesktopApi;
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.click(screen.getByText("诊断/高级"));
 
     await waitFor(() => {
@@ -1175,7 +1294,7 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     expect(await screen.findByText("Background Agent")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "选择 Codex background agent" })).toBeInTheDocument();
@@ -1188,7 +1307,7 @@ describe("App", () => {
     const api = window.skfiy as DesktopApi;
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.click(await screen.findByRole("button", { name: "选择 Codex background agent" }));
 
     await waitFor(() => {
@@ -1211,7 +1330,7 @@ describe("App", () => {
       });
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.click(screen.getByText("诊断/高级"));
 
     const planner = await screen.findByLabelText("Computer Use Planner");
@@ -1233,7 +1352,7 @@ describe("App", () => {
       });
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.click(screen.getByText("诊断/高级"));
 
     const planner = await screen.findByLabelText("Computer Use Planner");
@@ -1343,7 +1462,7 @@ describe("App", () => {
 
     render(<App />);
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.click(screen.getByText("诊断/高级"));
 
     let replayPanel: HTMLElement | undefined;
@@ -1366,7 +1485,7 @@ describe("App", () => {
   it("switches from the agent panel to settings on right click", async () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     fireEvent.click(pet);
     expect(screen.getByLabelText(/skfiy agent status/i)).toBeInTheDocument();
 
@@ -1381,7 +1500,7 @@ describe("App", () => {
 
     expect(screen.getByRole("status", { name: /task status/i })).toHaveTextContent("Idle");
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     expect(pet).toHaveAttribute("data-atlas-state", "idle");
 
     const cases: Array<[TaskEvent["status"], string, string, string]> = [
@@ -1436,7 +1555,7 @@ describe("App", () => {
     render(<App />);
 
     act(() => emitTaskEvent({ status: "cancelled", message: "Task stopped." }));
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     expect(screen.getByRole("status", { name: /task status/i })).toHaveTextContent("Idle");
     expect(screen.queryByText("Task stopped.")).not.toBeInTheDocument();
@@ -1446,7 +1565,7 @@ describe("App", () => {
   it("does not move the pet window from a plain left click", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     expect((window.skfiy as DesktopApi).moveWindowBy).not.toHaveBeenCalled();
   });
@@ -1455,7 +1574,7 @@ describe("App", () => {
     render(<App />);
 
     const api = window.skfiy as DesktopApi;
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     fireEvent.click(pet);
 
     const input = screen.getByRole("textbox", { name: /ask skfiy/i });
@@ -1509,7 +1628,7 @@ describe("App", () => {
       });
     render(<App />);
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     await waitFor(() => expect(screen.getByLabelText("会话消息")).toBeInTheDocument());
 
     const input = screen.getByRole("textbox", { name: /ask skfiy/i });
@@ -1535,7 +1654,7 @@ describe("App", () => {
     );
     render(<App />);
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /ask skfiy/i }), {
       target: { value: "你好" }
     });
@@ -1552,7 +1671,7 @@ describe("App", () => {
   it("shows the assistant reply in the same panel and keeps input ready for follow-up", async () => {
     render(<App />);
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /ask skfiy/i }), {
       target: { value: "你好" }
     });
@@ -1570,7 +1689,7 @@ describe("App", () => {
   it("shows background agent provider failures as an inline conversation error", async () => {
     render(<App />);
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
     fireEvent.change(screen.getByRole("textbox", { name: /ask skfiy/i }), {
       target: { value: "你好" }
     });
@@ -1590,7 +1709,7 @@ describe("App", () => {
   it("maps planned and running canonical statuses to non-idle pet animation", () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
 
     act(() => emitTaskEvent({ status: "planned" }));
     expect(screen.getByRole("status", { name: /task status/i })).toHaveTextContent("Planned");
@@ -1601,19 +1720,22 @@ describe("App", () => {
     expect(pet).not.toHaveAttribute("data-atlas-state", "idle");
   });
 
-  it("does not show a focusable box around the pet", () => {
+  it("exposes the pet as a focusable button with state-driven accessibility", () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     expect(pet.tagName.toLowerCase()).not.toBe("button");
-    expect(pet).not.toHaveAttribute("tabindex");
+    expect(pet).toHaveAttribute("tabindex", "0");
+    expect(pet).toHaveAttribute("role", "button");
+    expect(pet).toHaveAttribute("aria-expanded", "false");
+    expect(pet.getAttribute("aria-label")).toContain("idle");
     expect(screen.queryByLabelText(/skfiy command capsule/i)).not.toBeInTheDocument();
   });
 
   it("moves the window from pet pointer dragging, including upward movement", () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     const api = window.skfiy as DesktopApi;
 
     vi.spyOn(pet, "getBoundingClientRect").mockReturnValue({
@@ -1653,7 +1775,7 @@ describe("App", () => {
   it("sends the visible pet rect when dragging", () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     const api = window.skfiy as DesktopApi;
 
     vi.spyOn(pet, "getBoundingClientRect").mockReturnValue({
@@ -1682,7 +1804,7 @@ describe("App", () => {
   it("collapses transient panels when dragging starts", async () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     const api = window.skfiy as DesktopApi;
 
     fireEvent.click(pet);
@@ -1699,7 +1821,7 @@ describe("App", () => {
   it("recaptures the visible pet rect when dragging starts from an open panel", async () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     const api = window.skfiy as DesktopApi;
 
     fireEvent.click(pet);
@@ -1743,7 +1865,7 @@ describe("App", () => {
   it("dismisses terminal task bubbles before compact pet dragging", async () => {
     render(<App />);
 
-    const pet = screen.getByLabelText(/skfiy codex-style pet/i);
+    const pet = screen.getByRole("button", { name: /skfiy desktop pet/i });
     const api = window.skfiy as DesktopApi;
 
     act(() => emitTaskEvent({ status: "cancelled", message: "Task stopped." }));
@@ -1762,24 +1884,24 @@ describe("App", () => {
     render(<App />);
 
     const api = window.skfiy as DesktopApi;
-    expect(screen.getByLabelText(/skfiy desktop pet/i)).not.toHaveClass("panel-open");
+    expect(screen.getByRole("main")).not.toHaveClass("panel-open");
     expect(api.setWindowMode).toHaveBeenLastCalledWith("compact");
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(api.setWindowMode).toHaveBeenLastCalledWith("expanded");
     });
-    expect(screen.getByLabelText(/skfiy desktop pet/i)).toHaveClass("panel-open");
+    expect(screen.getByRole("main")).toHaveClass("panel-open");
 
-    fireEvent.click(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.click(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(api.setWindowMode).toHaveBeenLastCalledWith("compact");
     });
-    expect(screen.getByLabelText(/skfiy desktop pet/i)).not.toHaveClass("panel-open");
+    expect(screen.getByRole("main")).not.toHaveClass("panel-open");
 
-    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /skfiy desktop pet/i }));
 
     await waitFor(() => {
       expect(api.setWindowMode).toHaveBeenLastCalledWith("expanded");

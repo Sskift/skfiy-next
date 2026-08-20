@@ -5,6 +5,8 @@ import {
 } from "./grounding-evaluation.js";
 import { extractObservedElementsFromAppState } from "./observed-elements.js";
 import type { DesktopAppState, FinderSelectionResult } from "./types.js";
+import type { TerminalCommandPreview } from "../orchestrator/terminal-command-preview.js";
+import type { TerminalContextObservation } from "../orchestrator/terminal-context.js";
 
 export interface FinderPlanPreviewTranscriptPayload {
   rootPath: string;
@@ -204,6 +206,20 @@ export type ComputerUseTurnEvent =
   | { type: "finder_selection_observed"; context: FinderSelectionResult }
   | { type: "plan_preview"; preview: FinderPlanPreviewTranscriptPayload }
   | {
+    type: "terminal_context_observed";
+    context: TerminalContextObservation;
+  }
+  | {
+    type: "command_preview";
+    preview: TerminalCommandPreview;
+  }
+  | {
+    type: "retry_attempted";
+    stage: "observation" | "verification";
+    attempt: number;
+    reason: string;
+  }
+  | {
     type: "plan_confirmation_required";
     command: string;
     preview: FinderPlanPreviewTranscriptPayload;
@@ -216,6 +232,7 @@ export type ComputerUseTurnEvent =
       type: "completed";
       command: string;
       summary: string;
+      exitCode?: number | "unknown";
       result?: FinderTaskResultTranscriptPayload;
     };
 
@@ -353,6 +370,26 @@ export type TurnTranscriptAction =
     message?: string;
     reason?: string;
   }
+  | {
+    type: "observe_terminal_context";
+    workingDirectory: string;
+    promptReady: boolean;
+    sensitiveContentDetected: boolean;
+  }
+  | {
+    type: "preview_terminal_command";
+    command: string;
+    workingDirectory: string;
+    mutating: boolean;
+    riskLevel: string;
+    expectedResult: string;
+  }
+  | {
+    type: "retry_observation";
+    stage: "observation" | "verification";
+    attempt: number;
+    reason: string;
+  }
   | { type: "switch_control"; from: string; to: string; stage: string; reason: string };
 
 export type TurnTranscriptOutcome =
@@ -376,6 +413,7 @@ export interface TurnTranscript {
   screenshots: TurnTranscriptScreenshot[];
   actions: TurnTranscriptAction[];
   outcome: TurnTranscriptOutcome;
+  exitCode?: number | "unknown";
   finderTaskResult?: FinderTaskResultTranscriptPayload;
 }
 
@@ -390,6 +428,7 @@ export function createTurnTranscript(
   let planner: TurnTranscriptPlanner | undefined;
   let approvalRequired = false;
   let outcome: TurnTranscriptOutcome = "running";
+  let exitCode: number | "unknown" | undefined;
   let finderTaskResult: FinderTaskResultTranscriptPayload | undefined;
 
   for (const event of events) {
@@ -696,6 +735,32 @@ export function createTurnTranscript(
           bundleId: "com.apple.finder"
         });
         break;
+      case "terminal_context_observed":
+        actions.push({
+          type: "observe_terminal_context",
+          workingDirectory: event.context.workingDirectory,
+          promptReady: event.context.promptReady,
+          sensitiveContentDetected: event.context.sensitiveContentDetected
+        });
+        break;
+      case "command_preview":
+        actions.push({
+          type: "preview_terminal_command",
+          command: event.preview.command,
+          workingDirectory: event.preview.workingDirectory,
+          mutating: event.preview.mutating,
+          riskLevel: event.preview.risk.level,
+          expectedResult: event.preview.expectedResult
+        });
+        break;
+      case "retry_attempted":
+        actions.push({
+          type: "retry_observation",
+          stage: event.stage,
+          attempt: event.attempt,
+          reason: event.reason
+        });
+        break;
       case "typing":
         actions.push({ type: "type_text", text: event.command });
         break;
@@ -723,6 +788,7 @@ export function createTurnTranscript(
       case "completed":
         command = event.command;
         outcome = "completed";
+        exitCode = event.exitCode;
         finderTaskResult = event.result;
         break;
     }
@@ -737,6 +803,7 @@ export function createTurnTranscript(
     screenshots,
     actions,
     outcome,
+    ...(exitCode !== undefined ? { exitCode } : {}),
     ...(finderTaskResult ? { finderTaskResult } : {})
   };
 }

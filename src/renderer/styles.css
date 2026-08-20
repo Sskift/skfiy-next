@@ -693,6 +693,129 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.settings-close-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(238, 247, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(238, 247, 255, 0.06);
+  color: rgba(238, 247, 255, 0.72);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-close-button:hover {
+  background: rgba(238, 247, 255, 0.12);
+}
+
+.pet-skin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(238, 247, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(238, 247, 255, 0.04);
+}
+
+.pet-skin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pet-skin-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(238, 247, 255, 0.03);
+}
+
+.pet-skin-option[data-selected="true"] {
+  background: rgba(238, 247, 255, 0.08);
+  outline: 1px solid rgba(238, 247, 255, 0.18);
+}
+
+.pet-skin-option-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pet-skin-option-info strong {
+  color: rgba(238, 247, 255, 0.78);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pet-skin-badge {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 196, 0, 0.14);
+  color: rgba(255, 196, 0, 0.85);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.pet-skin-option-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.pet-skin-option-actions button,
+.pet-skin-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border: 1px solid rgba(238, 247, 255, 0.16);
+  border-radius: 5px;
+  background: rgba(238, 247, 255, 0.06);
+  color: rgba(238, 247, 255, 0.72);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pet-skin-option-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pet-skin-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.pet-skin-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  padding: 6px;
+  border-radius: 6px;
+  background: rgba(238, 247, 255, 0.03);
+}
+
+.pet-skin-preview-sprite {
+  pointer-events: none;
+}
+
+.pet-skin-error {
+  color: rgba(255, 120, 120, 0.9);
+  font-size: 9px;
+  font-weight: 700;
+}
+
 .settings-grid {
   display: grid;
   gap: 7px;

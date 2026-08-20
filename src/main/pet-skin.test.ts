@@ -1,15 +1,17 @@
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { importPetSkin, readDefaultLocalOriginPetSkin } from "./pet-skin";
+import { importPetSkin, readDefaultLocalOriginPetSkin, resetPetSkin } from "./pet-skin";
 
 const tempRoots: string[] = [];
 const VALID_PNG_BYTES = Buffer.from(
@@ -123,6 +125,61 @@ describe("pet skin storage boundary", () => {
     const loaded = await readDefaultLocalOriginPetSkin({ homeDir });
 
     expect(loaded).toBeNull();
+  });
+});
+
+describe("pet skin reset", () => {
+  it("removes the local skin directory so subsequent reads return null", async () => {
+    const homeDir = createTempRoot();
+    const sourcePath = path.join(createTempRoot(), "seed.png");
+    writeFileSync(sourcePath, VALID_PNG_BYTES);
+    await importPetSkin({ homeDir, sourcePath });
+
+    expect(await readDefaultLocalOriginPetSkin({ homeDir })).not.toBeNull();
+
+    await resetPetSkin({ homeDir });
+
+    expect(await readDefaultLocalOriginPetSkin({ homeDir })).toBeNull();
+  });
+
+  it("does not throw when no local skin has been imported", async () => {
+    const homeDir = createTempRoot();
+
+    await expect(resetPetSkin({ homeDir })).resolves.toBeUndefined();
+  });
+
+  it("rejects source files that are too large", async () => {
+    const homeDir = createTempRoot();
+    const sourcePath = path.join(createTempRoot(), "huge.png");
+    writeFileSync(sourcePath, Buffer.alloc(16 * 1024 * 1024 + 1));
+
+    await expect(importPetSkin({ homeDir, sourcePath })).rejects.toThrow(
+      /too large/
+    );
+  });
+});
+
+describe("bundled pet skin assets", () => {
+  it("never ships a local-only or custom-user manifest in public assets", () => {
+    const assetsDir = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "renderer",
+      "assets"
+    );
+    const manifestFiles = readdirSync(assetsDir).filter((name) =>
+      name.endsWith(".pet.json")
+    );
+
+    expect(manifestFiles.length).toBeGreaterThan(0);
+    for (const fileName of manifestFiles) {
+      const manifest = JSON.parse(
+        readFileSync(path.join(assetsDir, fileName), "utf8")
+      ) as Record<string, unknown>;
+      expect(manifest.source).not.toBe("custom-user");
+      const origin = manifest.origin as { redistribution?: string } | undefined;
+      expect(origin?.redistribution).not.toBe("local-only");
+    }
   });
 });
 

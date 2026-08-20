@@ -1,5 +1,7 @@
 import type { RiskDecision } from "../../shared/types.js";
 import type { DesktopAppState } from "../computer-use/types.js";
+import type { TerminalCommandPreview } from "./terminal-command-preview.js";
+import type { TerminalContextObservation } from "./terminal-context.js";
 
 export type GhosttyTaskEvent =
   | {
@@ -11,6 +13,20 @@ export type GhosttyTaskEvent =
       type: "approval_required";
       command: string;
       risk: RiskDecision;
+    }
+  | {
+      type: "terminal_context_observed";
+      context: TerminalContextObservation;
+    }
+  | {
+      type: "command_preview";
+      preview: TerminalCommandPreview;
+    }
+  | {
+      type: "retry_attempted";
+      stage: "observation" | "verification";
+      attempt: number;
+      reason: string;
     }
   | {
       type: "locating_app";
@@ -73,4 +89,5 @@ export type GhosttyTaskEvent =
       type: "completed";
       command: string;
       summary: string;
+      exitCode: number | "unknown";
     };

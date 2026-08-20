@@ -19,15 +19,13 @@ import {
   type PointerEvent as ReactPointerEvent
 } from "react";
 import {
-  getConfiguredPetAtlas,
-  isPetAtlasManifest,
-  resolvePetAtlas,
-  type PetAtlas
+  isPetAtlasManifest
 } from "./pet-atlas";
 import {
   getAppShellViewModel,
   readAssistantAgentReadinessLabel,
-  readExternalCuaStatusLabel
+  readExternalCuaStatusLabel,
+  readPetAccessibilityLabel
 } from "./app-view-model";
 import {
   DesktopPet,
@@ -92,6 +90,22 @@ import {
   shouldSuppressPetClickAfterDrag,
   type PetDragState
 } from "./app-pet-drag-state";
+import {
+  isKeyboardInputContext,
+  shouldActivatePetFromKeyboard,
+  shouldClosePetSettingsFromKeyboard,
+  shouldOpenPetSettingsFromKeyboard,
+  shouldStopTurnFromPetKeyboard
+} from "./app-pet-keyboard";
+import {
+  createPetSkinState,
+  importPetSkinIntoState,
+  resetPetSkin,
+  resolvePetSkinAtlas,
+  selectPetSkin,
+  type PetSkinState
+} from "./app-pet-skin-state";
+import { PetSkinPanel } from "./pet-skin-panel";
 import {
   APP_POLICY_OPTIONS,
   DEFAULT_APP_POLICY_SETTINGS,
@@ -456,7 +470,10 @@ interface PendingTaskControlRecoveryDispatch {
 
 export default function App() {
   const api = useMemo(getDesktopApi, []);
-  const [petAtlas, setPetAtlas] = useState<PetAtlas>(() => getConfiguredPetAtlas());
+  const [petSkinState, setPetSkinState] = useState<PetSkinState>(() => createPetSkinState());
+  const [petSkinImportError, setPetSkinImportError] = useState("");
+  const [petSkinImportPending, setPetSkinImportPending] = useState(false);
+  const [petSkinResetPending, setPetSkinResetPending] = useState(false);
   const [panelState, setPanelState] = useState(INITIAL_PANEL_STATE);
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantInputSubmitting, setAssistantInputSubmitting] = useState(false);
@@ -541,6 +558,7 @@ export default function App() {
   const assistantInputValueRef = useRef(assistantInput);
   const taskStopPendingRef = useRef(false);
   const suppressNextPetClickRef = useRef(false);
+  const petKeyboardActivationRef = useRef<"assistant" | "settings" | null>(null);
   const { assistantPanelOpen, detailsOpen, permissionOnboardingOpen } = panelState;
   const activeConversationSession = useMemo(
     () => readActiveConversationSession(conversationHistory),
@@ -996,10 +1014,7 @@ export default function App() {
 
     void api.getPetSkin().then((skin) => {
       if (!cancelled && isPetAtlasManifest(skin)) {
-        setPetAtlas(resolvePetAtlas({
-          selectedSkinId: skin.slug,
-          customManifest: skin
-        }));
+        setPetSkinState((current) => importPetSkinIntoState(current, skin));
       }
     }).catch(() => {
       // A missing local skin should quietly keep the bundled fallback.
@@ -1009,6 +1024,35 @@ export default function App() {
       cancelled = true;
     };
   }, [api]);
+
+  const handleImportPetSkin = useCallback(() => {
+    setPetSkinImportError("");
+    setPetSkinImportPending(true);
+    void api.importPetSkin().then((manifest) => {
+      if (manifest) {
+        setPetSkinState((current) => importPetSkinIntoState(current, manifest));
+      }
+    }).catch((error: unknown) => {
+      setPetSkinImportError(error instanceof Error ? error.message : "Failed to import pet skin.");
+    }).finally(() => {
+      setPetSkinImportPending(false);
+    });
+  }, [api]);
+
+  const handleResetPetSkin = useCallback(() => {
+    setPetSkinResetPending(true);
+    void api.resetPetSkin().then(() => {
+      setPetSkinState((current) => resetPetSkin(current));
+    }).catch(() => {
+      // A failed reset should keep the current skin selection.
+    }).finally(() => {
+      setPetSkinResetPending(false);
+    });
+  }, [api]);
+
+  const handleSelectPetSkin = useCallback((skinId: string) => {
+    setPetSkinState((current) => selectPetSkin(current, skinId));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1309,8 +1353,21 @@ export default function App() {
       if (!shouldStopCurrentTurnFromKeyboard({ key: event.key })) {
         return;
       }
+      if (isKeyboardInputContext(event.target)) {
+        return;
+      }
 
       event.preventDefault();
+      if (
+        shouldClosePetSettingsFromKeyboard({
+          key: event.key,
+          settingsOpen: detailsOpen,
+          isInputContext: false
+        })
+      ) {
+        transitionPanelState({ type: "close-details" });
+        return;
+      }
       if (
         conversationNavigatorOpen
         && !assistantInputSubmitting
@@ -1323,7 +1380,15 @@ export default function App() {
         }, 0);
         return;
       }
-      void stopCurrentTurn();
+      if (
+        shouldStopTurnFromPetKeyboard({
+          key: event.key,
+          settingsOpen: detailsOpen,
+          isInputContext: false
+        })
+      ) {
+        void stopCurrentTurn();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -1332,8 +1397,10 @@ export default function App() {
     assistantInputSubmitting,
     conversationNavigatorOpen,
     conversationRetrying,
+    detailsOpen,
     stopCurrentTurn,
-    task.status
+    task.status,
+    transitionPanelState
   ]);
 
   useEffect(() => {
@@ -1343,6 +1410,47 @@ export default function App() {
       )?.focus();
     }
   }, [conversationNavigatorOpen]);
+
+  useEffect(() => {
+    if (assistantPanelOpen && petKeyboardActivationRef.current === "assistant") {
+      petKeyboardActivationRef.current = null;
+      window.setTimeout(() => {
+        assistantInputRef.current?.focus();
+      }, 0);
+    }
+  }, [assistantPanelOpen]);
+
+  useEffect(() => {
+    if (detailsOpen && petKeyboardActivationRef.current === "settings") {
+      petKeyboardActivationRef.current = null;
+      window.setTimeout(() => {
+        document.querySelector<HTMLElement>('button[aria-label="Close settings"]')?.focus();
+      }, 0);
+    }
+  }, [detailsOpen]);
+
+  const panelWasOpenRef = useRef(false);
+  useEffect(() => {
+    const isOpen = panelState.assistantPanelOpen || panelState.detailsOpen;
+    if (panelWasOpenRef.current && !isOpen) {
+      window.setTimeout(() => {
+        document.querySelector<HTMLElement>('[data-pet-entry="true"]')?.focus();
+      }, 0);
+    }
+    panelWasOpenRef.current = isOpen;
+  }, [panelState.assistantPanelOpen, panelState.detailsOpen]);
+
+  useEffect(() => {
+    const isApprovalPending = task.status === "approval_required"
+      || task.status === "needs_confirmation"
+      || task.status === "needs_clarification";
+    if (!isApprovalPending) {
+      return;
+    }
+    window.setTimeout(() => {
+      document.querySelector<HTMLElement>(".task-control-card")?.focus();
+    }, 0);
+  }, [task.status]);
 
   useEffect(() => {
     return api.onStopTurnHotkey(() => {
@@ -2095,6 +2203,20 @@ export default function App() {
     transitionPanelState({ type: "toggle-details" });
   }
 
+  function handlePetKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (shouldActivatePetFromKeyboard({ key: event.key })) {
+      event.preventDefault();
+      petKeyboardActivationRef.current = "assistant";
+      openAssistantPanelFromPet();
+      return;
+    }
+    if (shouldOpenPetSettingsFromKeyboard({ key: event.key, shiftKey: event.shiftKey })) {
+      event.preventDefault();
+      petKeyboardActivationRef.current = "settings";
+      toggleDetailsFromPet(event as unknown as ReactMouseEvent<HTMLDivElement>);
+    }
+  }
+
   const activeTaskControl = Boolean(taskControl && taskControl.phase !== "terminal");
   const {
     assistantInputPanel,
@@ -2119,6 +2241,11 @@ export default function App() {
     startupWarnings,
     taskStatus: task.status
   });
+  const petAtlas = resolvePetSkinAtlas(petSkinState);
+  const petAccessibilityLabel = readPetAccessibilityLabel(
+    task.status,
+    panelVisibility.showPanel
+  );
 
   useEffect(() => {
     api.setWindowMode(panelVisibility.showPanel ? "expanded" : "compact");
@@ -2175,6 +2302,9 @@ export default function App() {
         <strong>{status.label}</strong>
         <span>{status.pulse}</span>
       </div>
+      <div className="sr-only" aria-live="polite" data-testid="pet-status-live">
+        {`Task status: ${status.label}`}
+      </div>
 
       {panelVisibility.showPanel ? (
         <section
@@ -2220,6 +2350,15 @@ export default function App() {
                   <strong>日常设置</strong>
                   <span>Agent 与应用策略</span>
                   <ProfileIndicator activeProfile={profileState.snapshot.activeProfile} />
+                  <button
+                    type="button"
+                    className="settings-close-button"
+                    aria-label="Close settings"
+                    onClick={() => transitionPanelState({ type: "close-details" })}
+                  >
+                    <CirclePause size={13} aria-hidden="true" />
+                    <span>Close</span>
+                  </button>
                 </div>
                 <ProfileSwitchBanner
                   banner={profileState.banner}
@@ -2281,6 +2420,15 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                <PetSkinPanel
+                  importError={petSkinImportError}
+                  importPending={petSkinImportPending}
+                  onImportSkin={handleImportPetSkin}
+                  onResetSkin={handleResetPetSkin}
+                  onSelectSkin={handleSelectPetSkin}
+                  resetPending={petSkinResetPending}
+                  skinState={petSkinState}
+                />
                 <details
                   className="advanced-panel"
                   aria-label="诊断/高级"
@@ -2589,13 +2737,16 @@ export default function App() {
       ) : null}
 
       <DesktopPet
-        state={petState}
+        accessibilityLabel={petAccessibilityLabel}
         atlas={petAtlas}
         onClick={openAssistantPanelFromPet}
         onContextMenu={toggleDetailsFromPet}
+        onKeyDown={handlePetKeyDown}
         onPointerDown={startPetDrag}
         onPointerMove={movePetDrag}
         onPointerUp={stopPetDrag}
+        panelOpen={panelVisibility.showPanel}
+        state={petState}
       />
     </main>
   );

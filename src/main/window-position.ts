@@ -247,7 +247,7 @@ function readDisplayBounds(display: DisplayLike | undefined): WorkArea | undefin
   return display?.bounds ?? display?.workArea;
 }
 
-function clampWindowBoundsToNearestDisplay(
+export function clampWindowBoundsToNearestDisplay(
   bounds: PetWindowBounds,
   displays: readonly DisplayLike[]
 ): PetWindowBounds {

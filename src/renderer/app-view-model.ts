@@ -542,6 +542,35 @@ function readPetAtlasStateForTaskStatus(status: TaskStatus): PetAtlasState {
   return getPetStateForTask(status);
 }
 
+const PET_STATUS_ACCESSIBILITY_LABELS: Partial<Record<TaskStatus, string>> = {
+  idle: "idle",
+  planned: "task planned",
+  waiting: "task waiting",
+  observing: "task observing the desktop",
+  executing: "task running",
+  verifying: "task verifying",
+  running: "task running",
+  approval_required: "waiting for approval",
+  needs_confirmation: "waiting for confirmation",
+  needs_clarification: "waiting for clarification",
+  completed: "task completed",
+  denied: "task denied",
+  blocked: "task blocked",
+  failed: "task failed",
+  cancelled: "task cancelled"
+};
+
+export function readPetAccessibilityLabel(
+  status: TaskStatus,
+  panelOpen: boolean
+): string {
+  const stateLabel = PET_STATUS_ACCESSIBILITY_LABELS[status] ?? "idle";
+  const panelHint = panelOpen
+    ? "Panel open. Press Escape to close."
+    : "Press Enter to open assistant, Shift+F10 for settings.";
+  return `skfiy desktop pet, ${stateLabel}. ${panelHint}`;
+}
+
 export function canDismissTaskBubble(status: TaskStatus): boolean {
   return (
     status === "completed"

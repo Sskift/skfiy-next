@@ -12,6 +12,7 @@ import {
   readFinderTaskRisk
 } from "./orchestrator/finder-task.js";
 import { readGhosttyTaskRisk } from "./orchestrator/ghostty-task.js";
+import { GHOSTTY_EXPECTED_VERIFICATION } from "./orchestrator/terminal-command-preview.js";
 import { readTmuxSupervisionTaskRisk } from "./orchestrator/tmux-supervision-task.js";
 import {
   readExecutableRoutePolicyBlockReason,
@@ -22,6 +23,11 @@ export interface CreateComputerUsePlanPreviewInput {
   command: string;
   route: ExecutableCommandRoute;
   forceApproval?: boolean;
+  /**
+   * Observed Ghostty working directory, when terminal context has been
+   * observed. Omitted (or `"unknown"`) when context is unobservable.
+   */
+  workingDirectory?: string;
 }
 
 export interface CreateAppPolicyBoundComputerUsePlanPreviewInput
@@ -30,7 +36,7 @@ export interface CreateAppPolicyBoundComputerUsePlanPreviewInput
 }
 
 const EXPECTED_VERIFICATION = {
-  ghostty: "Confirm the owned Ghostty session remains active and observe the command completion marker.",
+  ghostty: GHOSTTY_EXPECTED_VERIFICATION,
   chrome: "Confirm the approved page action and inspect the resulting page snapshot.",
   finder: "Confirm the approved plan still matches the target and verify each file operation.",
   desktop: "Confirm a fresh target-app observation verifies the requested goal after each action.",
@@ -41,10 +47,11 @@ const EXPECTED_VERIFICATION = {
 export function createComputerUsePlanPreview({
   command,
   route,
-  forceApproval = false
+  forceApproval = false,
+  workingDirectory
 }: CreateComputerUsePlanPreviewInput): ComputerUsePlanPreview {
   const risk = readRouteRisk(command, route);
-  const target = readRouteTarget(command, route);
+  const target = readRouteTarget(command, route, workingDirectory);
   const approvalRequired = risk.level !== "blocked"
     && (forceApproval || risk.requiresApproval);
   const mutating = readRouteMutation(command, route, risk.level);
@@ -131,10 +138,19 @@ function readRouteAppName(route: ExecutableCommandRoute): string {
   }
 }
 
-function readRouteTarget(command: string, route: ExecutableCommandRoute): string {
+function readRouteTarget(
+  command: string,
+  route: ExecutableCommandRoute,
+  workingDirectory?: string
+): string {
   switch (route.kind) {
-    case "ghostty":
-      return `skfiy-shell · ${boundedSensitiveLabel(command, "command")}`;
+    case "ghostty": {
+      const redactedCommand = boundedSensitiveLabel(command, "command");
+      if (workingDirectory && workingDirectory !== "unknown") {
+        return `skfiy-shell · ${boundedLabel(workingDirectory, "skfiy-shell")} · ${redactedCommand}`;
+      }
+      return `skfiy-shell · ${redactedCommand}`;
+    }
     case "chrome":
       return readChromeTarget(command);
     case "finder":

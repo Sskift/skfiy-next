@@ -286,3 +286,66 @@ describe("chrome workflow task events", () => {
     });
   });
 });
+
+describe("ghostty terminal observation events", () => {
+  it("maps terminal context observation to an observing status with the cwd", () => {
+    expect(createTaskEvent({
+      type: "terminal_context_observed",
+      context: {
+        workingDirectory: "/Users/foo",
+        promptReady: true,
+        lastCommandEcho: "",
+        recentOutputTail: "line-a\nline-b",
+        sensitiveContentDetected: false
+      }
+    }, "active")).toMatchObject({
+      status: "observing",
+      message: "Observed Ghostty terminal context in /Users/foo."
+    });
+  });
+
+  it("maps a command preview to an executing status with the risk class", () => {
+    expect(createTaskEvent({
+      type: "command_preview",
+      preview: {
+        command: "mkdir skfiy-test",
+        workingDirectory: "/Users/foo",
+        risk: {
+          level: "medium",
+          reason: "Command can create or modify local state.",
+          requiresApproval: true
+        },
+        mutating: true,
+        expectedResult: "May modify local state; outcome is verified after completion",
+        expectedVerification: "Confirm the owned Ghostty session remains active and observe the command completion marker."
+      }
+    }, "active")).toMatchObject({
+      status: "executing",
+      message: "Ghostty command preview: mkdir skfiy-test (medium, mutating) in /Users/foo."
+    });
+  });
+
+  it("maps a retry attempt to a verifying status with the stage and reason", () => {
+    expect(createTaskEvent({
+      type: "retry_attempted",
+      stage: "verification",
+      attempt: 1,
+      reason: "Exit status was not readable from the completion marker; re-observing Ghostty output."
+    }, "active")).toMatchObject({
+      status: "verifying",
+      message: "Retrying verification observation (attempt 1): Exit status was not readable from the completion marker; re-observing Ghostty output."
+    });
+  });
+
+  it("surfaces the completed exit code through the event summary", () => {
+    expect(createTaskEvent({
+      type: "completed",
+      command: "pwd",
+      summary: "Command completed in Ghostty with exit code 0.",
+      exitCode: 0
+    }, "active")).toMatchObject({
+      status: "completed",
+      message: "Command completed in Ghostty with exit code 0."
+    });
+  });
+});

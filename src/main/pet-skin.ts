@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -131,6 +131,9 @@ export async function importPetSkin(input: ImportPetSkinInput): Promise<ImportPe
   if (!sourceStats.isFile()) {
     throw new Error(`Pet skin source is not a file: ${sourcePath}`);
   }
+  if (sourceStats.size <= 0 || sourceStats.size > MAX_PET_SKIN_ASSET_BYTES) {
+    throw new Error(`Pet skin source is empty or too large: ${sourceStats.size} bytes`);
+  }
 
   const extension = path.extname(sourcePath).toLowerCase();
   if (!SUPPORTED_ORIGIN_ASSET_EXTENSIONS.has(extension)) {
@@ -190,6 +193,14 @@ export async function importPetSkin(input: ImportPetSkinInput): Promise<ImportPe
     assetPath,
     manifest
   };
+}
+
+export async function resetPetSkin(input: { homeDir: string }): Promise<void> {
+  if (!input.homeDir) {
+    return;
+  }
+  const skinDir = createPetSkinDirectoryPath(input.homeDir, LOCAL_ORIGIN_PET_SKIN_SLUG);
+  await rm(skinDir, { recursive: true, force: true });
 }
 
 export async function readDefaultLocalOriginPetSkin(input: {

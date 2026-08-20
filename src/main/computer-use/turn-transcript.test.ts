@@ -571,4 +571,90 @@ describe("createTurnTranscript", () => {
     expect(transcript.outcome).toBe("completed");
     expect(transcript.finderTaskResult).toBeUndefined();
   });
+
+  it("folds terminal context observation into a transcript action", () => {
+    const transcript = createTurnTranscript([
+      {
+        type: "terminal_context_observed",
+        context: {
+          workingDirectory: "/Users/foo",
+          promptReady: true,
+          lastCommandEcho: "",
+          recentOutputTail: "line-a",
+          sensitiveContentDetected: false
+        }
+      }
+    ]);
+
+    expect(transcript.actions).toContainEqual({
+      type: "observe_terminal_context",
+      workingDirectory: "/Users/foo",
+      promptReady: true,
+      sensitiveContentDetected: false
+    });
+  });
+
+  it("folds a command preview into a transcript action", () => {
+    const transcript = createTurnTranscript([
+      {
+        type: "command_preview",
+        preview: {
+          command: "mkdir skfiy-test",
+          workingDirectory: "/Users/foo",
+          risk: {
+            level: "medium",
+            reason: "Command can create or modify local state.",
+            requiresApproval: true
+          },
+          mutating: true,
+          expectedResult: "May modify local state; outcome is verified after completion",
+          expectedVerification: "Confirm the owned Ghostty session remains active and observe the command completion marker."
+        }
+      }
+    ]);
+
+    expect(transcript.actions).toContainEqual({
+      type: "preview_terminal_command",
+      command: "mkdir skfiy-test",
+      workingDirectory: "/Users/foo",
+      mutating: true,
+      riskLevel: "medium",
+      expectedResult: "May modify local state; outcome is verified after completion"
+    });
+  });
+
+  it("folds a retry attempt into a transcript action", () => {
+    const transcript = createTurnTranscript([
+      {
+        type: "retry_attempted",
+        stage: "verification",
+        attempt: 1,
+        reason: "Exit status was not readable; re-observing."
+      }
+    ]);
+
+    expect(transcript.actions).toContainEqual({
+      type: "retry_observation",
+      stage: "verification",
+      attempt: 1,
+      reason: "Exit status was not readable; re-observing."
+    });
+  });
+
+  it("records the completed exit code on the transcript", () => {
+    const transcript = createTurnTranscript([
+      { type: "completed", command: "pwd", summary: "Command completed in Ghostty with exit code 0.", exitCode: 0 }
+    ]);
+
+    expect(transcript.outcome).toBe("completed");
+    expect(transcript.exitCode).toBe(0);
+  });
+
+  it("records an unknown exit code on the transcript", () => {
+    const transcript = createTurnTranscript([
+      { type: "completed", command: "pwd", summary: "Command completed in Ghostty with exit code unknown.", exitCode: "unknown" }
+    ]);
+
+    expect(transcript.exitCode).toBe("unknown");
+  });
 });

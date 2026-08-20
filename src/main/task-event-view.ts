@@ -202,6 +202,21 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         message: `${prefix}Captured before screenshot: ${event.path}`,
         replayRecord: createObserveAppReplayRecord("before", event.observation)
       };
+    case "terminal_context_observed":
+      return {
+        status: "observing",
+        message: `${prefix}Observed Ghostty terminal context in ${event.context.workingDirectory}.`
+      };
+    case "command_preview":
+      return {
+        status: "executing",
+        message: `${prefix}Ghostty command preview: ${event.preview.command} (${event.preview.risk.level}, ${event.preview.mutating ? "mutating" : "read-only"}) in ${event.preview.workingDirectory}.`
+      };
+    case "retry_attempted":
+      return {
+        status: "verifying",
+        message: `${prefix}Retrying ${event.stage} observation (attempt ${event.attempt}): ${event.reason}`
+      };
     case "finder_selection_observed":
       return {
         status: "observing",
