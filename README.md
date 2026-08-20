@@ -36,7 +36,7 @@ The pet renderer is intentionally independent from the backend: main emits task 
 ```bash
 nvm use            # Node 22
 npm install
-npm test           # vitest, ~682 tests, ~45s
+npm test           # vitest, ~886 tests, ~45s
 npm run typecheck  # tsc --noEmit, strict, zero any
 npm run dev        # vite dev server (renderer)
 npm run dev:electron  # electron pointing at the dev server
@@ -45,7 +45,7 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~682 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~886 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
@@ -60,6 +60,10 @@ npm run build      # vite build + tsc electron + swift helper
 - [x] Pet skin legacy WebP fallback (`origin-visible.webp` frame candidates)
 - [x] Automation monitor notifications (tmux-session monitor → attention/completed/failure notices)
 - [x] Electron 39 → 43 upgrade (43.4.1, with explicit postinstall binary download)
+- [x] **M2 features shipped** — Memory Control Center, Browser Context Source Control, Provider Discovery
+  - Memory: pending write approval, journal, settings, dashboard panel (entries/usage/pending/journal)
+  - Browser Context: tab targeting, freshness, pause/disconnect, blocker categories, renderer panel
+  - Provider Discovery: registry, bounded test request, fallback, readiness badge, offline banner, discovery panel
 
 ## Cut from the old repo (intentionally)
 
