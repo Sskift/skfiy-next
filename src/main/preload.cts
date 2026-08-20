@@ -300,6 +300,7 @@ interface TaskEvent {
   replayRecord?: ObserveAppReplayRecord;
   finderSelection?: FinderSelectionResult;
   finderPlanPreview?: FinderPlanPreview;
+  finderTaskResult?: FinderTaskResult;
   tmuxSupervisionReport?: unknown;
 }
 
@@ -326,6 +327,35 @@ interface FinderPlanPreview {
     from: string;
     to: string;
   }>;
+}
+
+interface FinderTaskResult {
+  schemaVersion: 1;
+  rootPath: string;
+  destinationPath: string;
+  collisionPolicy: "cancel" | "skip" | "rename" | "replace";
+  totalOperationCount: number;
+  completedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  completedItems: Array<{
+    operationId: string;
+    operationType: "create_folder" | "move_file" | "copy_file";
+    from?: string;
+    to: string;
+    resultingName: string;
+    resolution: "create" | "move" | "copy" | "skip" | "rename" | "replace";
+  }>;
+  failedItems: Array<{
+    operationId: string;
+    operationType: "create_folder" | "move_file" | "copy_file";
+    from?: string;
+    to: string;
+    reason: string;
+    errorCode: string;
+  }>;
+  destinationVerified: boolean;
+  resultingNamesVerified: boolean;
 }
 
 interface FinderSelectionResult {
@@ -801,6 +831,80 @@ interface AutomationMonitorSnapshot {
   monitors: AutomationMonitorRuntime[];
 }
 
+type AutomationRunState =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "attention"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+type AutomationRunTrigger = "manual" | "scheduled" | "local-state" | "cli" | "mcp";
+
+type AutomationRunCancellationSource = "pet" | "dashboard" | "cli" | "mcp";
+
+interface AutomationRunTimelineEntry {
+  at: string;
+  step: string;
+  detail?: string;
+}
+
+interface AutomationRunVerification {
+  at: string;
+  kind: "tmux-observation" | "manual" | "none";
+  status: "observing" | "needs_attention" | "blocked" | "error";
+  summary: string;
+}
+
+interface AutomationRunCancellation {
+  requestedBy: AutomationRunCancellationSource;
+  at: string;
+}
+
+interface AutomationRunConfig {
+  sessionName: string;
+  timeoutMs: number;
+  maxAttempts: number;
+  backoffMs: number;
+  backoffMultiplier: number;
+  maxBackoffMs: number;
+  runTtlMs: number;
+  concurrencyPolicy: "skip" | "queue" | "allow";
+  maxConcurrency: number;
+}
+
+interface AutomationRunRecord {
+  schemaVersion: 1;
+  runId: string;
+  monitorId: string;
+  trigger: AutomationRunTrigger;
+  state: AutomationRunState;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  deadlineAt?: string;
+  retryAvailableAt?: string;
+  currentStep: string;
+  nextAction?: string;
+  attempt: number;
+  maxAttempts: number;
+  timeline: AutomationRunTimelineEntry[];
+  latestVerification?: AutomationRunVerification;
+  terminalReason?: string;
+  cancellation?: AutomationRunCancellation;
+  error?: string;
+  config: AutomationRunConfig;
+}
+
+interface AutomationRunSnapshot {
+  schemaVersion: 1;
+  generatedAt: string;
+  runs: AutomationRunRecord[];
+}
+
 interface PetAnimationState {
   row: number;
   frames: number;
@@ -916,6 +1020,8 @@ interface DesktopApi {
       triggerMode?: AutomationMonitorTriggerMode;
     }
   ) => Promise<AutomationMonitorDefinitionPreview | null>;
+  getAutomationRuns: () => Promise<AutomationRunSnapshot>;
+  stopAutomationRun: (runId: string) => Promise<AutomationRunSnapshot>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetSkinManifest | null>;
   getWindowBounds: () => Promise<WindowBounds | null>;
@@ -1516,6 +1622,21 @@ const api: DesktopApi = {
     return isAutomationMonitorDefinitionPreview(payload)
       ? payload
       : null;
+  },
+  async getAutomationRuns() {
+    const payload = await ipcRenderer.invoke("skfiy:get-automation-runs");
+    return isAutomationRunSnapshot(payload)
+      ? payload
+      : createDefaultAutomationRunSnapshot();
+  },
+  async stopAutomationRun(runId) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:stop-automation-run",
+      typeof runId === "string" ? runId : ""
+    );
+    return isAutomationRunSnapshot(payload)
+      ? payload
+      : createDefaultAutomationRunSnapshot();
   },
   async getRuntimeStatus() {
     const payload = await ipcRenderer.invoke("skfiy:get-runtime-status");
@@ -3449,6 +3570,158 @@ function isAutomationMonitorLastResult(value: unknown): value is AutomationMonit
   );
 }
 
+function isAutomationRunState(value: unknown): value is AutomationRunState {
+  return (
+    value === "queued"
+    || value === "running"
+    || value === "waiting"
+    || value === "attention"
+    || value === "completed"
+    || value === "failed"
+    || value === "cancelled"
+    || value === "expired"
+  );
+}
+
+function isAutomationRunRecord(value: unknown): value is AutomationRunRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Partial<AutomationRunRecord>;
+  return (
+    record.schemaVersion === 1
+    && typeof record.runId === "string"
+    && typeof record.monitorId === "string"
+    && (
+      record.trigger === "manual"
+      || record.trigger === "scheduled"
+      || record.trigger === "local-state"
+      || record.trigger === "cli"
+      || record.trigger === "mcp"
+    )
+    && isAutomationRunState(record.state)
+    && typeof record.createdAt === "string"
+    && typeof record.updatedAt === "string"
+    && typeof record.currentStep === "string"
+    && typeof record.attempt === "number"
+    && Number.isFinite(record.attempt)
+    && typeof record.maxAttempts === "number"
+    && Number.isFinite(record.maxAttempts)
+    && Array.isArray(record.timeline)
+    && record.timeline.every(isAutomationRunTimelineEntry)
+    && isAutomationRunConfig(record.config)
+    && (record.startedAt === undefined || typeof record.startedAt === "string")
+    && (record.finishedAt === undefined || typeof record.finishedAt === "string")
+    && (record.deadlineAt === undefined || typeof record.deadlineAt === "string")
+    && (record.retryAvailableAt === undefined || typeof record.retryAvailableAt === "string")
+    && (record.nextAction === undefined || typeof record.nextAction === "string")
+    && (record.error === undefined || typeof record.error === "string")
+    && (record.terminalReason === undefined || typeof record.terminalReason === "string")
+    && (
+      record.latestVerification === undefined
+      || isAutomationRunVerification(record.latestVerification)
+    )
+    && (
+      record.cancellation === undefined
+      || isAutomationRunCancellation(record.cancellation)
+    )
+  );
+}
+
+function isAutomationRunTimelineEntry(value: unknown): value is AutomationRunTimelineEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as Partial<AutomationRunTimelineEntry>;
+  return (
+    typeof entry.at === "string"
+    && typeof entry.step === "string"
+    && (entry.detail === undefined || typeof entry.detail === "string")
+  );
+}
+
+function isAutomationRunVerification(value: unknown): value is AutomationRunVerification {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const verification = value as Partial<AutomationRunVerification>;
+  return (
+    typeof verification.at === "string"
+    && (
+      verification.kind === "tmux-observation"
+      || verification.kind === "manual"
+      || verification.kind === "none"
+    )
+    && (
+      verification.status === "observing"
+      || verification.status === "needs_attention"
+      || verification.status === "blocked"
+      || verification.status === "error"
+    )
+    && typeof verification.summary === "string"
+  );
+}
+
+function isAutomationRunCancellation(value: unknown): value is AutomationRunCancellation {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const cancellation = value as Partial<AutomationRunCancellation>;
+  return (
+    (
+      cancellation.requestedBy === "pet"
+      || cancellation.requestedBy === "dashboard"
+      || cancellation.requestedBy === "cli"
+      || cancellation.requestedBy === "mcp"
+    )
+    && typeof cancellation.at === "string"
+  );
+}
+
+function isAutomationRunConfig(value: unknown): value is AutomationRunConfig {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const config = value as Partial<AutomationRunConfig>;
+  return (
+    typeof config.sessionName === "string"
+    && typeof config.timeoutMs === "number"
+    && Number.isFinite(config.timeoutMs)
+    && typeof config.maxAttempts === "number"
+    && Number.isFinite(config.maxAttempts)
+    && typeof config.backoffMs === "number"
+    && Number.isFinite(config.backoffMs)
+    && typeof config.backoffMultiplier === "number"
+    && Number.isFinite(config.backoffMultiplier)
+    && typeof config.maxBackoffMs === "number"
+    && Number.isFinite(config.maxBackoffMs)
+    && typeof config.runTtlMs === "number"
+    && Number.isFinite(config.runTtlMs)
+    && (
+      config.concurrencyPolicy === "skip"
+      || config.concurrencyPolicy === "queue"
+      || config.concurrencyPolicy === "allow"
+    )
+    && typeof config.maxConcurrency === "number"
+    && Number.isFinite(config.maxConcurrency)
+  );
+}
+
+function isAutomationRunSnapshot(value: unknown): value is AutomationRunSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const snapshot = value as Partial<AutomationRunSnapshot>;
+  return (
+    snapshot.schemaVersion === 1
+    && typeof snapshot.generatedAt === "string"
+    && Array.isArray(snapshot.runs)
+    && snapshot.runs.every(isAutomationRunRecord)
+  );
+}
+
 function isPetSkinManifest(value: unknown): value is PetSkinManifest {
   if (!value || typeof value !== "object") {
     return false;
@@ -3584,6 +3857,14 @@ function createDefaultAutomationMonitorSnapshot(): AutomationMonitorSnapshot {
       reason: "Open skfiy to resume interval checks."
     },
     monitors: []
+  };
+}
+
+function createDefaultAutomationRunSnapshot(): AutomationRunSnapshot {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date(0).toISOString(),
+    runs: []
   };
 }
 

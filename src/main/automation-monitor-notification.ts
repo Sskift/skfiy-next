@@ -97,6 +97,14 @@ function createAutomationMonitorNotice(
       body: `${event.label} found a result to review in skfiy.`
     };
   }
+  if (event.outcome === "approval") {
+    return {
+      runId: event.runId,
+      outcome: event.outcome,
+      title: "Automation approval requested",
+      body: `${event.label} is waiting for approval in skfiy.`
+    };
+  }
   return {
     runId: event.runId,
     outcome: event.outcome,
@@ -108,7 +116,10 @@ function createAutomationMonitorNotice(
 function normalizeAutomationMonitorNotificationOutcome(
   value: unknown
 ): AutomationMonitorNotificationOutcome | undefined {
-  return value === "completed" || value === "attention" || value === "failure"
+  return value === "completed"
+    || value === "attention"
+    || value === "failure"
+    || value === "approval"
     ? value
     : undefined;
 }

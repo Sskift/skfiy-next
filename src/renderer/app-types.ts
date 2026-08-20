@@ -260,6 +260,7 @@ export interface TurnTranscript {
     copyFileCount?: number;
   }>;
   outcome: TurnTranscriptOutcome;
+  finderTaskResult?: FinderTaskResult;
 }
 
 export interface TurnReplay {
@@ -409,6 +410,80 @@ export interface AutomationMonitorSnapshot {
   monitors: AutomationMonitorRuntime[];
 }
 
+export type AutomationRunState =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "attention"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+export type AutomationRunTrigger = "manual" | "scheduled" | "local-state" | "cli" | "mcp";
+
+export type AutomationRunCancellationSource = "pet" | "dashboard" | "cli" | "mcp";
+
+export interface AutomationRunTimelineEntry {
+  at: string;
+  step: string;
+  detail?: string;
+}
+
+export interface AutomationRunVerification {
+  at: string;
+  kind: "tmux-observation" | "manual" | "none";
+  status: "observing" | "needs_attention" | "blocked" | "error";
+  summary: string;
+}
+
+export interface AutomationRunCancellation {
+  requestedBy: AutomationRunCancellationSource;
+  at: string;
+}
+
+export interface AutomationRunConfig {
+  sessionName: string;
+  timeoutMs: number;
+  maxAttempts: number;
+  backoffMs: number;
+  backoffMultiplier: number;
+  maxBackoffMs: number;
+  runTtlMs: number;
+  concurrencyPolicy: "skip" | "queue" | "allow";
+  maxConcurrency: number;
+}
+
+export interface AutomationRunRecord {
+  schemaVersion: 1;
+  runId: string;
+  monitorId: string;
+  trigger: AutomationRunTrigger;
+  state: AutomationRunState;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  deadlineAt?: string;
+  retryAvailableAt?: string;
+  currentStep: string;
+  nextAction?: string;
+  attempt: number;
+  maxAttempts: number;
+  timeline: AutomationRunTimelineEntry[];
+  latestVerification?: AutomationRunVerification;
+  terminalReason?: string;
+  cancellation?: AutomationRunCancellation;
+  error?: string;
+  config: AutomationRunConfig;
+}
+
+export interface AutomationRunSnapshot {
+  schemaVersion: 1;
+  generatedAt: string;
+  runs: AutomationRunRecord[];
+}
+
 export interface VisiblePetRect {
   x: number;
   y: number;
@@ -431,6 +506,7 @@ export interface TaskEvent {
   replayRecord?: ObserveAppReplayRecord;
   finderSelection?: FinderSelectionResult;
   finderPlanPreview?: FinderPlanPreview;
+  finderTaskResult?: FinderTaskResult;
   tmuxSupervisionReport?: unknown;
 }
 
@@ -457,6 +533,57 @@ export interface FinderPlanPreview {
     from: string;
     to: string;
   }>;
+}
+
+export type FinderTaskErrorCode =
+  | "destination-exists"
+  | "source-missing"
+  | "source-changed"
+  | "cross-device"
+  | "permission-denied"
+  | "rollback-incomplete"
+  | "filesystem-error"
+  | "verification-failed";
+
+export type FinderTaskResolution =
+  | "create"
+  | "move"
+  | "copy"
+  | "skip"
+  | "rename"
+  | "replace";
+
+export interface FinderTaskCompletedItem {
+  operationId: string;
+  operationType: "create_folder" | "move_file" | "copy_file";
+  from?: string;
+  to: string;
+  resultingName: string;
+  resolution: FinderTaskResolution;
+}
+
+export interface FinderTaskFailedItem {
+  operationId: string;
+  operationType: "create_folder" | "move_file" | "copy_file";
+  from?: string;
+  to: string;
+  reason: string;
+  errorCode: FinderTaskErrorCode;
+}
+
+export interface FinderTaskResult {
+  schemaVersion: 1;
+  rootPath: string;
+  destinationPath: string;
+  collisionPolicy: "cancel" | "skip" | "rename" | "replace";
+  totalOperationCount: number;
+  completedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  completedItems: FinderTaskCompletedItem[];
+  failedItems: FinderTaskFailedItem[];
+  destinationVerified: boolean;
+  resultingNamesVerified: boolean;
 }
 
 export interface FinderSelectionResult {
@@ -641,6 +768,8 @@ export interface DesktopApi {
       triggerMode?: AutomationMonitorTriggerMode;
     }
   ) => Promise<AutomationMonitorDefinitionPreview | null>;
+  getAutomationRuns: () => Promise<AutomationRunSnapshot>;
+  stopAutomationRun: (runId: string) => Promise<AutomationRunSnapshot>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetAtlasManifest | null>;
   getWindowBounds: () => Promise<WindowBounds | null>;

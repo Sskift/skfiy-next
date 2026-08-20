@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
-import { createTmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
+import {
+  createAutomationRunConfig,
+  createAutomationRunRecord,
+  transitionAutomationRun,
+  type AutomationRunCancellationSource,
+  type AutomationRunRecord
+} from "./automation-run.js";
 import {
   createAutomationMonitorManager,
   createAutomationMonitorStore,
+  type AutomationMonitorDefinition,
+  type AutomationMonitorRunTrigger,
   type AutomationMonitorStoreIo
 } from "./automation-monitor.js";
+
+const FIXED_NOW = "2026-06-25T10:00:00.000Z";
 
 function createMemoryIo(files: Map<string, string> = new Map()): AutomationMonitorStoreIo {
   return {
@@ -32,171 +41,149 @@ function createMemoryIo(files: Map<string, string> = new Map()): AutomationMonit
   };
 }
 
-function createWorkingReport(
-  sessionName: string,
-  paneTail = "Working"
-): TmuxSupervisionReport {
-  return createTmuxSupervisionReport({
-    sessionName,
-    hasSession: true,
-    windowsOutput: "@4\t1\tzsh\t1\t1",
-    panesOutput: `${sessionName}\t@4\t1\tzsh\t%4\t0\t1\t0\tzsh\tworker`,
-    paneTails: { "%4": paneTail }
+function createRunConfig(definition: AutomationMonitorDefinition) {
+  return createAutomationRunConfig({
+    sessionName: definition.sessionName,
+    timeoutMs: definition.timeoutMs,
+    maxAttempts: definition.maxAttempts,
+    backoffMs: definition.backoffMs,
+    backoffMultiplier: definition.backoffMultiplier,
+    maxBackoffMs: definition.maxBackoffMs,
+    runTtlMs: definition.runTtlMs,
+    concurrencyPolicy: definition.concurrencyPolicy,
+    maxConcurrency: definition.maxConcurrency
   });
 }
 
-function createManager(
-  tmuxClient: { observeSession: (sessionName: string) => Promise<TmuxSupervisionReport> },
-  onRunTerminal: (event: unknown) => void = () => undefined
-) {
-  return createAutomationMonitorManager({
-    now: () => "2026-06-25T10:00:00.000Z",
-    onRunTerminal,
-    store: createAutomationMonitorStore({
-      filePath: "/state/automation-monitors.json",
-      io: createMemoryIo()
-    }),
-    tmuxClient
+function createTerminalRun(
+  definition: AutomationMonitorDefinition,
+  state: "completed" | "attention" | "failed" | "cancelled" | "expired",
+  overrides: { error?: string; summary?: string; blocked?: boolean } = {}
+): AutomationRunRecord {
+  let record = createAutomationRunRecord({
+    monitorId: definition.id,
+    sequence: 1,
+    trigger: "manual",
+    now: FIXED_NOW,
+    config: createRunConfig(definition)
   });
-}
-
-describe("automation monitor manager terminal notifications", () => {
-  it("emits one bounded terminal event without observation output", async () => {
-    const terminalEvents: unknown[] = [];
-    const manager = createManager(
-      {
-        observeSession: async (sessionName) => createWorkingReport(sessionName, "private pane output")
-      },
-      (event) => terminalEvents.push(event)
-    );
-    const definition = manager.upsertTmuxSessionMonitor({
-      sessionName: "money-run-goal",
-      label: "Goal observer",
-      intervalMs: 600_000
-    });
-
-    await manager.runMonitorNow(definition.id);
-
-    expect(terminalEvents).toEqual([{
-      runId: "tmux-session:money-run-goal:run:1",
-      label: "Goal observer",
-      outcome: "completed"
-    }]);
-    expect(JSON.stringify(terminalEvents)).not.toContain("private pane output");
-  });
-
-  it("notifies scheduled runs only when their compact outcome changes", async () => {
-    const onRunTerminal = vi.fn();
-    const manager = createManager(
-      {
-        observeSession: async (sessionName) => createWorkingReport(sessionName)
-      },
-      onRunTerminal
-    );
-    const definition = manager.upsertTmuxSessionMonitor({
-      sessionName: "money-run-goal",
-      intervalMs: 600_000
-    });
-
-    await manager.runMonitorNow(definition.id, "scheduled");
-    await manager.runMonitorNow(definition.id, "scheduled");
-    expect(onRunTerminal).toHaveBeenCalledTimes(1);
-
-    await manager.runMonitorNow(definition.id, "manual");
-    expect(onRunTerminal).toHaveBeenCalledTimes(2);
-  });
-
-  it("notifies again when a scheduled run changes outcome", async () => {
-    const onRunTerminal = vi.fn();
-    let fail = false;
-    const manager = createManager(
-      {
-        observeSession: async (sessionName) => {
-          if (fail) {
-            throw new Error("tmux unavailable");
-          }
-          return createWorkingReport(sessionName);
-        }
-      },
-      onRunTerminal
-    );
-    const definition = manager.upsertTmuxSessionMonitor({
-      sessionName: "money-run-goal",
-      intervalMs: 600_000
-    });
-
-    await manager.runMonitorNow(definition.id, "scheduled");
-    expect(onRunTerminal).toHaveBeenCalledTimes(1);
-
-    fail = true;
-    await manager.runMonitorNow(definition.id, "scheduled");
-    expect(onRunTerminal).toHaveBeenCalledTimes(2);
-    expect(onRunTerminal).toHaveBeenLastCalledWith({
-      runId: "tmux-session:money-run-goal:run:2",
-      label: "money-run-goal",
-      outcome: "failure"
-    });
-  });
-
-  it("emits a failure event when the observation errors", async () => {
-    const onRunTerminal = vi.fn();
-    const manager = createManager(
-      {
-        observeSession: async () => {
-          throw new Error("tmux unavailable");
-        }
-      },
-      onRunTerminal
-    );
-    const definition = manager.upsertTmuxSessionMonitor({
-      sessionName: "money-run-goal",
-      intervalMs: 600_000
-    });
-
-    const runtime = await manager.runMonitorNow(definition.id);
-
-    expect(runtime.lastResult).toBe("error");
-    expect(onRunTerminal).toHaveBeenCalledWith({
-      runId: "tmux-session:money-run-goal:run:1",
-      label: "money-run-goal",
-      outcome: "failure"
-    });
-  });
-
-  it("emits an attention event when the report needs attention", async () => {
-    const onRunTerminal = vi.fn();
-    const manager = createManager(
-      {
-        observeSession: async (sessionName) => ({
-          ...createWorkingReport(sessionName),
-          status: "needs_attention"
-        })
-      },
-      onRunTerminal
-    );
-    const definition = manager.upsertTmuxSessionMonitor({
-      sessionName: "money-run-goal",
-      intervalMs: 600_000
-    });
-
-    await manager.runMonitorNow(definition.id);
-
-    expect(onRunTerminal).toHaveBeenCalledWith({
-      runId: "tmux-session:money-run-goal:run:1",
-      label: "money-run-goal",
-      outcome: "attention"
-    });
-  });
-
-  it("does not let notification failures change the durable monitor outcome", async () => {
-    const manager = createManager(
-      {
-        observeSession: async (sessionName) => createWorkingReport(sessionName)
-      },
-      () => {
-        throw new Error("notification center unavailable");
+  record = transitionAutomationRun(record, { type: "start" }, FIXED_NOW);
+  if (state === "completed") {
+    return transitionAutomationRun(record, {
+      type: "verification",
+      verification: {
+        at: FIXED_NOW,
+        kind: "tmux-observation",
+        status: "observing",
+        summary: overrides.summary ?? "money-run-goal has 1 window, 1 pane, and no obvious block markers."
       }
-    );
+    }, FIXED_NOW);
+  }
+  if (state === "attention") {
+    return transitionAutomationRun(record, {
+      type: "verification",
+      verification: {
+        at: FIXED_NOW,
+        kind: "tmux-observation",
+        status: overrides.blocked ? "blocked" : "needs_attention",
+        summary: overrides.summary ?? "block marker detected"
+      }
+    }, FIXED_NOW);
+  }
+  if (state === "failed") {
+    return transitionAutomationRun(record, {
+      type: "fail",
+      error: overrides.error ?? "tmux unavailable",
+      retryable: false
+    }, FIXED_NOW);
+  }
+  if (state === "cancelled") {
+    return transitionAutomationRun(record, { type: "cancel", requestedBy: "dashboard" }, FIXED_NOW);
+  }
+  return transitionAutomationRun(record, { type: "expire", reason: "expired-ttl" }, FIXED_NOW);
+}
+
+interface MockSupervisor {
+  requestRun: (input: {
+    definition: AutomationMonitorDefinition;
+    trigger: AutomationMonitorRunTrigger;
+  }) => Promise<AutomationRunRecord>;
+  stopMonitorRuns: (
+    monitorId: string,
+    requestedBy: AutomationRunCancellationSource
+  ) => void;
+  requests: Array<{ definition: AutomationMonitorDefinition; trigger: AutomationMonitorRunTrigger }>;
+  stopped: Array<{ monitorId: string; requestedBy: AutomationRunCancellationSource }>;
+  setNextRecord: (record: AutomationRunRecord | undefined) => void;
+}
+
+function createMockSupervisor(): MockSupervisor {
+  const requests: Array<{
+    definition: AutomationMonitorDefinition;
+    trigger: AutomationMonitorRunTrigger;
+  }> = [];
+  const stopped: Array<{ monitorId: string; requestedBy: AutomationRunCancellationSource }> = [];
+  let nextRecord: AutomationRunRecord | undefined;
+  const requestRun = vi.fn(
+    async (input: {
+      definition: AutomationMonitorDefinition;
+      trigger: AutomationMonitorRunTrigger;
+    }): Promise<AutomationRunRecord> => {
+      requests.push(input);
+      return nextRecord ?? createTerminalRun(input.definition, "completed");
+    }
+  );
+  const stopMonitorRuns = vi.fn(
+    (monitorId: string, requestedBy: AutomationRunCancellationSource) => {
+      stopped.push({ monitorId, requestedBy });
+    }
+  );
+  return {
+    requestRun,
+    stopMonitorRuns,
+    requests,
+    stopped,
+    setNextRecord: (record) => {
+      nextRecord = record;
+    }
+  };
+}
+
+function createManager(supervisor: MockSupervisor = createMockSupervisor()) {
+  return {
+    supervisor,
+    manager: createAutomationMonitorManager({
+      now: () => FIXED_NOW,
+      store: createAutomationMonitorStore({
+        filePath: "/state/automation-monitors.json",
+        io: createMemoryIo()
+      }),
+      supervisor
+    })
+  };
+}
+
+describe("automation monitor manager supervisor delegation", () => {
+  it("delegates runMonitorNow to the supervisor with definition and trigger", async () => {
+    const { manager, supervisor } = createManager();
+    const definition = manager.upsertTmuxSessionMonitor({
+      sessionName: "money-run-goal",
+      label: "Goal observer",
+      intervalMs: 600_000
+    });
+
+    await manager.runMonitorNow(definition.id, "scheduled");
+
+    expect(supervisor.requestRun).toHaveBeenCalledTimes(1);
+    expect(supervisor.requests[0]).toMatchObject({
+      trigger: "scheduled"
+    });
+    expect(supervisor.requests[0]?.definition.id).toBe(definition.id);
+    expect(supervisor.requests[0]?.definition.sessionName).toBe("money-run-goal");
+  });
+
+  it("projects a completed run onto the runtime snapshot fields", async () => {
+    const { manager } = createManager();
     const definition = manager.upsertTmuxSessionMonitor({
       sessionName: "money-run-goal",
       intervalMs: 600_000
@@ -204,10 +191,92 @@ describe("automation monitor manager terminal notifications", () => {
 
     const runtime = await manager.runMonitorNow(definition.id);
 
-    expect(runtime.lastResult).toBe("observing");
     // The scheduler was never started, so the public status maps to
-    // "scheduler_inactive"; the durable terminal result above is what matters.
-    expect(runtime.status).toBe("scheduler_inactive");
+    // "scheduler_inactive"; the durable terminal result below is what matters.
+    expect(runtime).toMatchObject({
+      status: "scheduler_inactive",
+      lastResult: "observing",
+      lastResultAt: FIXED_NOW,
+      lastSummary: "money-run-goal has 1 window, 1 pane, and no obvious block markers.",
+      checkCount: 1,
+      lastCheckedAt: FIXED_NOW,
+      nextCheckAt: "2026-06-25T10:10:00.000Z"
+    });
+    expect(runtime.lastError).toBeUndefined();
+  });
+
+  it("projects failed, attention, cancelled, and expired runs", async () => {
+    const { manager, supervisor } = createManager();
+    const definition = manager.upsertTmuxSessionMonitor({
+      sessionName: "money-run-goal",
+      intervalMs: 600_000
+    });
+
+    supervisor.setNextRecord(createTerminalRun(definition, "failed", {
+      error: "tmux unavailable"
+    }));
+    await expect(manager.runMonitorNow(definition.id)).resolves.toMatchObject({
+      status: "error",
+      lastResult: "error",
+      lastError: "tmux unavailable"
+    });
+
+    supervisor.setNextRecord(createTerminalRun(definition, "attention"));
+    await expect(manager.runMonitorNow(definition.id)).resolves.toMatchObject({
+      status: "needs_attention",
+      lastResult: "needs_attention"
+    });
+
+    supervisor.setNextRecord(createTerminalRun(definition, "attention", { blocked: true }));
+    await expect(manager.runMonitorNow(definition.id)).resolves.toMatchObject({
+      status: "blocked",
+      lastResult: "blocked"
+    });
+
+    supervisor.setNextRecord(createTerminalRun(definition, "cancelled"));
+    await expect(manager.runMonitorNow(definition.id)).resolves.toMatchObject({
+      status: "idle"
+    });
+
+    supervisor.setNextRecord(createTerminalRun(definition, "expired"));
+    await expect(manager.runMonitorNow(definition.id)).resolves.toMatchObject({
+      status: "error",
+      lastResult: "error",
+      lastError: "Automation run expired before completion."
+    });
+  });
+
+  it("never calls the supervisor for disabled monitors", async () => {
+    const { manager, supervisor } = createManager();
+    const definition = manager.upsertTmuxSessionMonitor({
+      sessionName: "money-run-goal",
+      intervalMs: 600_000,
+      enabled: false
+    });
+
+    const runtime = await manager.runMonitorNow(definition.id);
+
+    expect(supervisor.requestRun).not.toHaveBeenCalled();
+    expect(runtime).toMatchObject({
+      id: definition.id,
+      enabled: false,
+      status: "disabled",
+      checkCount: 0
+    });
+  });
+
+  it("cancels in-flight runs when pausing or deleting a monitor", () => {
+    const { manager, supervisor } = createManager();
+    const definition = manager.upsertTmuxSessionMonitor({
+      sessionName: "money-run-goal",
+      intervalMs: 600_000
+    });
+
+    manager.setMonitorEnabled(definition.id, false);
+    expect(supervisor.stopMonitorRuns).toHaveBeenCalledWith(definition.id, "dashboard");
+
+    expect(manager.deleteMonitor(definition.id)).toBe(true);
+    expect(supervisor.stopMonitorRuns).toHaveBeenLastCalledWith(definition.id, "dashboard");
   });
 });
 
@@ -216,6 +285,7 @@ describe("automation monitor manager lifecycle", () => {
     const io = createMemoryIo();
     const cleared: unknown[] = [];
     const firstScheduled: unknown[] = [];
+    const supervisor = createMockSupervisor();
     const manager = createAutomationMonitorManager({
       now: () => "2026-06-25T10:05:00.000Z",
       setInterval: (_callback, intervalMs) => {
@@ -228,9 +298,7 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor
     });
 
     const definition = manager.upsertTmuxSessionMonitor({
@@ -273,9 +341,7 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor: createMockSupervisor()
     });
 
     restored.start();
@@ -305,9 +371,7 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor: createMockSupervisor()
     });
     const definition = manager.upsertTmuxSessionMonitor({
       sessionName: "money-run-goal",
@@ -336,9 +400,7 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor: createMockSupervisor()
     });
     const original = manager.upsertTmuxSessionMonitor({
       sessionName: "money-run-goal",
@@ -420,33 +482,26 @@ describe("automation monitor manager lifecycle", () => {
     });
   });
 
-  it("publishes a bounded read-only definition preview and fails a timed-out check", async () => {
-    let timeoutCallback: (() => void) | undefined;
-    const clearTimeout = vi.fn();
-    const manager = createAutomationMonitorManager({
-      now: () => "2026-06-25T10:05:00.000Z",
-      setTimeout: (callback, timeoutMs) => {
-        expect(timeoutMs).toBe(12_000);
-        timeoutCallback = callback;
-        return "monitor-timeout";
-      },
-      clearTimeout,
-      store: createAutomationMonitorStore({
-        filePath: "/state/automation-monitors.json",
-        io: createMemoryIo()
-      }),
-      tmuxClient: {
-        observeSession: vi.fn(() => new Promise<never>(() => undefined))
-      }
-    });
+  it("publishes a bounded read-only definition preview with run lifecycle rows", () => {
+    const { manager } = createManager();
     const definition = manager.upsertTmuxSessionMonitor({
       sessionName: "money-run-goal",
       intervalMs: 123_000,
-      timeoutMs: 12_000
+      timeoutMs: 12_000,
+      concurrencyPolicy: "queue",
+      maxConcurrency: 2,
+      maxAttempts: 5,
+      backoffMs: 20_000,
+      runTtlMs: 600_000
     });
 
     expect(definition).toMatchObject({
       timeoutMs: 12_000,
+      concurrencyPolicy: "queue",
+      maxConcurrency: 2,
+      maxAttempts: 5,
+      backoffMs: 20_000,
+      runTtlMs: 600_000,
       preview: {
         adapter: "tmux-supervision",
         triggerModes: ["manual", "scheduled"],
@@ -459,32 +514,23 @@ describe("automation monitor manager lifecycle", () => {
         approvalMode: "not-required",
         timeoutMs: 12_000,
         verification: "tmux session, window, pane, and bounded recent pane-output observation",
-        mutatesSession: false
+        mutatesSession: false,
+        concurrency: {
+          policy: "queue",
+          max: 2
+        },
+        retry: {
+          maxAttempts: 5,
+          backoffMs: 20_000,
+          maxBackoffMs: 300_000
+        },
+        runTtlMs: 600_000
       }
     });
-
-    const pending = manager.runMonitorNow(definition.id);
-    timeoutCallback?.();
-    await expect(pending).resolves.toMatchObject({
-      status: "error",
-      lastError: "Automation monitor timed out after 12000ms.",
-      lastResult: "error"
-    });
-    expect(clearTimeout).toHaveBeenCalledWith("monitor-timeout");
   });
 
-  it("keeps disabled monitors inert when the tmux provider fails", async () => {
-    const observeSession = vi.fn(async () => {
-      throw new Error("tmux unavailable");
-    });
-    const manager = createAutomationMonitorManager({
-      now: () => "2026-06-25T10:05:00.000Z",
-      store: createAutomationMonitorStore({
-        filePath: "/state/automation-monitors.json",
-        io: createMemoryIo()
-      }),
-      tmuxClient: { observeSession }
-    });
+  it("keeps disabled monitors inert without touching the supervisor", async () => {
+    const { manager, supervisor } = createManager();
     const definition = manager.upsertTmuxSessionMonitor({
       sessionName: "money-run-goal",
       intervalMs: 123_000,
@@ -493,7 +539,7 @@ describe("automation monitor manager lifecycle", () => {
 
     const runtime = await manager.runMonitorNow(definition.id);
 
-    expect(observeSession).not.toHaveBeenCalled();
+    expect(supervisor.requestRun).not.toHaveBeenCalled();
     expect(runtime).toMatchObject({
       id: definition.id,
       enabled: false,
@@ -515,9 +561,7 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io: createMemoryIo()
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor: createMockSupervisor()
     });
     manager.upsertTmuxSessionMonitor({
       sessionName: "manual-goal",
@@ -545,7 +589,7 @@ describe("automation monitor manager lifecycle", () => {
     });
   });
 
-  it("round-trips timeout, trigger mode, and preview through the store", () => {
+  it("round-trips timeout, trigger mode, and run lifecycle config through the store", () => {
     const io = createMemoryIo();
     createAutomationMonitorManager({
       now: () => "2026-06-25T10:05:00.000Z",
@@ -553,14 +597,19 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor: createMockSupervisor()
     }).upsertTmuxSessionMonitor({
       sessionName: "money-run-goal",
       intervalMs: 123_000,
       timeoutMs: 45_000,
-      triggerMode: "manual"
+      triggerMode: "manual",
+      concurrencyPolicy: "allow",
+      maxConcurrency: 3,
+      maxAttempts: 4,
+      backoffMs: 15_000,
+      backoffMultiplier: 3,
+      maxBackoffMs: 120_000,
+      runTtlMs: 1_200_000
     });
 
     const restored = createAutomationMonitorManager({
@@ -569,19 +618,34 @@ describe("automation monitor manager lifecycle", () => {
         filePath: "/state/automation-monitors.json",
         io
       }),
-      tmuxClient: {
-        observeSession: vi.fn()
-      }
+      supervisor: createMockSupervisor()
     });
 
     expect(restored.readSnapshot().monitors[0]).toMatchObject({
       id: "tmux-session:money-run-goal",
       timeoutMs: 45_000,
       triggerMode: "manual",
+      concurrencyPolicy: "allow",
+      maxConcurrency: 3,
+      maxAttempts: 4,
+      backoffMs: 15_000,
+      backoffMultiplier: 3,
+      maxBackoffMs: 120_000,
+      runTtlMs: 1_200_000,
       preview: {
         adapter: "tmux-supervision",
         readWriteBehavior: "read-only",
-        timeoutMs: 45_000
+        timeoutMs: 45_000,
+        concurrency: {
+          policy: "allow",
+          max: 3
+        },
+        retry: {
+          maxAttempts: 4,
+          backoffMs: 15_000,
+          maxBackoffMs: 120_000
+        },
+        runTtlMs: 1_200_000
       }
     });
   });

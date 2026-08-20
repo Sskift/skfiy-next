@@ -520,4 +520,55 @@ describe("createTurnTranscript", () => {
       ]
     });
   });
+
+  it("transcribes the Finder task result from a completed event", () => {
+    const result = {
+      schemaVersion: 1 as const,
+      rootPath: "/tmp/work",
+      destinationPath: "/tmp/work",
+      collisionPolicy: "cancel" as const,
+      totalOperationCount: 6,
+      completedCount: 5,
+      failedCount: 1,
+      skippedCount: 0,
+      completedItems: [
+        {
+          operationId: "op-1",
+          operationType: "create_folder" as const,
+          to: "/tmp/work/Images",
+          resultingName: "Images",
+          resolution: "create" as const
+        }
+      ],
+      failedItems: [
+        {
+          operationId: "op-4",
+          operationType: "move_file" as const,
+          from: "/tmp/work/photo.png",
+          to: "/tmp/work/Images/photo.png",
+          reason: "Destination already exists.",
+          errorCode: "destination-exists"
+        }
+      ],
+      destinationVerified: true,
+      resultingNamesVerified: true
+    };
+
+    const transcript = createTurnTranscript([
+      { type: "started", command: "/tmp/work", risk: { level: "medium", reason: "Finder organization.", requiresApproval: true } },
+      { type: "completed", command: "/tmp/work", summary: "5 of 6 operations completed, 1 failed.", result }
+    ]);
+
+    expect(transcript.outcome).toBe("completed");
+    expect(transcript.finderTaskResult).toEqual(result);
+  });
+
+  it("omits the Finder task result when the completed event has none", () => {
+    const transcript = createTurnTranscript([
+      { type: "completed", command: "pwd", summary: "Command completed in Ghostty." }
+    ]);
+
+    expect(transcript.outcome).toBe("completed");
+    expect(transcript.finderTaskResult).toBeUndefined();
+  });
 });

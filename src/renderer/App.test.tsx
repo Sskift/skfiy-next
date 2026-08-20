@@ -353,6 +353,16 @@ beforeEach(() => {
       verification: "tmux session, window, pane, and bounded recent pane-output observation",
       mutatesSession: false
     }),
+    getAutomationRuns: vi.fn<DesktopApi["getAutomationRuns"]>().mockResolvedValue({
+      schemaVersion: 1,
+      generatedAt: new Date(0).toISOString(),
+      runs: []
+    }),
+    stopAutomationRun: vi.fn<DesktopApi["stopAutomationRun"]>().mockResolvedValue({
+      schemaVersion: 1,
+      generatedAt: new Date(0).toISOString(),
+      runs: []
+    }),
     getRuntimeStatus: vi.fn<DesktopApi["getRuntimeStatus"]>().mockResolvedValue({
       stopTurnHotkey: {
         accelerator: "Control+Alt+Shift+Esc",

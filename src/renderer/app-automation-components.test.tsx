@@ -1,12 +1,13 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AutomationMonitorSnapshot } from "./app-types";
+import type { AutomationMonitorSnapshot, AutomationRunRecord, AutomationRunSnapshot } from "./app-types";
 import {
   AutomationControlCenterPanel,
   type AutomationControlCenterPanelProps
 } from "./app-automation-components";
 import { createAutomationFeedback } from "./app-automation-state";
+import { DEFAULT_AUTOMATION_RUN_SNAPSHOT } from "./app-automation-run-state";
 
 function createSnapshot(
   overrides: Partial<AutomationMonitorSnapshot> = {}
@@ -63,11 +64,57 @@ function createSnapshot(
   };
 }
 
+function createRunRecord(
+  overrides: Partial<AutomationRunRecord> = {}
+): AutomationRunRecord {
+  return {
+    schemaVersion: 1,
+    runId: "tmux-session:money-run-goal:run:1",
+    monitorId: "tmux-session:money-run-goal",
+    trigger: "manual",
+    state: "running",
+    createdAt: "2026-08-20T09:00:00.000Z",
+    updatedAt: "2026-08-20T09:00:05.000Z",
+    currentStep: "observe",
+    attempt: 1,
+    maxAttempts: 3,
+    timeline: [
+      { at: "2026-08-20T09:00:00.000Z", step: "queued" },
+      { at: "2026-08-20T09:00:00.000Z", step: "started" },
+      { at: "2026-08-20T09:00:05.000Z", step: "observe", detail: "第 1/3 次观察进行中。" }
+    ],
+    config: {
+      sessionName: "money-run-goal",
+      timeoutMs: 30_000,
+      maxAttempts: 3,
+      backoffMs: 30_000,
+      backoffMultiplier: 2,
+      maxBackoffMs: 300_000,
+      runTtlMs: 900_000,
+      concurrencyPolicy: "skip",
+      maxConcurrency: 1
+    },
+    ...overrides
+  };
+}
+
+function createRunSnapshot(
+  overrides: Partial<AutomationRunSnapshot> = {}
+): AutomationRunSnapshot {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-20T09:00:05.000Z",
+    runs: [],
+    ...overrides
+  };
+}
+
 function createProps(
   overrides: Partial<AutomationControlCenterPanelProps> = {}
 ): AutomationControlCenterPanelProps {
   return {
     snapshot: createSnapshot(),
+    runs: createRunSnapshot(),
     feedback: null,
     actionPending: false,
     editor: null,
@@ -83,6 +130,7 @@ function createProps(
     onCancelEditor: vi.fn(),
     onConfirmPreview: vi.fn(),
     onCancelPreview: vi.fn(),
+    onStopRun: vi.fn(),
     ...overrides
   };
 }
@@ -298,5 +346,103 @@ describe("AutomationPreviewCard", () => {
     expect(onConfirm).toHaveBeenCalledWith(false);
     fireEvent.click(within(card).getByRole("button", { name: "取消" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AutomationRunPanel", () => {
+  it("renders nothing when there are no runs", () => {
+    const { container } = render(<AutomationControlCenterPanel {...createProps()} />);
+    expect(container.querySelector(".automation-run-panel")).toBeNull();
+  });
+
+  it("renders a run chip with the state tone and Chinese label", () => {
+    render(
+      <AutomationControlCenterPanel
+        {...createProps({
+          runs: createRunSnapshot({
+            runs: [
+              createRunRecord({ state: "running" }),
+              createRunRecord({
+                runId: "tmux-session:money-run-goal:run:2",
+                state: "failed",
+                error: "tmux unavailable"
+              })
+            ]
+          })
+        })}
+      />
+    );
+
+    const runningChip = screen.getByText("运行中");
+    expect(runningChip.getAttribute("data-tone")).toBe("success");
+    const failedChip = screen.getByText("已失败");
+    expect(failedChip.getAttribute("data-tone")).toBe("danger");
+    expect(screen.getAllByText("第 1/3 次")).toHaveLength(2);
+    expect(screen.getByText("tmux unavailable")).toBeTruthy();
+  });
+
+  it("disables the stop button for terminal runs and wires it for active runs", () => {
+    const onStopRun = vi.fn();
+    render(
+      <AutomationControlCenterPanel
+        {...createProps({
+          onStopRun,
+          runs: createRunSnapshot({
+            runs: [
+              createRunRecord({ state: "running" }),
+              createRunRecord({
+                runId: "tmux-session:money-run-goal:run:2",
+                state: "completed"
+              })
+            ]
+          })
+        })}
+      />
+    );
+
+    const stopButtons = screen.getAllByRole("button", { name: /停止运行：/ });
+    expect(stopButtons).toHaveLength(2);
+    expect(stopButtons[0]?.hasAttribute("disabled")).toBe(false);
+    expect(stopButtons[1]?.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(stopButtons[0]!);
+    expect(onStopRun).toHaveBeenCalledWith("tmux-session:money-run-goal:run:1");
+  });
+
+  it("opens a bounded timeline drawer with formatted entries", () => {
+    render(
+      <AutomationControlCenterPanel
+        {...createProps({
+          runs: createRunSnapshot({
+            runs: [createRunRecord()]
+          })
+        })}
+      />
+    );
+
+    expect(screen.queryByLabelText("tmux-session:money-run-goal:run:1 时间线")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看时间线：tmux-session:money-run-goal:run:1" }));
+
+    const drawer = screen.getByLabelText("tmux-session:money-run-goal:run:1 时间线");
+    const entries = within(drawer).getAllByText(/排队|开始|观察/);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(drawer.textContent).toContain("第 1/3 次观察进行中。");
+  });
+
+  it("keeps the timeline button inert when a run has no timeline entries", () => {
+    render(
+      <AutomationControlCenterPanel
+        {...createProps({
+          runs: createRunSnapshot({
+            runs: [createRunRecord({ timeline: [] })]
+          })
+        })}
+      />
+    );
+
+    const timelineButton = screen.getByRole("button", {
+      name: "查看时间线：tmux-session:money-run-goal:run:1"
+    });
+    expect(timelineButton.hasAttribute("disabled")).toBe(true);
   });
 });

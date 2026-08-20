@@ -92,7 +92,11 @@ export type TaskControlRecoveryResultCode = typeof TASK_CONTROL_RECOVERY_RESULT_
 export type TaskControlRecoveryDispatchResultCode =
   typeof TASK_CONTROL_RECOVERY_DISPATCH_RESULT_CODES[number];
 export type TaskControlSideEffectState = typeof TASK_CONTROL_SIDE_EFFECT_STATES[number];
-export type TaskControlApprovalGate = "action-plan" | "finder-plan" | "chrome-submit";
+export type TaskControlApprovalGate =
+  | "action-plan"
+  | "finder-plan"
+  | "chrome-submit"
+  | "chrome-workflow";
 
 export type TaskControlStatus =
   | "waiting"
@@ -125,11 +129,26 @@ export interface TaskControlFinderPlanPreview {
   copyFiles?: Array<{ from: string; to: string }>;
 }
 
+export interface TaskControlChromeWorkflowStepPreview {
+  stepKind: string;
+  selector?: string;
+  url?: string;
+  risk: string;
+}
+
+export interface TaskControlChromeWorkflowPreview {
+  planId: string;
+  stepCount: number;
+  steps: TaskControlChromeWorkflowStepPreview[];
+  maxSteps: number;
+}
+
 export interface TaskControlApproval {
   gate: TaskControlApprovalGate;
   planId: string;
   finderPlanPreview?: TaskControlFinderPlanPreview;
   chromeSubmitBinding?: TaskControlChromeSubmitBinding;
+  chromeWorkflowPreview?: TaskControlChromeWorkflowPreview;
 }
 
 export interface TaskControlChromeSubmitBinding {
@@ -211,6 +230,7 @@ const MAX_APP_NAME_LENGTH = 160;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_RECOVERY_ACTIONS = TASK_CONTROL_RECOVERY_ACTIONS.length;
 const MAX_FINDER_OPERATIONS = 2_000;
+const MAX_CHROME_WORKFLOW_STEPS = 12;
 
 const PLAN_KEYS = new Set([
   "planId",
@@ -256,7 +276,8 @@ const APPROVAL_KEYS = new Set([
   "gate",
   "planId",
   "finderPlanPreview",
-  "chromeSubmitBinding"
+  "chromeSubmitBinding",
+  "chromeWorkflowPreview"
 ]);
 const APPROVAL_REQUIRED_KEYS = ["gate", "planId"];
 const CHROME_SUBMIT_BINDING_KEYS = new Set([
@@ -265,6 +286,25 @@ const CHROME_SUBMIT_BINDING_KEYS = new Set([
   "fieldSelectors",
   "submitSelector"
 ]);
+const CHROME_WORKFLOW_PREVIEW_KEYS = new Set([
+  "planId",
+  "stepCount",
+  "steps",
+  "maxSteps"
+]);
+const CHROME_WORKFLOW_PREVIEW_REQUIRED_KEYS = [
+  "planId",
+  "stepCount",
+  "steps",
+  "maxSteps"
+];
+const CHROME_WORKFLOW_STEP_PREVIEW_KEYS = new Set([
+  "stepKind",
+  "selector",
+  "url",
+  "risk"
+]);
+const CHROME_WORKFLOW_STEP_PREVIEW_REQUIRED_KEYS = ["stepKind", "risk"];
 const FINDER_PREVIEW_KEYS = new Set([
   "rootPath",
   "operationCount",
@@ -472,6 +512,7 @@ export function isTaskControlApproval(
       approval.gate !== "action-plan"
       && approval.gate !== "finder-plan"
       && approval.gate !== "chrome-submit"
+      && approval.gate !== "chrome-workflow"
     )
     || !isBoundedIdentifier(approval.planId)
   ) {
@@ -481,12 +522,24 @@ export function isTaskControlApproval(
   if (approval.gate === "action-plan") {
     return approval.finderPlanPreview === undefined
       && approval.chromeSubmitBinding === undefined
+      && approval.chromeWorkflowPreview === undefined
       && (!plan || approval.planId === plan.planId);
   }
 
   if (approval.gate === "chrome-submit") {
     return approval.finderPlanPreview === undefined
+      && approval.chromeWorkflowPreview === undefined
       && isTaskControlChromeSubmitBinding(approval.chromeSubmitBinding)
+      && (!plan || (
+        plan.route === "chrome"
+        && approval.planId.startsWith(`${plan.planId}:`)
+      ));
+  }
+
+  if (approval.gate === "chrome-workflow") {
+    return approval.finderPlanPreview === undefined
+      && approval.chromeSubmitBinding === undefined
+      && isTaskControlChromeWorkflowPreview(approval.chromeWorkflowPreview)
       && (!plan || (
         plan.route === "chrome"
         && approval.planId.startsWith(`${plan.planId}:`)
@@ -495,6 +548,7 @@ export function isTaskControlApproval(
 
   return isTaskControlFinderPlanPreview(approval.finderPlanPreview)
     && approval.chromeSubmitBinding === undefined
+    && approval.chromeWorkflowPreview === undefined
     && (!plan || approval.planId.startsWith(`${plan.planId}:`));
 }
 
@@ -513,6 +567,51 @@ export function isTaskControlChromeSubmitBinding(
     && isBoundedTextList(binding!.fieldSelectors)
     && (binding!.fieldSelectors as string[]).length > 0
     && isBoundedText(binding!.submitSelector, MAX_TEXT_LENGTH);
+}
+
+export function isTaskControlChromeWorkflowPreview(
+  value: unknown
+): value is TaskControlChromeWorkflowPreview {
+  const preview = readRecord(value);
+  if (
+    !preview
+    || !hasStrictKeys(
+      preview,
+      CHROME_WORKFLOW_PREVIEW_KEYS,
+      CHROME_WORKFLOW_PREVIEW_REQUIRED_KEYS
+    )
+  ) {
+    return false;
+  }
+
+  return isBoundedIdentifier(preview.planId)
+    && isBoundedCount(preview.stepCount)
+    && isBoundedCount(preview.maxSteps)
+    && preview.stepCount <= preview.maxSteps
+    && Array.isArray(preview.steps)
+    && preview.steps.length <= MAX_CHROME_WORKFLOW_STEPS
+    && preview.steps.every(isTaskControlChromeWorkflowStepPreview);
+}
+
+function isTaskControlChromeWorkflowStepPreview(
+  value: unknown
+): value is TaskControlChromeWorkflowStepPreview {
+  const step = readRecord(value);
+  if (
+    !step
+    || !hasStrictKeys(
+      step,
+      CHROME_WORKFLOW_STEP_PREVIEW_KEYS,
+      CHROME_WORKFLOW_STEP_PREVIEW_REQUIRED_KEYS
+    )
+  ) {
+    return false;
+  }
+
+  return isBoundedText(step.stepKind, MAX_TEXT_LENGTH)
+    && isBoundedText(step.risk, MAX_TEXT_LENGTH)
+    && (step.selector === undefined || isBoundedText(step.selector, MAX_TEXT_LENGTH))
+    && (step.url === undefined || isBoundedText(step.url, MAX_TEXT_LENGTH));
 }
 
 export function isTaskControlFinderPlanPreview(

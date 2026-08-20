@@ -105,6 +105,10 @@ import {
   runChromePageTask
 } from "./orchestrator/chrome-task.js";
 import {
+  parseChromeWorkflowCommand,
+  runChromeWorkflowTask
+} from "./orchestrator/chrome-workflow-task.js";
+import {
   requiresFinderPlanConfirmation,
   runFinderOrganizationTask
 } from "./orchestrator/finder-task.js";
@@ -113,6 +117,7 @@ import {
   assertDesktopActionResult,
   createChromeDesktopClient,
   createFinderDesktopClient,
+  createFinderFileClient,
   createGhosttyDesktopClient
 } from "./main-desktop-clients.js";
 import { runTmuxSupervisionTask } from "./orchestrator/tmux-supervision-task.js";
@@ -154,10 +159,16 @@ import {
   type AutomationMonitorStoreIo
 } from "./automation-monitor.js";
 import {
+  createAutomationRunStatePath,
+  createAutomationRunStore
+} from "./automation-run.js";
+import { createAutomationRunSupervisor } from "./automation-run-supervisor.js";
+import {
   createAutomationMonitorNotificationCoordinator
 } from "./automation-monitor-notification.js";
 import {
   readAutomationMonitorId,
+  readAutomationRunId,
   readConversationRenameRequest,
   readConversationRetryRequest,
   readConversationSessionId,
@@ -376,13 +387,20 @@ const taskControlStore = createTaskControlStore({
   onChanged: (snapshot) => taskRecoveryRegistry.sync(snapshot)
 });
 const automationMonitorNotificationCoordinator = createAutomationMonitorNotificationCoordinator();
-const automationMonitorManager = createAutomationMonitorManager({
+const automationRunSupervisor = createAutomationRunSupervisor({
   onRunTerminal: showAutomationMonitorNotification,
+  store: createAutomationRunStore({
+    filePath: createAutomationRunStatePath(os.homedir()),
+    io: createNodeAutomationMonitorStoreIo()
+  }),
+  tmuxClient: createTmuxSupervisionClient()
+});
+const automationMonitorManager = createAutomationMonitorManager({
   store: createAutomationMonitorStore({
     filePath: createAutomationMonitorStatePath(os.homedir()),
     io: createNodeAutomationMonitorStoreIo()
   }),
-  tmuxClient: createTmuxSupervisionClient()
+  supervisor: automationRunSupervisor
 });
 const assistantComputerUseExecutor = createAssistantComputerUseExecutor({
   replayStore: turnReplayStore
@@ -727,6 +745,12 @@ function createTaskControlApproval(
         ...approval.approvedChromeSubmitBinding,
         fieldSelectors: [...approval.approvedChromeSubmitBinding.fieldSelectors]
       }
+    } : {}),
+    ...(approval.approvedChromeWorkflowPreview ? {
+      chromeWorkflowPreview: {
+        ...approval.approvedChromeWorkflowPreview,
+        steps: approval.approvedChromeWorkflowPreview.steps.map((step) => ({ ...step }))
+      }
     } : {})
   };
 }
@@ -1038,6 +1062,7 @@ async function bindGhosttyPlannerCommand({
 function dispatchComputerUseTaskEvent({
   actionApproved,
   chromeSubmitApproved = false,
+  chromeWorkflowApproved = false,
   command,
   finderPlanApproved,
   mode,
@@ -1048,6 +1073,7 @@ function dispatchComputerUseTaskEvent({
 }: {
   actionApproved: boolean;
   chromeSubmitApproved?: boolean;
+  chromeWorkflowApproved?: boolean;
   command: string;
   finderPlanApproved: boolean;
   mode: ManualMode;
@@ -1060,6 +1086,7 @@ function dispatchComputerUseTaskEvent({
   const dispatch = createComputerUseTaskEventDispatch({
     approved: actionApproved,
     chromeSubmitApproved,
+    chromeWorkflowApproved,
     command,
     event: taskEvent,
     mode,
@@ -1071,16 +1098,20 @@ function dispatchComputerUseTaskEvent({
   if (dispatch.approvalRequest) {
     const approvalGate: ComputerUseApprovalGate = dispatch.approvalRequest.approvedChromeSubmitBinding
       ? "chrome-submit"
-      : dispatch.approvalRequest.approvedPlanPreview
-        ? "finder-plan"
-        : "action-plan";
+      : dispatch.approvalRequest.approvedChromeWorkflowPreview
+        ? "chrome-workflow"
+        : dispatch.approvalRequest.approvedPlanPreview
+          ? "finder-plan"
+          : "action-plan";
     const approvalPlanId = approvalGate === "action-plan"
       ? taskControl.plan.planId
       : createDerivedComputerUsePlanId(
         taskControl.plan.planId,
         approvalGate === "finder-plan"
           ? dispatch.approvalRequest.approvedPlanPreview
-          : dispatch.approvalRequest.approvedChromeSubmitBinding
+          : approvalGate === "chrome-workflow"
+            ? dispatch.approvalRequest.approvedChromeWorkflowPreview
+            : dispatch.approvalRequest.approvedChromeSubmitBinding
       );
     const approval = requireComputerUseApproval({
       command: dispatch.approvalRequest.command,
@@ -1092,9 +1123,11 @@ function dispatchComputerUseTaskEvent({
       reason: dispatch.approvalRequest.reason,
       actionApproved,
       chromeSubmitApproved,
+      chromeWorkflowApproved,
       finderPlanApproved,
       approvedPlanPreview: dispatch.approvalRequest.approvedPlanPreview,
-      approvedChromeSubmitBinding: dispatch.approvalRequest.approvedChromeSubmitBinding
+      approvedChromeSubmitBinding: dispatch.approvalRequest.approvedChromeSubmitBinding,
+      approvedChromeWorkflowPreview: dispatch.approvalRequest.approvedChromeWorkflowPreview
     });
     approvalContext = createTaskControlApproval(approval);
   }
@@ -1141,6 +1174,7 @@ function dispatchComputerUseTaskEvent({
 function requireComputerUseApproval({
   actionApproved,
   chromeSubmitApproved,
+  chromeWorkflowApproved,
   command,
   finderPlanApproved,
   gate,
@@ -1150,10 +1184,12 @@ function requireComputerUseApproval({
   toolIdentity,
   reason,
   approvedPlanPreview,
-  approvedChromeSubmitBinding
+  approvedChromeSubmitBinding,
+  approvedChromeWorkflowPreview
 }: {
   actionApproved: boolean;
   chromeSubmitApproved: boolean;
+  chromeWorkflowApproved: boolean;
   command: string;
   finderPlanApproved: boolean;
   gate: ComputerUseApprovalGate;
@@ -1164,6 +1200,7 @@ function requireComputerUseApproval({
   reason: string;
   approvedPlanPreview?: import("./orchestrator/finder-task.js").FinderPlanPreview;
   approvedChromeSubmitBinding?: import("./orchestrator/chrome-task.js").ChromeSubmitConfirmationBinding;
+  approvedChromeWorkflowPreview?: import("./orchestrator/chrome-task.js").ChromeWorkflowPlanPreview;
 }): PendingApproval {
   const taskControl = readTaskControlForTool(toolIdentity);
   if (taskControl.phase === "terminal" || taskControl.plan.risk.level === "blocked") {
@@ -1183,6 +1220,17 @@ function requireComputerUseApproval({
       )
     ) {
       throw new Error("Finder approval is not bound to the active Finder plan preview.");
+    }
+  } else if (gate === "chrome-workflow") {
+    if (
+      route.kind !== "chrome"
+      || !approvedChromeWorkflowPreview
+      || planId !== createDerivedComputerUsePlanId(
+        taskControl.plan.planId,
+        approvedChromeWorkflowPreview
+      )
+    ) {
+      throw new Error("Chrome workflow approval is not bound to the active workflow plan preview.");
     }
   } else if (
     route.kind !== "chrome"
@@ -1208,9 +1256,11 @@ function requireComputerUseApproval({
     planId,
     actionApproved,
     chromeSubmitApproved,
+    chromeWorkflowApproved,
     finderPlanApproved,
     ...(approvedPlanPreview ? { approvedPlanPreview } : {}),
-    ...(approvedChromeSubmitBinding ? { approvedChromeSubmitBinding } : {})
+    ...(approvedChromeSubmitBinding ? { approvedChromeSubmitBinding } : {}),
+    ...(approvedChromeWorkflowPreview ? { approvedChromeWorkflowPreview } : {})
   });
   activeComputerUseToolIdentity = toolIdentity;
   activeComputerUseRoute = route;
@@ -1274,12 +1324,19 @@ async function resumePendingApprovalTask(
           taskControl.plan.planId,
           approval.approvedPlanPreview
         )
-      : approval.route.kind === "chrome"
-        && Boolean(approval.approvedChromeSubmitBinding)
-        && approval.planId === createDerivedComputerUsePlanId(
-          taskControl.plan.planId,
-          approval.approvedChromeSubmitBinding
-        );
+      : approval.gate === "chrome-workflow"
+        ? approval.route.kind === "chrome"
+          && Boolean(approval.approvedChromeWorkflowPreview)
+          && approval.planId === createDerivedComputerUsePlanId(
+            taskControl.plan.planId,
+            approval.approvedChromeWorkflowPreview
+          )
+        : approval.route.kind === "chrome"
+          && Boolean(approval.approvedChromeSubmitBinding)
+          && approval.planId === createDerivedComputerUsePlanId(
+            taskControl.plan.planId,
+            approval.approvedChromeSubmitBinding
+          );
   if (!approvalMatchesPlan || taskControl.phase !== "approval") {
     throw new Error("Pending Computer Use approval no longer matches the active plan.");
   }
@@ -1308,6 +1365,7 @@ async function resumePendingApprovalTask(
     mode: approval.mode,
     actionApproved: continuation.actionApproved,
     chromeSubmitApproved: continuation.chromeSubmitApproved,
+    chromeWorkflowApproved: continuation.chromeWorkflowApproved,
     finderPlanApproved: continuation.finderPlanApproved,
     approvedPlanPreview: approval.approvedPlanPreview,
     route: approval.route,
@@ -1324,6 +1382,7 @@ async function continueComputerUseTask({
   mode,
   actionApproved,
   chromeSubmitApproved,
+  chromeWorkflowApproved,
   finderPlanApproved,
   approvedPlanPreview,
   approvalReason,
@@ -1335,6 +1394,7 @@ async function continueComputerUseTask({
   mode: ManualMode;
   actionApproved: boolean;
   chromeSubmitApproved: boolean;
+  chromeWorkflowApproved: boolean;
   finderPlanApproved: boolean;
   approvedPlanPreview?: import("./orchestrator/finder-task.js").FinderPlanPreview;
   approvalReason?: string;
@@ -1425,6 +1485,7 @@ async function continueComputerUseTask({
     const approval = requireComputerUseApproval({
       actionApproved,
       chromeSubmitApproved,
+      chromeWorkflowApproved,
       command,
       finderPlanApproved,
       gate: "action-plan",
@@ -1543,12 +1604,14 @@ async function continueComputerUseTask({
     if (route.kind === "finder") {
       const helper = createDesktopHelper();
       const desktopClient = createFinderDesktopClient(helper);
+      const fileClient = createFinderFileClient(helper);
 
       for await (const taskEvent of runFinderOrganizationTask(command, {
         approved: actionApproved,
         planApproved: finderPlanApproved,
         approvedPlanPreview,
         desktopClient,
+        fileClient,
         createScreenshotPath: () => createScreenshotPath("finder-before")
       })) {
         if (controller.signal.aborted || taskId !== currentTaskId) {
@@ -1576,6 +1639,45 @@ async function continueComputerUseTask({
         : undefined;
       const helper = createDesktopHelper();
       const desktopClient = createChromeDesktopClient(helper);
+      const workflowCommand = parseChromeWorkflowCommand(command);
+
+      if (workflowCommand.ok) {
+        for await (const taskEvent of runChromeWorkflowTask({
+          plan: workflowCommand.plan,
+          approved: actionApproved,
+          workflowApproved: chromeWorkflowApproved,
+          desktopClient,
+          cdpClient: chromeClient
+        })) {
+          if (controller.signal.aborted || taskId !== currentTaskId) {
+            return;
+          }
+
+          turnReplayStore.recordComputerUseEvent(taskEvent);
+          try {
+            dispatchComputerUseTaskEvent({
+              actionApproved,
+              chromeWorkflowApproved,
+              command,
+              finderPlanApproved,
+              mode,
+              route,
+              taskEvent,
+              toolIdentity,
+              window
+            });
+          } catch (error) {
+            // The task-control phase machine can reject late events (e.g. a
+            // second approval gate after side effects began). Fall back to a
+            // plain task event so the renderer still sees the outcome.
+            emitTaskEvent(window, withRouteTaskEventMetadata(
+              createTaskEvent(taskEvent, mode),
+              route
+            ));
+          }
+        }
+        return;
+      }
 
       for await (const taskEvent of runChromePageTask(command, chromeClient, {
         approved: actionApproved,
@@ -1592,6 +1694,7 @@ async function continueComputerUseTask({
           dispatchComputerUseTaskEvent({
             actionApproved,
             chromeSubmitApproved,
+            chromeWorkflowApproved,
             command,
             finderPlanApproved,
             mode,
@@ -1915,6 +2018,7 @@ async function runCommandTask(
     mode,
     actionApproved,
     chromeSubmitApproved: false,
+    chromeWorkflowApproved: false,
     finderPlanApproved: false,
     ...(routeDecision.kind === "needs_confirmation"
       ? { approvalReason: routeDecision.route.reason }
@@ -2546,6 +2650,24 @@ ipcMain.handle("skfiy:preview-tmux-automation", (_event, input: unknown) => {
   return createTmuxAutomationMonitorPreview(sessionName, timeoutMs);
 });
 
+ipcMain.handle("skfiy:get-automation-runs", () => {
+  return automationRunSupervisor.readSnapshot();
+});
+
+ipcMain.handle("skfiy:stop-automation-run", async (_event, runId: unknown) => {
+  const normalizedRunId = readAutomationRunId(runId);
+  if (!normalizedRunId) {
+    throw new Error("Automation run id is invalid.");
+  }
+
+  const run = await automationRunSupervisor.stopRun(normalizedRunId, "dashboard");
+  if (!run) {
+    throw new Error(`Unknown automation run: ${normalizedRunId}`);
+  }
+
+  return automationRunSupervisor.readSnapshot();
+});
+
 ipcMain.handle("skfiy:get-runtime-status", () => {
   return createRuntimeStatusResponse(stopTurnHotkeyRegistered);
 });
@@ -2565,6 +2687,7 @@ registerProfileIpc({
 });
 
 app.whenReady().then(async () => {
+  automationRunSupervisor.start();
   automationMonitorManager.start();
   await createWindow();
   if (!stopTurnHotkeyRegistered) {
@@ -2583,6 +2706,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   automationMonitorManager.stop();
+  automationRunSupervisor.stop();
 });
 
 app.on("window-all-closed", () => {

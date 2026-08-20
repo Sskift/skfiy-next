@@ -15,6 +15,12 @@ import {
   type AutomationMonitorTriggerMode
 } from "./automation-monitor.js";
 import {
+  createAutomationRunStatePath,
+  createAutomationRunStore,
+  type AutomationRunRecord
+} from "./automation-run.js";
+import { createAutomationRunSupervisor } from "./automation-run-supervisor.js";
+import {
   createTmuxSupervisionClient,
   type TmuxSupervisionClient
 } from "./tmux-supervision-client.js";
@@ -35,7 +41,9 @@ export type AutomationMonitorCommandRequest =
   | { action: "duplicate"; monitorId: string }
   | { action: "run-now"; monitorId: string }
   | { action: "set-enabled"; monitorId: string; enabled: boolean }
-  | { action: "delete"; monitorId: string };
+  | { action: "delete"; monitorId: string }
+  | { action: "list-runs"; monitorId?: string }
+  | { action: "stop-run"; runId: string };
 
 export type AutomationMonitorCommandResultKind =
   | "listed"
@@ -44,7 +52,9 @@ export type AutomationMonitorCommandResultKind =
   | "checked"
   | "paused"
   | "resumed"
-  | "deleted";
+  | "deleted"
+  | "runs-listed"
+  | "run-stopped";
 
 export interface AutomationMonitorCommandResult {
   schemaVersion: 1;
@@ -58,6 +68,8 @@ export interface AutomationMonitorCommandResult {
   mutatesSession: false;
   monitorId?: string;
   monitor?: AutomationMonitorRuntime;
+  run?: AutomationRunRecord;
+  runs?: AutomationRunRecord[];
   automation: AutomationMonitorSnapshot;
 }
 
@@ -70,22 +82,30 @@ export interface AutomationMonitorCommandService {
 
 export function createAutomationMonitorCommandService({
   filePath,
+  runsFilePath,
   generatedAt = () => new Date().toISOString(),
   homeDir,
   io = createDefaultAutomationMonitorCommandIo(),
   tmuxClient = createTmuxSupervisionClient()
 }: {
   filePath?: string;
+  runsFilePath?: string;
   generatedAt?: () => string;
   homeDir?: string;
   io?: AutomationMonitorStoreIo;
   tmuxClient?: TmuxSupervisionClient;
 }): AutomationMonitorCommandService {
   const statePath = filePath ?? createAutomationMonitorStatePath(homeDir ?? "");
+  const runsPath = runsFilePath ?? createAutomationRunStatePath(homeDir ?? "");
+  const supervisor = createAutomationRunSupervisor({
+    now: generatedAt,
+    store: createAutomationRunStore({ filePath: runsPath, io }),
+    tmuxClient
+  });
   const manager = createAutomationMonitorManager({
     now: generatedAt,
     store: createAutomationMonitorStore({ filePath: statePath, io }),
-    tmuxClient
+    supervisor
   });
 
   return {
@@ -162,6 +182,34 @@ export function createAutomationMonitorCommandService({
         });
       }
 
+      if (request.action === "list-runs") {
+        return createAutomationMonitorCommandResult({
+          action: request.action,
+          automation: manager.readSnapshot(),
+          generatedAt: generatedAt(),
+          result: "runs-listed",
+          runs: supervisor.readRuns(
+            request.monitorId ? { monitorId: request.monitorId } : undefined
+          ),
+          source
+        });
+      }
+
+      if (request.action === "stop-run") {
+        const run = await supervisor.stopRun(request.runId, source);
+        if (!run) {
+          throw new Error(`Unknown automation run: ${request.runId}`);
+        }
+        return createAutomationMonitorCommandResult({
+          action: request.action,
+          automation: manager.readSnapshot(),
+          generatedAt: generatedAt(),
+          result: "run-stopped",
+          run,
+          source
+        });
+      }
+
       if (!manager.deleteMonitor(request.monitorId)) {
         throw new Error(`Unknown automation monitor: ${request.monitorId}`);
       }
@@ -184,6 +232,8 @@ function createAutomationMonitorCommandResult({
   monitor,
   monitorId,
   result,
+  run,
+  runs,
   source
 }: {
   action: AutomationMonitorCommandRequest["action"];
@@ -192,6 +242,8 @@ function createAutomationMonitorCommandResult({
   monitor?: AutomationMonitorRuntime;
   monitorId?: string;
   result: AutomationMonitorCommandResultKind;
+  run?: AutomationRunRecord;
+  runs?: AutomationRunRecord[];
   source: AutomationMonitorCommandSource;
 }): AutomationMonitorCommandResult {
   return {
@@ -201,12 +253,14 @@ function createAutomationMonitorCommandResult({
     source,
     action,
     result,
-    plannedMutation: action !== "list",
+    plannedMutation: action !== "list" && action !== "list-runs",
     executesSystemMutation: false,
     mutatesSession: false,
     automation,
     ...(monitorId ? { monitorId } : {}),
-    ...(monitor ? { monitor } : {})
+    ...(monitor ? { monitor } : {}),
+    ...(run ? { run } : {}),
+    ...(runs ? { runs } : {})
   };
 }
 

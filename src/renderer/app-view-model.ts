@@ -1181,6 +1181,19 @@ export function getLocalReplayViewModel(replay: {
       createFolderCount?: number;
       moveFileCount?: number;
       copyFileCount?: number;
+      planId?: string;
+      stepCount?: number;
+      maxSteps?: number;
+      kind?: string;
+      stepIndex?: number;
+      fromUrl?: string;
+      toUrl?: string;
+      url?: string;
+      selector?: string;
+      expected?: string;
+      actual?: string;
+      screenshotPath?: string;
+      stepKind?: string;
     }>;
     screenshots: Array<{
       stage: string;
@@ -1362,6 +1375,19 @@ export function formatReplayAction(action: {
   createFolderCount?: number;
   moveFileCount?: number;
   copyFileCount?: number;
+  planId?: string;
+  stepCount?: number;
+  maxSteps?: number;
+  kind?: string;
+  stepIndex?: number;
+  fromUrl?: string;
+  toUrl?: string;
+  url?: string;
+  selector?: string;
+  expected?: string;
+  actual?: string;
+  screenshotPath?: string;
+  stepKind?: string;
 }): string {
   if (action.type === "plan") {
     return `${action.type}: ${action.providerLabel ?? ""} ${action.command ?? ""}`.trim();
@@ -1453,6 +1479,42 @@ export function formatReplayAction(action: {
       typeof action.destructiveOperationCount === "number" ? `${action.destructiveOperationCount} destructive` : "",
       sanitizePetRouteOutcomeString(action.reason ?? ""),
       sanitizePetRouteOutcomeString(action.rootPath ?? "")
+    ]);
+  }
+
+  if (action.type === "confirm_chrome_workflow") {
+    return joinReplayActionParts([
+      "confirm_chrome_workflow:",
+      typeof action.stepCount === "number" ? `${action.stepCount} steps` : "",
+      sanitizePetRouteOutcomeString(action.reason ?? ""),
+      sanitizePetRouteOutcomeString(action.planId ?? "")
+    ]);
+  }
+
+  if (action.type === "chrome_page_event") {
+    return joinReplayActionParts([
+      "chrome_page_event:",
+      action.kind ?? "",
+      typeof action.stepIndex === "number" ? `step ${action.stepIndex}` : "",
+      sanitizePetRouteOutcomeString(action.reason ?? "")
+    ]);
+  }
+
+  if (action.type === "chrome_dom_verification") {
+    return joinReplayActionParts([
+      "chrome_dom_verification:",
+      action.status ?? "",
+      typeof action.stepIndex === "number" ? `step ${action.stepIndex}` : "",
+      sanitizePetRouteOutcomeString(action.selector ?? "")
+    ]);
+  }
+
+  if (action.type === "chrome_workflow_step") {
+    return joinReplayActionParts([
+      "chrome_workflow_step:",
+      action.status ?? "",
+      typeof action.stepIndex === "number" ? `step ${action.stepIndex}` : "",
+      sanitizePetRouteOutcomeString(action.stepKind ?? "")
     ]);
   }
 

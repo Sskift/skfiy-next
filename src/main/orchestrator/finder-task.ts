@@ -10,6 +10,7 @@ import { createDesktopSessionDiagnostics } from "../desktop-session-diagnostics.
 import type {
   AtomicCopyFileNoReplaceRequest,
   AtomicCopyFileNoReplaceResult,
+  AtomicFileIdentity,
   AtomicMoveFileNoReplaceRequest,
   AtomicMoveFileNoReplaceResult,
   DesktopActionResult,
@@ -20,6 +21,17 @@ import type {
   FinderSelectionResult
 } from "../computer-use/types.js";
 import type { RiskDecision } from "../../shared/types.js";
+import {
+  createEmptyFinderTaskResult,
+  formatFinderTaskResultSummary,
+  recordFinderTaskCompleted,
+  recordFinderTaskFailed,
+  recordFinderTaskSkipped,
+  verifyFinderTaskDestination,
+  verifyFinderTaskResultingNames,
+  type FinderTaskErrorCode,
+  type FinderTaskResult
+} from "./finder-task-result.js";
 
 const FINDER_APP_NAME = "Finder";
 const FINDER_BUNDLE_ID = "com.apple.finder";
@@ -107,6 +119,8 @@ export type FinderTaskEvent =
       actionType: "create_folder" | "move_file" | "copy_file" | "drag" | "item_drag_drop";
       status: "passed";
       message: string;
+      /** Correlates the verification with a completedItems entry in the terminal result. */
+      operationId?: string;
     }
   | {
       type: "verification_failed";
@@ -117,6 +131,7 @@ export type FinderTaskEvent =
       type: "completed";
       command: string;
       summary: string;
+      result: FinderTaskResult;
     };
 
 export interface FinderTaskOptions {
@@ -124,6 +139,17 @@ export interface FinderTaskOptions {
   planApproved?: boolean;
   approvedPlanPreview?: FinderPlanPreview;
   desktopClient?: FinderDesktopClient;
+  /**
+   * How to resolve destination collisions. Defaults to "cancel" (fail closed)
+   * to preserve the historical hard-stop behavior. "replace" is only honored
+   * when planApproved is also true.
+   */
+  collisionPolicy?: FinderCollisionPolicy;
+  /**
+   * Atomic file operations with structured error states. When absent, the
+   * task falls back to node:fs copyFile/rename (test compatibility).
+   */
+  fileClient?: FinderFileClient;
   createScreenshotPath?: (stage: "before") => string;
 }
 
@@ -234,7 +260,7 @@ export async function* runFinderOrganizationTask(
   let rootPath: string;
 
   let selectedEntries: FinderEntry[] | undefined;
-  let explicitOperations: FinderOrganizationOperation[] | undefined;
+  let explicitOperations: Array<Extract<FinderOrganizationOperation, { type: "move_file" | "copy_file" }>> | undefined;
 
   let observation: FinderObservationOutcome | undefined;
 
@@ -400,59 +426,179 @@ export async function* runFinderOrganizationTask(
     }
   }
 
-  for (const operation of plan.operations) {
+  const collisionPolicy = options.collisionPolicy ?? "cancel";
+  const destinationPath = explicitOperations
+    ? path.dirname(explicitOperations[0].to)
+    : rootPath;
+  let result = createEmptyFinderTaskResult(
+    rootPath,
+    destinationPath,
+    collisionPolicy,
+    plan.operations.length
+  );
+  const replaceApproved = collisionPolicy === "replace" && options.planApproved === true;
+
+  for (const [index, operation] of plan.operations.entries()) {
+    const operationId = `op-${index + 1}`;
+
     if (operation.type === "create_folder") {
       if (precreatedFolders.has(path.resolve(operation.path))) {
+        result = recordFinderTaskCompleted(result, {
+          operationId,
+          operationType: "create_folder",
+          to: operation.path,
+          resultingName: path.basename(operation.path),
+          resolution: "create"
+        });
         continue;
       }
 
-      await mkdir(operation.path, { recursive: true });
+      try {
+        await mkdir(operation.path, { recursive: true });
+      } catch (error) {
+        result = recordFinderTaskFailed(result, {
+          operationId,
+          operationType: "create_folder",
+          to: operation.path,
+          reason: readErrorMessage(error),
+          errorCode: "filesystem-error"
+        });
+        continue;
+      }
+
+      result = recordFinderTaskCompleted(result, {
+        operationId,
+        operationType: "create_folder",
+        to: operation.path,
+        resultingName: path.basename(operation.path),
+        resolution: "create"
+      });
       yield {
         type: "action_verified",
         actionType: "create_folder",
         status: "passed",
-        message: `Created folder: ${operation.path}`
+        message: `Created folder: ${operation.path}`,
+        operationId
       };
       continue;
     }
 
     if (draggedMoveSources.has(path.resolve(operation.from))) {
+      result = recordFinderTaskCompleted(result, {
+        operationId,
+        operationType: operation.type,
+        from: operation.from,
+        to: operation.to,
+        resultingName: path.basename(operation.to),
+        resolution: operation.type === "copy_file" ? "copy" : "move"
+      });
       continue;
     }
 
-    if (await pathExists(operation.to)) {
-      yield {
-        type: "verification_failed",
-        stage: "file_operation",
-        reason: `Destination already exists: ${operation.to}`
-      };
-      return;
+    if (await pathExists(operation.to) && !replaceApproved) {
+      if (collisionPolicy === "skip") {
+        result = recordFinderTaskSkipped(result, {
+          operationId,
+          operationType: operation.type,
+          from: operation.from,
+          to: operation.to,
+          resultingName: path.basename(operation.to)
+        });
+        continue;
+      }
+
+      if (collisionPolicy === "rename") {
+        const renamedTo = await createRenamedDestination(operation.to);
+        const outcome = await executeFinderFileOperation(operation, renamedTo, options.fileClient);
+        if (!outcome.ok) {
+          result = recordFinderTaskFailed(result, {
+            operationId,
+            operationType: operation.type,
+            from: operation.from,
+            to: renamedTo,
+            reason: outcome.reason,
+            errorCode: outcome.errorCode
+          });
+          continue;
+        }
+
+        result = recordFinderTaskCompleted(result, {
+          operationId,
+          operationType: operation.type,
+          from: operation.from,
+          to: renamedTo,
+          resultingName: path.basename(renamedTo),
+          resolution: "rename"
+        });
+        yield {
+          type: "action_verified",
+          actionType: operation.type,
+          status: "passed",
+          message: operation.type === "copy_file"
+            ? `Copied file: ${operation.from} -> ${renamedTo}`
+            : `Moved file: ${operation.from} -> ${renamedTo}`,
+          operationId
+        };
+        continue;
+      }
+
+      // "cancel" (default) or "replace" without plan approval: fail closed and
+      // stop attempting further operations.
+      result = recordFinderTaskFailed(result, {
+        operationId,
+        operationType: operation.type,
+        from: operation.from,
+        to: operation.to,
+        reason: `Destination already exists: ${operation.to}`,
+        errorCode: "destination-exists"
+      });
+      break;
     }
 
-    if (operation.type === "copy_file") {
-      await copyFile(operation.from, operation.to);
-      yield {
-        type: "action_verified",
-        actionType: "copy_file",
-        status: "passed",
-        message: `Copied file: ${operation.from} -> ${operation.to}`
-      };
+    // The atomic no-replace client cannot honor an approved overwrite.
+    const fileClient = replaceApproved ? undefined : options.fileClient;
+    const outcome = await executeFinderFileOperation(operation, operation.to, fileClient);
+    if (!outcome.ok) {
+      result = recordFinderTaskFailed(result, {
+        operationId,
+        operationType: operation.type,
+        from: operation.from,
+        to: operation.to,
+        reason: outcome.reason,
+        errorCode: outcome.errorCode
+      });
       continue;
     }
 
-    await rename(operation.from, operation.to);
+    result = recordFinderTaskCompleted(result, {
+      operationId,
+      operationType: operation.type,
+      from: operation.from,
+      to: operation.to,
+      resultingName: path.basename(operation.to),
+      resolution: replaceApproved
+        ? "replace"
+        : operation.type === "copy_file" ? "copy" : "move"
+    });
     yield {
       type: "action_verified",
-      actionType: "move_file",
+      actionType: operation.type,
       status: "passed",
-      message: `Moved file: ${operation.from} -> ${operation.to}`
+      message: operation.type === "copy_file"
+        ? `Copied file: ${operation.from} -> ${operation.to}`
+        : `Moved file: ${operation.from} -> ${operation.to}`,
+      operationId
     };
   }
+
+  result = await verifyFinderTaskDestination(result);
+  result = await verifyFinderTaskResultingNames(result);
 
   yield {
     type: "completed",
     command: rootPath,
-    summary: "Finder test folder organized."
+    summary: formatFinderTaskResultSummary(result),
+    result
   };
 }
 
@@ -1301,5 +1447,212 @@ async function pathExists(candidate: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+type FinderFileOperation = Extract<FinderOrganizationOperation, { type: "move_file" | "copy_file" }>;
+
+interface FinderFileOperationOutcome {
+  ok: boolean;
+  errorCode: FinderTaskErrorCode;
+  reason: string;
+}
+
+async function executeFinderFileOperation(
+  operation: FinderFileOperation,
+  destinationPath: string,
+  fileClient: FinderFileClient | undefined
+): Promise<FinderFileOperationOutcome> {
+  if (fileClient) {
+    const identity = await readAtomicFileIdentity(operation.from);
+    if (!identity.ok) {
+      return identity.outcome;
+    }
+
+    try {
+      if (operation.type === "copy_file") {
+        const result = await fileClient.atomicCopyFileNoReplace({
+          sourcePath: operation.from,
+          destinationPath,
+          expectedSourceIdentity: identity.identity
+        });
+        return readAtomicCopyOutcome(result.state);
+      }
+
+      const result = await fileClient.atomicMoveFileNoReplace({
+        sourcePath: operation.from,
+        destinationPath,
+        expectedSourceIdentity: identity.identity
+      });
+      return readAtomicMoveOutcome(result.state);
+    } catch (error) {
+      return mapFinderFilesystemError(error);
+    }
+  }
+
+  try {
+    if (operation.type === "copy_file") {
+      await copyFile(operation.from, destinationPath);
+    } else {
+      await rename(operation.from, destinationPath);
+    }
+    return { ok: true, errorCode: "filesystem-error", reason: "" };
+  } catch (error) {
+    return mapFinderFilesystemError(error);
+  }
+}
+
+async function readAtomicFileIdentity(
+  sourcePath: string
+): Promise<
+  | { ok: true; identity: AtomicFileIdentity }
+  | { ok: false; outcome: FinderFileOperationOutcome }
+> {
+  try {
+    const source = await stat(sourcePath);
+    return {
+      ok: true,
+      identity: {
+        device: source.dev,
+        inode: source.ino,
+        size: source.size,
+        modifiedAtMs: source.mtimeMs,
+        changedAtMs: source.ctimeMs
+      }
+    };
+  } catch (error) {
+    return { ok: false, outcome: mapFinderFilesystemError(error) };
+  }
+}
+
+function readAtomicMoveOutcome(
+  state: AtomicMoveFileNoReplaceResult["state"]
+): FinderFileOperationOutcome {
+  switch (state) {
+    case "moved":
+      return { ok: true, errorCode: "filesystem-error", reason: "" };
+    case "destination-exists":
+      return {
+        ok: false,
+        errorCode: "destination-exists",
+        reason: "Destination already exists."
+      };
+    case "source-missing":
+      return {
+        ok: false,
+        errorCode: "source-missing",
+        reason: "Source file no longer exists."
+      };
+    case "source-changed":
+      return {
+        ok: false,
+        errorCode: "source-changed",
+        reason: "Source file changed between planning and execution."
+      };
+    case "cross-device":
+      return {
+        ok: false,
+        errorCode: "cross-device",
+        reason: "Source and destination are on different filesystems."
+      };
+    case "permission-denied":
+      return {
+        ok: false,
+        errorCode: "permission-denied",
+        reason: "Filesystem permission denied the move."
+      };
+    case "rollback-incomplete":
+      return {
+        ok: false,
+        errorCode: "rollback-incomplete",
+        reason: "Move failed and rollback could not restore the source."
+      };
+    case "filesystem-error":
+      return {
+        ok: false,
+        errorCode: "filesystem-error",
+        reason: "Filesystem error during atomic move."
+      };
+  }
+}
+
+function readAtomicCopyOutcome(
+  state: AtomicCopyFileNoReplaceResult["state"]
+): FinderFileOperationOutcome {
+  switch (state) {
+    case "copied":
+      return { ok: true, errorCode: "filesystem-error", reason: "" };
+    case "destination-exists":
+      return {
+        ok: false,
+        errorCode: "destination-exists",
+        reason: "Destination already exists."
+      };
+    case "source-missing":
+      return {
+        ok: false,
+        errorCode: "source-missing",
+        reason: "Source file no longer exists."
+      };
+    case "source-changed":
+      return {
+        ok: false,
+        errorCode: "source-changed",
+        reason: "Source file changed between planning and execution."
+      };
+    case "permission-denied":
+      return {
+        ok: false,
+        errorCode: "permission-denied",
+        reason: "Filesystem permission denied the copy."
+      };
+    case "cleanup-incomplete":
+      return {
+        ok: false,
+        errorCode: "rollback-incomplete",
+        reason: "Copy failed and cleanup could not remove the partial destination."
+      };
+    case "filesystem-error":
+      return {
+        ok: false,
+        errorCode: "filesystem-error",
+        reason: "Filesystem error during atomic copy."
+      };
+  }
+}
+
+function mapFinderFilesystemError(error: unknown): FinderFileOperationOutcome {
+  const code = (error as NodeJS.ErrnoException).code;
+  const reason = error instanceof Error
+    ? error.message
+    : "Finder file operation failed.";
+
+  switch (code) {
+    case "ENOENT":
+      return { ok: false, errorCode: "source-missing", reason };
+    case "EEXIST":
+      return { ok: false, errorCode: "destination-exists", reason };
+    case "EXDEV":
+      return { ok: false, errorCode: "cross-device", reason };
+    case "EACCES":
+    case "EPERM":
+      return { ok: false, errorCode: "permission-denied", reason };
+    default:
+      return { ok: false, errorCode: "filesystem-error", reason };
+  }
+}
+
+async function createRenamedDestination(destinationPath: string): Promise<string> {
+  const directory = path.dirname(destinationPath);
+  const extension = path.extname(destinationPath);
+  const baseName = path.basename(destinationPath, extension);
+  let counter = 1;
+
+  for (;;) {
+    const candidate = path.join(directory, `${baseName} (${counter})${extension}`);
+    if (!await pathExists(candidate)) {
+      return candidate;
+    }
+    counter += 1;
   }
 }

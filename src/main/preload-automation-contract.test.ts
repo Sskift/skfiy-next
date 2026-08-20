@@ -9,12 +9,16 @@ describe("preload automation contract", () => {
     for (const validator of [
       "function isAutomationMonitorSnapshot",
       "function isAutomationMonitorRuntime",
-      "function isAutomationMonitorDefinitionPreview"
+      "function isAutomationMonitorDefinitionPreview",
+      "function isAutomationRunSnapshot",
+      "function isAutomationRunRecord",
+      "function isAutomationRunState"
     ]) {
       expect(source).toContain(validator);
     }
     expect(source).toContain("function createDefaultAutomationMonitorSnapshot");
     expect(source).toContain("function createDefaultAutomationMonitorDefinitionPreview");
+    expect(source).toContain("function createDefaultAutomationRunSnapshot");
   });
 
   it("exposes every automation IPC channel with fallback defaults", () => {
@@ -27,7 +31,9 @@ describe("preload automation contract", () => {
       "skfiy:duplicate-automation-monitor",
       "skfiy:set-automation-monitor-enabled",
       "skfiy:delete-automation-monitor",
-      "skfiy:preview-tmux-automation"
+      "skfiy:preview-tmux-automation",
+      "skfiy:get-automation-runs",
+      "skfiy:stop-automation-run"
     ]) {
       expect(source).toContain(channel);
     }
@@ -39,7 +45,9 @@ describe("preload automation contract", () => {
       "async runAutomationMonitorNow(id)",
       "async setAutomationMonitorEnabled(id, enabled)",
       "async deleteAutomationMonitor(id)",
-      "async previewTmuxAutomation(input)"
+      "async previewTmuxAutomation(input)",
+      "async getAutomationRuns()",
+      "async stopAutomationRun(runId)"
     ]) {
       expect(source).toContain(method);
     }

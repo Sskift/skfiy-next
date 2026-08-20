@@ -73,6 +73,50 @@ describe("app task state", () => {
     });
   });
 
+  it("passes the Finder task result through from completed task events", () => {
+    const finderTaskResult = {
+      schemaVersion: 1 as const,
+      rootPath: "/tmp/work",
+      destinationPath: "/tmp/work",
+      collisionPolicy: "cancel" as const,
+      totalOperationCount: 6,
+      completedCount: 5,
+      failedCount: 1,
+      skippedCount: 0,
+      completedItems: [
+        {
+          operationId: "op-1",
+          operationType: "create_folder" as const,
+          to: "/tmp/work/Images",
+          resultingName: "Images",
+          resolution: "create" as const
+        }
+      ],
+      failedItems: [
+        {
+          operationId: "op-4",
+          operationType: "move_file" as const,
+          from: "/tmp/work/photo.png",
+          to: "/tmp/work/Images/photo.png",
+          reason: "Destination already exists: /tmp/work/Images/photo.png",
+          errorCode: "destination-exists" as const
+        }
+      ],
+      destinationVerified: true,
+      resultingNamesVerified: true
+    };
+
+    expect(createTaskViewFromEvent({
+      status: "completed",
+      message: "5 of 6 operations completed, 1 failed.",
+      finderTaskResult
+    })).toMatchObject({
+      status: "completed",
+      message: "5 of 6 operations completed, 1 failed.",
+      finderTaskResult
+    });
+  });
+
   it("creates direct task status views for transient UI updates", () => {
     expect(createTaskStatusView("cancelled")).toEqual({
       status: "cancelled",

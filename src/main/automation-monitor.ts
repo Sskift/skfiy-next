@@ -4,7 +4,11 @@ import type {
   TmuxSupervisionStatus
 } from "./computer-use/tmux-supervisor.js";
 import { createSkfiyApplicationSupportPath } from "./personal-memory.js";
-import type { TmuxSupervisionClient } from "./tmux-supervision-client.js";
+import type {
+  AutomationRunCancellationSource,
+  AutomationRunConcurrencyPolicy,
+  AutomationRunRecord
+} from "./automation-run.js";
 
 export type AutomationMonitorKind = "tmux-session";
 export type AutomationSchedulerState = "active" | "inactive";
@@ -18,7 +22,11 @@ export type AutomationMonitorStatus =
 export type AutomationMonitorLastResult = TmuxSupervisionStatus | "error";
 export type AutomationSchedulerScope = "app-process";
 export type AutomationMonitorRunTrigger = "manual" | "scheduled";
-export type AutomationMonitorNotificationOutcome = "attention" | "completed" | "failure";
+export type AutomationMonitorNotificationOutcome =
+  | "attention"
+  | "completed"
+  | "failure"
+  | "approval";
 
 export interface AutomationMonitorNotificationEvent {
   runId: string;
@@ -46,8 +54,26 @@ export interface AutomationMonitorDefinition {
   triggerMode: AutomationMonitorTriggerMode;
   sessionName: string;
   preview: AutomationMonitorDefinitionPreview;
+  concurrencyPolicy: AutomationRunConcurrencyPolicy;
+  maxConcurrency: number;
+  maxAttempts: number;
+  backoffMs: number;
+  backoffMultiplier: number;
+  maxBackoffMs: number;
+  runTtlMs: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AutomationMonitorDefinitionPreviewConcurrency {
+  policy: AutomationRunConcurrencyPolicy;
+  max: number;
+}
+
+export interface AutomationMonitorDefinitionPreviewRetry {
+  maxAttempts: number;
+  backoffMs: number;
+  maxBackoffMs: number;
 }
 
 export interface AutomationMonitorDefinitionPreview {
@@ -63,6 +89,9 @@ export interface AutomationMonitorDefinitionPreview {
   timeoutMs: number;
   verification: "tmux session, window, pane, and bounded recent pane-output observation";
   mutatesSession: false;
+  concurrency?: AutomationMonitorDefinitionPreviewConcurrency;
+  retry?: AutomationMonitorDefinitionPreviewRetry;
+  runTtlMs?: number;
 }
 
 export interface AutomationMonitorRuntime extends AutomationMonitorDefinition {
@@ -118,9 +147,16 @@ export type AutomationSetInterval = (
 
 export type AutomationClearInterval = (timer: unknown) => void;
 
-export type AutomationSetTimeout = (callback: () => void, timeoutMs: number) => unknown;
-
-export type AutomationClearTimeout = (timer: unknown) => void;
+export interface AutomationRunSupervisorLike {
+  requestRun: (input: {
+    definition: AutomationMonitorDefinition;
+    trigger: AutomationMonitorRunTrigger;
+  }) => Promise<AutomationRunRecord>;
+  stopMonitorRuns: (
+    monitorId: string,
+    requestedBy: AutomationRunCancellationSource
+  ) => void;
+}
 
 export interface AutomationMonitorManager {
   upsertTmuxSessionMonitor: (input: {
@@ -131,6 +167,13 @@ export interface AutomationMonitorManager {
     timeoutMs?: number;
     triggerMode?: AutomationMonitorTriggerMode;
     enabled?: boolean;
+    concurrencyPolicy?: AutomationRunConcurrencyPolicy;
+    maxConcurrency?: number;
+    maxAttempts?: number;
+    backoffMs?: number;
+    backoffMultiplier?: number;
+    maxBackoffMs?: number;
+    runTtlMs?: number;
   }) => AutomationMonitorDefinition;
   duplicateMonitor: (id: string) => AutomationMonitorDefinition;
   setMonitorEnabled: (id: string, enabled: boolean) => AutomationMonitorRuntime;
@@ -205,22 +248,16 @@ export function createAutomationMonitorStore({
 
 export function createAutomationMonitorManager({
   clearInterval = globalThis.clearInterval as AutomationClearInterval,
-  clearTimeout = globalThis.clearTimeout as AutomationClearTimeout,
   now = () => new Date().toISOString(),
-  onRunTerminal = () => undefined,
   setInterval = globalThis.setInterval as unknown as AutomationSetInterval,
-  setTimeout = globalThis.setTimeout as unknown as AutomationSetTimeout,
   store,
-  tmuxClient
+  supervisor
 }: {
   clearInterval?: AutomationClearInterval;
-  clearTimeout?: AutomationClearTimeout;
   now?: () => string;
-  onRunTerminal?: (event: AutomationMonitorNotificationEvent) => void;
   setInterval?: AutomationSetInterval;
-  setTimeout?: AutomationSetTimeout;
   store: AutomationMonitorStore;
-  tmuxClient: TmuxSupervisionClient;
+  supervisor: AutomationRunSupervisorLike;
 }): AutomationMonitorManager {
   const definitions = new Map<string, AutomationMonitorDefinition>();
   const runtimes = new Map<string, AutomationMonitorRuntime>();
@@ -290,78 +327,15 @@ export function createAutomationMonitorManager({
     }
 
     const checkedAt = now();
-    const previousLastResult = readRuntime(definition).lastResult;
-    try {
-      const report = await observeSessionWithTimeout(definition);
-      updateRuntime(definition, {
-        checkCount: readRuntime(definition).checkCount + 1,
-        lastCheckedAt: checkedAt,
-        lastReport: report,
-        lastResult: report.status,
-        lastResultAt: checkedAt,
-        lastSummary: report.recommendation.reason,
-        nextCheckAt: addMilliseconds(checkedAt, definition.intervalMs),
-        status: report.status
-      });
-      emitRunTerminalNotification(definition, trigger, previousLastResult);
-      return readSnapshotRuntime(definition.id);
-    } catch (error) {
-      updateRuntime(definition, {
-        checkCount: readRuntime(definition).checkCount + 1,
-        lastCheckedAt: checkedAt,
-        lastError: error instanceof Error ? error.message : String(error),
-        lastResult: "error",
-        lastResultAt: checkedAt,
-        nextCheckAt: addMilliseconds(checkedAt, definition.intervalMs),
-        status: "error"
-      });
-      emitRunTerminalNotification(definition, trigger, previousLastResult);
-      return readSnapshotRuntime(definition.id);
-    }
-  }
-
-  async function observeSessionWithTimeout(
-    definition: AutomationMonitorDefinition
-  ): Promise<TmuxSupervisionReport> {
-    let timer: unknown;
-    try {
-      return await new Promise<TmuxSupervisionReport>((resolve, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`Automation monitor timed out after ${definition.timeoutMs}ms.`));
-        }, definition.timeoutMs);
-        void tmuxClient.observeSession(definition.sessionName).then(resolve, reject);
-      });
-    } finally {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-    }
-  }
-
-  function emitRunTerminalNotification(
-    definition: AutomationMonitorDefinition,
-    trigger: AutomationMonitorRunTrigger,
-    previousLastResult: AutomationMonitorLastResult | undefined
-  ) {
+    const record = await supervisor.requestRun({ definition, trigger });
     const runtime = readRuntime(definition);
-    const outcome = readAutomationMonitorNotificationOutcome(runtime.lastResult);
-    if (!outcome) {
-      return;
-    }
-    const previousOutcome = readAutomationMonitorNotificationOutcome(previousLastResult);
-    if (trigger === "scheduled" && previousOutcome === outcome) {
-      return;
-    }
-
-    try {
-      onRunTerminal({
-        runId: `${definition.id}:run:${runtime.checkCount}`,
-        label: definition.label,
-        outcome
-      });
-    } catch {
-      // Native notification failures must not change the durable monitor outcome.
-    }
+    updateRuntime(definition, {
+      checkCount: runtime.checkCount + 1,
+      lastCheckedAt: checkedAt,
+      nextCheckAt: addMilliseconds(checkedAt, definition.intervalMs),
+      ...projectAutomationRunOntoRuntime(record, record.finishedAt ?? checkedAt)
+    });
+    return readSnapshotRuntime(definition.id);
   }
 
   function readRuntime(definition: AutomationMonitorDefinition): AutomationMonitorRuntime {
@@ -437,6 +411,21 @@ export function createAutomationMonitorManager({
       const id = previous?.id ?? createTmuxMonitorId(sessionName);
       const timeoutMs = normalizeMonitorTimeoutMs(input.timeoutMs ?? previous?.timeoutMs);
       const triggerMode = normalizeMonitorTriggerMode(input.triggerMode ?? previous?.triggerMode);
+      const concurrencyPolicy = normalizeAutomationConcurrencyPolicy(
+        input.concurrencyPolicy ?? previous?.concurrencyPolicy
+      );
+      const maxConcurrency = normalizeAutomationMaxConcurrency(
+        input.maxConcurrency ?? previous?.maxConcurrency
+      );
+      const maxAttempts = normalizeAutomationMaxAttempts(input.maxAttempts ?? previous?.maxAttempts);
+      const backoffMs = normalizeAutomationBackoffMs(input.backoffMs ?? previous?.backoffMs);
+      const backoffMultiplier = normalizeAutomationBackoffMultiplier(
+        input.backoffMultiplier ?? previous?.backoffMultiplier
+      );
+      const maxBackoffMs = normalizeAutomationMaxBackoffMs(
+        input.maxBackoffMs ?? previous?.maxBackoffMs
+      );
+      const runTtlMs = normalizeAutomationRunTtlMs(input.runTtlMs ?? previous?.runTtlMs);
       const definition: AutomationMonitorDefinition = {
         id,
         kind: "tmux-session",
@@ -446,7 +435,21 @@ export function createAutomationMonitorManager({
         timeoutMs,
         triggerMode,
         sessionName,
-        preview: createTmuxAutomationMonitorPreview(sessionName, timeoutMs),
+        preview: createTmuxAutomationMonitorPreview(sessionName, timeoutMs, {
+          concurrencyPolicy,
+          maxConcurrency,
+          maxAttempts,
+          backoffMs,
+          maxBackoffMs,
+          runTtlMs
+        }),
+        concurrencyPolicy,
+        maxConcurrency,
+        maxAttempts,
+        backoffMs,
+        backoffMultiplier,
+        maxBackoffMs,
+        runTtlMs,
         createdAt: previous?.createdAt ?? nowIso,
         updatedAt: nowIso
       };
@@ -496,6 +499,9 @@ export function createAutomationMonitorManager({
       };
       definitions.set(id, definition);
       unschedule(id);
+      if (!enabled) {
+        supervisor.stopMonitorRuns(id, "dashboard");
+      }
       updateRuntime(definition, {
         status: enabled ? "idle" : "disabled",
         nextCheckAt: undefined
@@ -509,6 +515,7 @@ export function createAutomationMonitorManager({
       }
 
       unschedule(id);
+      supervisor.stopMonitorRuns(id, "dashboard");
       definitions.delete(id);
       runtimes.delete(id);
       persist();
@@ -649,6 +656,13 @@ function normalizeAutomationMonitorDefinition(value: unknown): AutomationMonitor
   const nowIso = new Date(0).toISOString();
   const timeoutMs = normalizeMonitorTimeoutMs(record.timeoutMs);
   const triggerMode = normalizeMonitorTriggerMode(record.triggerMode);
+  const concurrencyPolicy = normalizeAutomationConcurrencyPolicy(record.concurrencyPolicy);
+  const maxConcurrency = normalizeAutomationMaxConcurrency(record.maxConcurrency);
+  const maxAttempts = normalizeAutomationMaxAttempts(record.maxAttempts);
+  const backoffMs = normalizeAutomationBackoffMs(record.backoffMs);
+  const backoffMultiplier = normalizeAutomationBackoffMultiplier(record.backoffMultiplier);
+  const maxBackoffMs = normalizeAutomationMaxBackoffMs(record.maxBackoffMs);
+  const runTtlMs = normalizeAutomationRunTtlMs(record.runTtlMs);
   return {
     id: typeof record.id === "string" && record.id.trim()
       ? record.id.trim()
@@ -660,7 +674,21 @@ function normalizeAutomationMonitorDefinition(value: unknown): AutomationMonitor
     timeoutMs,
     triggerMode,
     sessionName,
-    preview: createTmuxAutomationMonitorPreview(sessionName, timeoutMs),
+    preview: createTmuxAutomationMonitorPreview(sessionName, timeoutMs, {
+      concurrencyPolicy,
+      maxConcurrency,
+      maxAttempts,
+      backoffMs,
+      maxBackoffMs,
+      runTtlMs
+    }),
+    concurrencyPolicy,
+    maxConcurrency,
+    maxAttempts,
+    backoffMs,
+    backoffMultiplier,
+    maxBackoffMs,
+    runTtlMs,
     createdAt: typeof record.createdAt === "string" ? record.createdAt : nowIso,
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso
   };
@@ -733,19 +761,49 @@ function readMonitorLastResult(status: AutomationMonitorStatus): AutomationMonit
   return normalizeAutomationMonitorLastResult(status);
 }
 
-function readAutomationMonitorNotificationOutcome(
-  lastResult: AutomationMonitorLastResult | undefined
-): AutomationMonitorNotificationOutcome | undefined {
-  if (lastResult === "error") {
-    return "failure";
+function projectAutomationRunOntoRuntime(
+  record: AutomationRunRecord,
+  at: string
+): Partial<AutomationMonitorRuntime> {
+  if (record.state === "completed") {
+    const summary = record.latestVerification?.summary;
+    return {
+      status: "observing",
+      lastResult: "observing",
+      lastResultAt: at,
+      ...(summary ? { lastSummary: summary } : {}),
+      lastError: undefined
+    };
   }
-  if (lastResult === "observing") {
-    return "completed";
+  if (record.state === "attention") {
+    const status = record.latestVerification?.status === "blocked" ? "blocked" : "needs_attention";
+    const summary = record.latestVerification?.summary;
+    return {
+      status,
+      lastResult: status,
+      lastResultAt: at,
+      ...(summary ? { lastSummary: summary } : {}),
+      lastError: undefined
+    };
   }
-  if (lastResult === "needs_attention" || lastResult === "blocked") {
-    return "attention";
+  if (record.state === "failed") {
+    return {
+      status: "error",
+      lastResult: "error",
+      lastResultAt: at,
+      ...(record.error ? { lastError: record.error } : {})
+    };
   }
-  return undefined;
+  if (record.state === "expired") {
+    return {
+      status: "error",
+      lastResult: "error",
+      lastResultAt: at,
+      lastError: "Automation run expired before completion."
+    };
+  }
+  // Cancelled runs and non-terminal records carry no new observation outcome.
+  return { status: "idle" };
 }
 
 function normalizeMonitorSessionName(value: string): string {
@@ -783,8 +841,22 @@ function normalizeMonitorTriggerMode(value: unknown): AutomationMonitorTriggerMo
 
 export function createTmuxAutomationMonitorPreview(
   sessionName: string,
-  timeoutMs: number
+  timeoutMs: number,
+  options?: {
+    concurrencyPolicy?: AutomationRunConcurrencyPolicy;
+    maxConcurrency?: number;
+    maxAttempts?: number;
+    backoffMs?: number;
+    maxBackoffMs?: number;
+    runTtlMs?: number;
+  }
 ): AutomationMonitorDefinitionPreview {
+  const concurrencyPolicy = normalizeAutomationConcurrencyPolicy(options?.concurrencyPolicy);
+  const maxConcurrency = normalizeAutomationMaxConcurrency(options?.maxConcurrency);
+  const maxAttempts = normalizeAutomationMaxAttempts(options?.maxAttempts);
+  const backoffMs = normalizeAutomationBackoffMs(options?.backoffMs);
+  const maxBackoffMs = normalizeAutomationMaxBackoffMs(options?.maxBackoffMs);
+  const runTtlMs = normalizeAutomationRunTtlMs(options?.runTtlMs);
   return {
     adapter: "tmux-supervision",
     triggerModes: ["manual", "scheduled"],
@@ -797,8 +869,64 @@ export function createTmuxAutomationMonitorPreview(
     approvalMode: "not-required",
     timeoutMs,
     verification: "tmux session, window, pane, and bounded recent pane-output observation",
-    mutatesSession: false
+    mutatesSession: false,
+    concurrency: {
+      policy: concurrencyPolicy,
+      max: maxConcurrency
+    },
+    retry: {
+      maxAttempts,
+      backoffMs,
+      maxBackoffMs
+    },
+    runTtlMs
   };
+}
+
+export function normalizeAutomationConcurrencyPolicy(
+  value: unknown
+): AutomationRunConcurrencyPolicy {
+  return value === "skip" || value === "queue" || value === "allow" ? value : "skip";
+}
+
+export function normalizeAutomationMaxConcurrency(value: unknown): number {
+  const maxConcurrency = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : 1;
+  return Math.min(8, Math.max(1, maxConcurrency));
+}
+
+export function normalizeAutomationMaxAttempts(value: unknown): number {
+  const maxAttempts = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : 3;
+  return Math.min(10, Math.max(1, maxAttempts));
+}
+
+export function normalizeAutomationBackoffMs(value: unknown): number {
+  const backoffMs = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : 30_000;
+  return Math.min(300_000, Math.max(1_000, backoffMs));
+}
+
+export function normalizeAutomationBackoffMultiplier(value: unknown): number {
+  const multiplier = typeof value === "number" && Number.isFinite(value) ? value : 2;
+  return Math.min(5, Math.max(1, multiplier));
+}
+
+export function normalizeAutomationMaxBackoffMs(value: unknown): number {
+  const maxBackoffMs = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : 300_000;
+  return Math.min(3_600_000, Math.max(1_000, maxBackoffMs));
+}
+
+export function normalizeAutomationRunTtlMs(value: unknown): number {
+  const runTtlMs = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : 900_000;
+  return Math.min(3_600_000, Math.max(60_000, runTtlMs));
 }
 
 function createTmuxMonitorId(sessionName: string): string {

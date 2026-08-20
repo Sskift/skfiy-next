@@ -1,3 +1,8 @@
+import {
+  createChromeVerifySelectorExpression,
+  type ChromeVerifySelectorExpected
+} from "./chrome-dom-verification.js";
+
 export type BrowserControlMode =
   | "structured_cdp"
   | "screenshot_fallback"
@@ -16,6 +21,10 @@ export interface BrowserControlModeDecision {
 export interface BrowserPageIdentity {
   url: string;
   documentId: string;
+  /** Binds actions to one selected tab. In-page guard backstop; the CDP client selects the target. */
+  tabId?: number;
+  /** Binds actions to the current workflow request. Throws SKFIY_STALE_REQUEST when mismatched. */
+  requestId?: string;
 }
 
 export type BrowserStructuredAction =
@@ -32,7 +41,20 @@ export type BrowserStructuredAction =
       expectedPageIdentity?: BrowserPageIdentity;
     }
   | { type: "extract_text"; selector?: string }
-  | { type: "extract_page_snapshot" };
+  | { type: "extract_page_snapshot" }
+  | {
+      type: "scroll_selector";
+      selector: string;
+      deltaY: number;
+      expectedPageIdentity?: BrowserPageIdentity;
+    }
+  | {
+      type: "verify_selector";
+      selector: string;
+      expected: ChromeVerifySelectorExpected;
+      expectedPageIdentity?: BrowserPageIdentity;
+    }
+  | { type: "wait_for_navigation"; timeoutMs?: number };
 
 export interface CdpCommand {
   method: string;
@@ -86,6 +108,20 @@ export function buildCdpCommand(action: BrowserStructuredAction): CdpCommand {
       return createRuntimeEvaluateCommand(createExtractTextExpression(action.selector));
     case "extract_page_snapshot":
       return createRuntimeEvaluateCommand(createExtractPageSnapshotExpression());
+    case "scroll_selector":
+      return createRuntimeEvaluateCommand(createScrollSelectorExpression(
+        action.selector,
+        action.deltaY,
+        action.expectedPageIdentity
+      ));
+    case "verify_selector":
+      return createRuntimeEvaluateCommand(createChromeVerifySelectorExpression(
+        action.selector,
+        action.expected,
+        createPageIdentityGuardExpression(action.expectedPageIdentity)
+      ));
+    case "wait_for_navigation":
+      return createRuntimeEvaluateCommand(createWaitForNavigationExpression(action.timeoutMs));
   }
 }
 
@@ -141,6 +177,28 @@ function createClickSelectorExpression(
   })()`;
 }
 
+function createScrollSelectorExpression(
+  selector: string,
+  deltaY: number,
+  expectedPageIdentity?: BrowserPageIdentity
+): string {
+  const safeDeltaY = Number.isFinite(deltaY) ? Math.trunc(deltaY) : 0;
+  return `(() => {
+    ${createPageIdentityGuardExpression(expectedPageIdentity)}
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!element) {
+      throw new Error("Selector not found: ${escapeForTemplate(selector)}");
+    }
+    element.scrollIntoView({ block: "nearest" });
+    if (typeof element.scrollBy === "function") {
+      element.scrollBy({ top: ${safeDeltaY}, behavior: "instant" });
+    } else {
+      window.scrollBy(0, ${safeDeltaY});
+    }
+    return true;
+  })()`;
+}
+
 function createExtractTextExpression(selector: string | undefined): string {
   const target = selector
     ? `document.querySelector(${JSON.stringify(selector)})`
@@ -164,14 +222,51 @@ function createExtractPageSnapshotExpression(): string {
   }))()`;
 }
 
-function createPageIdentityGuardExpression(
+function createWaitForNavigationExpression(timeoutMs: number | undefined): string {
+  const safeTimeout = Number.isFinite(timeoutMs) && (timeoutMs as number) > 0
+    ? Math.min(Math.trunc(timeoutMs as number), 30_000)
+    : 10_000;
+  return `new Promise((resolve) => {
+    const timeoutMs = ${safeTimeout};
+    if (document.readyState === "complete") {
+      resolve(true);
+      return;
+    }
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    window.addEventListener("load", () => {
+      clearTimeout(timer);
+      resolve(true);
+    }, { once: true });
+  })`;
+}
+
+export function createPageIdentityGuardExpression(
   expectedPageIdentity: BrowserPageIdentity | undefined
 ): string {
   if (!expectedPageIdentity) {
     return "";
   }
 
-  return `if (
+  const requestGuard = expectedPageIdentity.requestId === undefined
+    ? ""
+    : `if (
+      window.__SKFIY_BOUND_REQUEST_ID__ !== undefined
+      && window.__SKFIY_BOUND_REQUEST_ID__ !== ${JSON.stringify(expectedPageIdentity.requestId)}
+    ) {
+      throw new Error("SKFIY_STALE_REQUEST");
+    }`;
+  const tabGuard = expectedPageIdentity.tabId === undefined
+    ? ""
+    : `if (
+      window.__SKFIY_BOUND_TAB_ID__ !== undefined
+      && window.__SKFIY_BOUND_TAB_ID__ !== ${expectedPageIdentity.tabId}
+    ) {
+      throw new Error("SKFIY_TAB_NOT_FOUND");
+    }`;
+
+  return `${requestGuard}
+    ${tabGuard}
+    if (
       window.location.href !== ${JSON.stringify(expectedPageIdentity.url)}
       || String(performance.timeOrigin) !== ${JSON.stringify(expectedPageIdentity.documentId)}
     ) {

@@ -636,6 +636,44 @@ function summarizeAction(action: TurnTranscriptAction): Record<string, unknown> 
         submitSelector: sanitizeRuntimeSnapshotText(action.submitSelector),
         reason: sanitizeRuntimeSnapshotText(action.reason)
       };
+    case "confirm_chrome_workflow":
+      return {
+        type: action.type,
+        planId: sanitizeRuntimeSnapshotText(action.planId),
+        stepCount: action.stepCount,
+        maxSteps: action.maxSteps,
+        reason: sanitizeRuntimeSnapshotText(action.reason)
+      };
+    case "chrome_page_event":
+      return {
+        type: action.type,
+        kind: action.kind,
+        ...(action.stepIndex !== undefined ? { stepIndex: action.stepIndex } : {}),
+        ...(action.fromUrl ? { fromUrl: sanitizeRuntimeSnapshotText(action.fromUrl) } : {}),
+        ...(action.toUrl ? { toUrl: sanitizeRuntimeSnapshotText(action.toUrl) } : {}),
+        ...(action.url ? { url: sanitizeRuntimeSnapshotText(action.url) } : {}),
+        reason: sanitizeRuntimeSnapshotText(action.reason)
+      };
+    case "chrome_dom_verification":
+      return {
+        type: action.type,
+        status: action.status,
+        stepIndex: action.stepIndex,
+        selector: sanitizeRuntimeSnapshotText(action.selector),
+        expected: sanitizeRuntimeSnapshotText(action.expected),
+        actual: sanitizeRuntimeSnapshotText(action.actual),
+        ...(action.screenshotPath
+          ? { screenshotPath: sanitizeRuntimeSnapshotText(action.screenshotPath) }
+          : {})
+      };
+    case "chrome_workflow_step":
+      return {
+        type: action.type,
+        status: action.status,
+        stepIndex: action.stepIndex,
+        stepKind: action.stepKind,
+        ...(action.selector ? { selector: sanitizeRuntimeSnapshotText(action.selector) } : {})
+      };
     case "recover":
       return {
         type: action.type,

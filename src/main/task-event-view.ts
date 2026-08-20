@@ -6,12 +6,14 @@ import type { TurnReplayTaskEvent } from "./computer-use/turn-replay-store.js";
 import type { TmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
 import type { GhosttyTaskEvent } from "./orchestrator/events.js";
 import type {
-  ChromeTaskEvent
+  ChromeTaskEvent,
+  ChromeWorkflowPlanPreview
 } from "./orchestrator/chrome-task.js";
 import type {
   FinderPlanPreview,
   FinderTaskEvent
 } from "./orchestrator/finder-task.js";
+import type { FinderTaskResult } from "./orchestrator/finder-task-result.js";
 import type { TmuxSupervisionTaskEvent } from "./orchestrator/tmux-supervision-task.js";
 import type { CommandRoute, ExecutableCommandRoute } from "./task-routing.js";
 import {
@@ -66,6 +68,8 @@ export interface TaskEvent {
   replayRecord?: ObserveAppReplayRecord;
   finderSelection?: FinderSelectionResult;
   finderPlanPreview?: FinderPlanPreview;
+  finderTaskResult?: FinderTaskResult;
+  chromeWorkflowPreview?: ChromeWorkflowPlanPreview;
   tmuxSupervisionReport?: TmuxSupervisionReport;
 }
 
@@ -193,6 +197,58 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
         message: `${prefix}Chrome submit confirmation required: ${event.reason}`,
         command: event.command
       };
+    case "workflow_confirmation_required":
+      return {
+        status: "needs_confirmation",
+        message: `${prefix}Chrome workflow confirmation required: ${event.reason}`,
+        command: event.command,
+        chromeWorkflowPreview: event.preview
+      };
+    case "navigation_detected":
+      return {
+        status: "executing",
+        message: `${prefix}Chrome page navigated from ${event.fromUrl} to ${event.toUrl} at step ${event.stepIndex}; re-binding. ${event.reason}`
+      };
+    case "new_tab_detected":
+      return {
+        status: "blocked",
+        message: `${prefix}Chrome opened a new tab (${event.tabUrl}) at step ${event.stepIndex}. ${event.reason}`
+      };
+    case "auth_wall_detected":
+      return {
+        status: "blocked",
+        message: `${prefix}Chrome auth wall detected at ${event.url}. ${event.reason}`
+      };
+    case "download_detected":
+      return {
+        status: "executing",
+        message: `${prefix}Chrome download detected from ${event.downloadUrl} at step ${event.stepIndex}. ${event.reason}`
+      };
+    case "page_reload_detected":
+      return {
+        status: "executing",
+        message: `${prefix}Chrome page reloaded at ${event.url} step ${event.stepIndex}; re-observing. ${event.reason}`
+      };
+    case "dom_verification_passed":
+      return {
+        status: "verifying",
+        message: `${prefix}DOM verification passed for ${event.selector}: expected ${event.expected}, actual ${event.actual}.`
+      };
+    case "dom_verification_failed":
+      return {
+        status: "failed",
+        message: `${prefix}DOM verification failed for ${event.selector}: expected ${event.expected}, actual ${event.actual}.`
+      };
+    case "workflow_step_started":
+      return {
+        status: "executing",
+        message: `${prefix}Chrome workflow step ${event.stepIndex} (${event.stepKind}) started.`
+      };
+    case "workflow_step_completed":
+      return {
+        status: "verifying",
+        message: `${prefix}Chrome workflow step ${event.stepIndex} (${event.stepKind}) passed.`
+      };
     case "typing":
       return {
         status: "executing",
@@ -213,7 +269,8 @@ export function createTaskEvent(event: ComputerUseTaskEvent, mode: ManualMode): 
       return {
         status: "completed",
         message: event.summary,
-        ...("report" in event ? { tmuxSupervisionReport: event.report } : {})
+        ...("report" in event ? { tmuxSupervisionReport: event.report } : {}),
+        ...("result" in event ? { finderTaskResult: event.result } : {})
       };
   }
 

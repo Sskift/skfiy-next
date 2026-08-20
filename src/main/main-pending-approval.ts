@@ -2,7 +2,10 @@ import type { AssistantComputerUseToolIdentity } from "./assistant-computer-use-
 import { isSameComputerUseToolIdentity } from "./main-computer-use-tool-result.js";
 import type { ExecutableCommandRoute } from "./task-routing.js";
 import type { FinderPlanPreview } from "./orchestrator/finder-task.js";
-import type { ChromeSubmitConfirmationBinding } from "./orchestrator/chrome-task.js";
+import type {
+  ChromeSubmitConfirmationBinding,
+  ChromeWorkflowPlanPreview
+} from "./orchestrator/chrome-task.js";
 import {
   withRouteTaskEventMetadata,
   type ManualMode,
@@ -10,7 +13,11 @@ import {
 } from "./task-event-view.js";
 
 export type ComputerUseCommandRoute = ExecutableCommandRoute;
-export type ComputerUseApprovalGate = "action-plan" | "finder-plan" | "chrome-submit";
+export type ComputerUseApprovalGate =
+  | "action-plan"
+  | "finder-plan"
+  | "chrome-submit"
+  | "chrome-workflow";
 
 export interface PendingApproval extends AssistantComputerUseToolIdentity {
   command: string;
@@ -21,8 +28,10 @@ export interface PendingApproval extends AssistantComputerUseToolIdentity {
   actionApproved: boolean;
   finderPlanApproved: boolean;
   chromeSubmitApproved: boolean;
+  chromeWorkflowApproved: boolean;
   approvedPlanPreview?: FinderPlanPreview;
   approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
+  approvedChromeWorkflowPreview?: ChromeWorkflowPlanPreview;
 }
 
 export interface CreatePendingApprovalInput {
@@ -35,14 +44,17 @@ export interface CreatePendingApprovalInput {
   actionApproved: boolean;
   finderPlanApproved: boolean;
   chromeSubmitApproved?: boolean;
+  chromeWorkflowApproved?: boolean;
   approvedPlanPreview?: FinderPlanPreview;
   approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
+  approvedChromeWorkflowPreview?: ChromeWorkflowPlanPreview;
 }
 
 export interface ApprovedPendingApprovalContinuation {
   actionApproved: boolean;
   finderPlanApproved: boolean;
   chromeSubmitApproved: boolean;
+  chromeWorkflowApproved: boolean;
 }
 
 export interface ComputerUseToolCallState {
@@ -88,9 +100,13 @@ export function createPendingApproval(
     actionApproved: input.actionApproved,
     finderPlanApproved: input.finderPlanApproved,
     chromeSubmitApproved: input.chromeSubmitApproved === true,
+    chromeWorkflowApproved: input.chromeWorkflowApproved === true,
     ...(input.approvedPlanPreview ? { approvedPlanPreview: cloneFinderPlanPreview(input.approvedPlanPreview) } : {}),
     ...(input.approvedChromeSubmitBinding ? {
       approvedChromeSubmitBinding: cloneChromeSubmitBinding(input.approvedChromeSubmitBinding)
+    } : {}),
+    ...(input.approvedChromeWorkflowPreview ? {
+      approvedChromeWorkflowPreview: cloneChromeWorkflowPreview(input.approvedChromeWorkflowPreview)
     } : {})
   };
 }
@@ -101,7 +117,8 @@ export function readApprovedPendingApprovalContinuation(
   return {
     actionApproved: approval.actionApproved === true || approval.gate === "action-plan",
     finderPlanApproved: approval.finderPlanApproved === true || approval.gate === "finder-plan",
-    chromeSubmitApproved: approval.chromeSubmitApproved === true || approval.gate === "chrome-submit"
+    chromeSubmitApproved: approval.chromeSubmitApproved === true || approval.gate === "chrome-submit",
+    chromeWorkflowApproved: approval.chromeWorkflowApproved === true || approval.gate === "chrome-workflow"
   };
 }
 
@@ -111,6 +128,15 @@ function cloneChromeSubmitBinding(
   return {
     ...binding,
     fieldSelectors: [...binding.fieldSelectors]
+  };
+}
+
+function cloneChromeWorkflowPreview(
+  preview: ChromeWorkflowPlanPreview
+): ChromeWorkflowPlanPreview {
+  return {
+    ...preview,
+    steps: preview.steps.map((step) => ({ ...step }))
   };
 }
 

@@ -1,5 +1,6 @@
 import type {
   FinderPlanPreview,
+  FinderTaskResult,
   ObserveAppReplayRecord,
   RouteOutcome,
   TaskEvent,
@@ -19,6 +20,7 @@ export interface TaskView {
   routeOutcome?: RouteOutcome;
   stopTurnBehavior?: TaskEventStopTurnBehavior;
   finderPlanPreview?: FinderPlanPreview;
+  finderTaskResult?: FinderTaskResult;
 }
 
 export interface AssistantConversationMessage {
@@ -80,7 +82,8 @@ export function createTaskViewFromEvent(event: TaskEvent): TaskView {
     ...(event.policyKind ? { policyKind: event.policyKind } : {}),
     ...(event.routeOutcome ? { routeOutcome: event.routeOutcome } : {}),
     ...(event.stopTurnBehavior ? { stopTurnBehavior: event.stopTurnBehavior } : {}),
-    finderPlanPreview: event.finderPlanPreview
+    finderPlanPreview: event.finderPlanPreview,
+    finderTaskResult: event.finderTaskResult
   };
 }
 

@@ -4,6 +4,7 @@ import {
   DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
   createDefaultAutomationMonitorPreview
 } from "./app-automation-state";
+import { DEFAULT_AUTOMATION_RUN_SNAPSHOT } from "./app-automation-run-state";
 import {
   DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT,
   DEFAULT_PERSONAL_MEMORY_SETTINGS
@@ -99,6 +100,8 @@ export const fallbackDesktopApi: DesktopApi = {
   setAutomationMonitorEnabled: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
   deleteAutomationMonitor: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
   previewTmuxAutomation: async () => createDefaultAutomationMonitorPreview(),
+  getAutomationRuns: async () => DEFAULT_AUTOMATION_RUN_SNAPSHOT,
+  stopAutomationRun: async () => DEFAULT_AUTOMATION_RUN_SNAPSHOT,
   getRuntimeStatus: async () => ({
     stopTurnHotkey: {
       accelerator: "",

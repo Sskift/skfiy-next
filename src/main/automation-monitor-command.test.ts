@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
+import type { TmuxSupervisionReport } from "./computer-use/tmux-supervisor.js";
 import { createAutomationMonitorCommandService } from "./automation-monitor-command.js";
 import type { AutomationMonitorStoreIo } from "./automation-monitor.js";
 
@@ -197,4 +198,115 @@ describe("automation monitor command service", () => {
       monitorId: "tmux-session:missing"
     }, "cli")).rejects.toThrow("Unknown automation monitor");
   });
+
+  it("lists runs through the shared envelope", async () => {
+    const observeSession = vi.fn(async (sessionName: string) =>
+      createTmuxSupervisionReport({
+        sessionName,
+        hasSession: true,
+        windowsOutput: "@4\t1\tzsh\t1\t1",
+        panesOutput: `${sessionName}\t@4\t1\tzsh\t%4\t0\t1\t0\tzsh\tworker`,
+        paneTails: { "%4": "Working" }
+      })
+    );
+    const service = createAutomationMonitorCommandService({
+      filePath: "/state/automation-monitors.json",
+      runsFilePath: "/state/automation-runs.json",
+      generatedAt: () => "2026-07-13T11:00:00.000Z",
+      io: createMemoryIo(),
+      tmuxClient: { observeSession }
+    });
+    const configured = await service.execute({
+      action: "upsert-tmux",
+      sessionName: "money-run-goal",
+      intervalMs: 600_000
+    }, "cli");
+
+    await service.execute({
+      action: "run-now",
+      monitorId: configured.monitorId ?? ""
+    }, "cli");
+
+    await expect(service.execute({ action: "list-runs" }, "mcp")).resolves.toMatchObject({
+      schemaVersion: 1,
+      command: "automation monitor",
+      source: "mcp",
+      action: "list-runs",
+      result: "runs-listed",
+      plannedMutation: false,
+      executesSystemMutation: false,
+      mutatesSession: false,
+      runs: [{
+        runId: "tmux-session:money-run-goal:run:1",
+        monitorId: "tmux-session:money-run-goal",
+        state: "completed"
+      }]
+    });
+
+    await expect(service.execute({
+      action: "list-runs",
+      monitorId: "tmux-session:money-run-goal"
+    }, "cli")).resolves.toMatchObject({
+      result: "runs-listed",
+      runs: [{ runId: "tmux-session:money-run-goal:run:1" }]
+    });
+  });
+
+  it("stops a run, records the requesting surface, and rejects unknown runs", async () => {
+    let resolveObservation: ((report: ReturnType<typeof createWorkingReport>) => void) | undefined;
+    const observeSession = vi.fn((sessionName: string) =>
+      new Promise<TmuxSupervisionReport>((resolve) => {
+        resolveObservation = () => resolve(createWorkingReport(sessionName));
+      })
+    );
+    const service = createAutomationMonitorCommandService({
+      filePath: "/state/automation-monitors.json",
+      runsFilePath: "/state/automation-runs.json",
+      generatedAt: () => "2026-07-13T11:00:00.000Z",
+      io: createMemoryIo(),
+      tmuxClient: { observeSession }
+    });
+    const configured = await service.execute({
+      action: "upsert-tmux",
+      sessionName: "money-run-goal",
+      intervalMs: 600_000
+    }, "cli");
+    const monitorId = configured.monitorId ?? "";
+    const runNow = service.execute({ action: "run-now", monitorId }, "cli");
+
+    const listed = await service.execute({ action: "list-runs", monitorId }, "cli");
+    const runId = listed.runs?.[0]?.runId ?? "";
+    expect(runId).toBe("tmux-session:money-run-goal:run:1");
+
+    await expect(service.execute({ action: "stop-run", runId }, "mcp")).resolves.toMatchObject({
+      action: "stop-run",
+      result: "run-stopped",
+      plannedMutation: true,
+      executesSystemMutation: false,
+      mutatesSession: false,
+      run: {
+        runId,
+        state: "cancelled",
+        cancellation: { requestedBy: "mcp" }
+      }
+    });
+
+    resolveObservation?.(createWorkingReport("money-run-goal"));
+    await runNow;
+
+    await expect(service.execute({
+      action: "stop-run",
+      runId: "tmux-session:missing:run:9"
+    }, "cli")).rejects.toThrow("Unknown automation run");
+  });
 });
+
+function createWorkingReport(sessionName: string) {
+  return createTmuxSupervisionReport({
+    sessionName,
+    hasSession: true,
+    windowsOutput: "@4\t1\tzsh\t1\t1",
+    panesOutput: `${sessionName}\t@4\t1\tzsh\t%4\t0\t1\t0\tzsh\tworker`,
+    paneTails: { "%4": "Working" }
+  });
+}

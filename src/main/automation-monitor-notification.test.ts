@@ -31,6 +31,14 @@ describe("automation monitor notification coordinator", () => {
       title: "Automation check failed",
       body: "money-run goal could not complete its read-only check. Open skfiy to review."
     });
+    expect(coordinator.take({
+      runId: "tmux-session:money-run-goal:run:4",
+      label: "money-run goal",
+      outcome: "approval"
+    }, { windowFocused: false })).toMatchObject({
+      title: "Automation approval requested",
+      body: "money-run goal is waiting for approval in skfiy."
+    });
   });
 
   it("suppresses focused and duplicate notices", () => {

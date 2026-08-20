@@ -51,7 +51,8 @@ describe("main pending approval helpers", () => {
     expect(readApprovedPendingApprovalContinuation(actionApproval)).toEqual({
       actionApproved: true,
       finderPlanApproved: false,
-      chromeSubmitApproved: false
+      chromeSubmitApproved: false,
+      chromeWorkflowApproved: false
     });
 
     const finderApproval = createPendingApproval({
@@ -70,7 +71,8 @@ describe("main pending approval helpers", () => {
     expect(readApprovedPendingApprovalContinuation(finderApproval)).toEqual({
       actionApproved: true,
       finderPlanApproved: true,
-      chromeSubmitApproved: false
+      chromeSubmitApproved: false,
+      chromeWorkflowApproved: false
     });
   });
 
@@ -97,11 +99,46 @@ describe("main pending approval helpers", () => {
     expect(readApprovedPendingApprovalContinuation(approval)).toEqual({
       actionApproved: true,
       finderPlanApproved: false,
-      chromeSubmitApproved: true
+      chromeSubmitApproved: true,
+      chromeWorkflowApproved: false
     });
     expect(approval.approvedChromeSubmitBinding).toEqual(binding);
     binding.fieldSelectors[0] = "#mutated";
     expect(approval.approvedChromeSubmitBinding?.fieldSelectors).toEqual(["#name"]);
+  });
+
+  it("resumes a Chrome workflow gate with a cloned value-free preview", () => {
+    const preview = {
+      planId: "chrome-workflow-test",
+      stepCount: 2,
+      steps: [
+        { stepKind: "fill" as const, selector: "#query", risk: "medium" as const },
+        { stepKind: "submit" as const, selector: "#go", risk: "high" as const }
+      ],
+      maxSteps: 12
+    };
+    const approval = createBoundPendingApproval({
+      command: "Chrome workflow search-form",
+      mode: "active",
+      identity: { turnId: "turn-workflow", toolCallId: "tool-workflow" },
+      route: { kind: "chrome", bundleId: CHROME_BUNDLE_ID },
+      gate: "chrome-workflow",
+      planId: "plan-chrome:workflow-derived",
+      actionApproved: true,
+      finderPlanApproved: false,
+      chromeWorkflowApproved: false,
+      approvedChromeWorkflowPreview: preview
+    });
+
+    expect(readApprovedPendingApprovalContinuation(approval)).toEqual({
+      actionApproved: true,
+      finderPlanApproved: false,
+      chromeSubmitApproved: false,
+      chromeWorkflowApproved: true
+    });
+    expect(approval.approvedChromeWorkflowPreview).toEqual(preview);
+    preview.steps[0].selector = "#mutated";
+    expect(approval.approvedChromeWorkflowPreview?.steps[0].selector).toEqual("#query");
   });
 
   it("preserves assistant tool identity and route state for approval resumption", () => {
@@ -143,6 +180,7 @@ describe("main pending approval helpers", () => {
       actionApproved: true,
       finderPlanApproved: false,
       chromeSubmitApproved: false,
+      chromeWorkflowApproved: false,
       approvedPlanPreview
     });
   });
@@ -172,7 +210,8 @@ describe("main pending approval helpers", () => {
       planId: "test-plan-tool-call-2",
       actionApproved: false,
       finderPlanApproved: false,
-      chromeSubmitApproved: false
+      chromeSubmitApproved: false,
+      chromeWorkflowApproved: false
     });
   });
 

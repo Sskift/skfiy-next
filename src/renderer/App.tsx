@@ -110,6 +110,7 @@ import {
   createAutomationFeedback,
   type AutomationFeedback
 } from "./app-automation-state";
+import { DEFAULT_AUTOMATION_RUN_SNAPSHOT } from "./app-automation-run-state";
 import {
   AutomationControlCenterPanel,
   type AutomationDefinitionDraft,
@@ -497,6 +498,9 @@ export default function App() {
   const [automationMonitors, setAutomationMonitors] = useState(
     DEFAULT_AUTOMATION_MONITOR_SNAPSHOT
   );
+  const [automationRuns, setAutomationRuns] = useState(
+    DEFAULT_AUTOMATION_RUN_SNAPSHOT
+  );
   const [automationFeedback, setAutomationFeedback] =
     useState<AutomationFeedback | null>(null);
   const [automationActionPending, setAutomationActionPending] = useState(false);
@@ -687,17 +691,37 @@ export default function App() {
     setAutomationMonitors(snapshot);
   }, []);
 
+  const applyAutomationRunSnapshot = useCallback((snapshot: typeof DEFAULT_AUTOMATION_RUN_SNAPSHOT) => {
+    setAutomationRuns(snapshot);
+  }, []);
+
   const refreshAutomationMonitors = useCallback(async () => {
     try {
       applyAutomationSnapshot(await api.getAutomationMonitors());
+      applyAutomationRunSnapshot(await api.getAutomationRuns());
     } catch {
       setAutomationFeedback(createAutomationFeedback("danger", "自动化监控状态不可用。"));
     }
-  }, [api, applyAutomationSnapshot]);
+  }, [api, applyAutomationSnapshot, applyAutomationRunSnapshot]);
 
   useEffect(() => {
     void refreshAutomationMonitors();
   }, [refreshAutomationMonitors]);
+
+  const stopAutomationRun = useCallback(
+    async (runId: string) => {
+      setAutomationActionPending(true);
+      try {
+        applyAutomationRunSnapshot(await api.stopAutomationRun(runId));
+        setAutomationFeedback(createAutomationFeedback("success", "已停止该运行。"));
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "停止运行失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api, applyAutomationRunSnapshot]
+  );
 
   const runAutomationMonitorNow = useCallback(
     async (id: string) => {
@@ -2361,7 +2385,9 @@ export default function App() {
                   onSubmitDefinition={(draft) => void submitAutomationDefinition(draft)}
                   onToggleEnabled={(id, enabled) => void toggleAutomationMonitor(id, enabled)}
                   preview={automationPreview}
+                  runs={automationRuns}
                   snapshot={automationMonitors}
+                  onStopRun={(runId) => void stopAutomationRun(runId)}
                 />
               </div>
             </>

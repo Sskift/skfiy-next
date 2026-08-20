@@ -1,9 +1,10 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runFinderOrganizationTask } from "./finder-task";
 import type { FinderPlanPreview } from "./finder-task";
+import { formatFinderTaskResultSummary } from "./finder-task-result";
 import type {
   DesktopActionResult,
   DesktopExecutableAction,
@@ -1341,7 +1342,7 @@ describe("runFinderOrganizationTask", () => {
       });
       expect(events.at(-1)).toMatchObject({
         type: "completed",
-        summary: "Finder test folder organized."
+        summary: "6 of 6 operations completed."
       });
       await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
         .resolves.toBe("image");
@@ -1418,7 +1419,7 @@ describe("runFinderOrganizationTask", () => {
     }
   });
 
-  it("fails closed instead of overwriting an existing destination file", async () => {
+  it("stops at a destination collision under the default cancel policy and reports the failed item", async () => {
     const rootPath = await createFixture();
 
     try {
@@ -1430,13 +1431,446 @@ describe("runFinderOrganizationTask", () => {
       );
 
       expect(events.at(-1)).toMatchObject({
-        type: "verification_failed",
-        stage: "file_operation",
-        reason: expect.stringContaining("Destination already exists")
+        type: "completed",
+        summary: "3 of 6 operations completed, 1 failed.",
+        result: {
+          collisionPolicy: "cancel",
+          totalOperationCount: 6,
+          completedCount: 3,
+          failedCount: 1,
+          skippedCount: 0,
+          destinationVerified: true,
+          resultingNamesVerified: true,
+          failedItems: [
+            {
+              operationType: "move_file",
+              from: path.join(rootPath, "photo.png"),
+              to: path.join(rootPath, "Images", "photo.png"),
+              errorCode: "destination-exists",
+              reason: expect.stringContaining("Destination already exists")
+            }
+          ]
+        }
       });
       await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
         .resolves.toBe("existing");
       await expect(readFile(path.join(rootPath, "photo.png"), "utf8"))
+        .resolves.toBe("image");
+      // Operations before the collision ran.
+      await expect(readFile(path.join(rootPath, "Documents", "notes.pdf"), "utf8"))
+        .resolves.toBe("document");
+      // Operations after the collision are never attempted.
+      await expect(stat(path.join(rootPath, "Code", "script.ts"))).rejects.toThrow();
+      await expect(readFile(path.join(rootPath, "script.ts"), "utf8"))
+        .resolves.toBe("code");
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("reports partial success when one move fails mid-execution", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      const task = runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, { approved: true });
+
+      const started = await task.next();
+      expect(started.value).toMatchObject({ type: "started" });
+      const preview = await task.next();
+      expect(preview.value).toMatchObject({ type: "plan_preview" });
+      const locating = await task.next();
+      expect(locating.value).toMatchObject({ type: "locating_app" });
+      const firstVerified = await task.next();
+      expect(firstVerified.value).toMatchObject({ type: "action_verified" });
+
+      // Delete a source that has not been moved yet (script.ts is the last operation).
+      await rm(path.join(rootPath, "script.ts"), { force: true });
+
+      const events: Array<Record<string, unknown>> = [];
+      for await (const event of task) {
+        events.push(event);
+      }
+
+      const completed = events.find((event) => event.type === "completed");
+      expect(completed).toMatchObject({
+        type: "completed",
+        result: {
+          totalOperationCount: 6,
+          completedCount: 5,
+          failedCount: 1,
+          skippedCount: 0,
+          destinationVerified: true,
+          resultingNamesVerified: true,
+          failedItems: [
+            {
+              operationType: "move_file",
+              from: path.join(rootPath, "script.ts"),
+              to: path.join(rootPath, "Code", "script.ts"),
+              errorCode: "source-missing"
+            }
+          ]
+        }
+      });
+      await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
+        .resolves.toBe("image");
+      await expect(readFile(path.join(rootPath, "Documents", "notes.pdf"), "utf8"))
+        .resolves.toBe("document");
+      await expect(stat(path.join(rootPath, "Code", "script.ts"))).rejects.toThrow();
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a colliding move under the skip collision policy and leaves the source in place", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      await mkdir(path.join(rootPath, "Images"), { recursive: true });
+      await writeFile(path.join(rootPath, "Images", "photo.png"), "existing");
+
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, {
+          approved: true,
+          collisionPolicy: "skip"
+        })
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "completed",
+        summary: "5 of 6 operations completed, 1 skipped.",
+        result: {
+          collisionPolicy: "skip",
+          totalOperationCount: 6,
+          completedCount: 5,
+          failedCount: 0,
+          skippedCount: 1,
+          destinationVerified: true,
+          resultingNamesVerified: true,
+          completedItems: expect.arrayContaining([
+            expect.objectContaining({
+              operationType: "move_file",
+              from: path.join(rootPath, "photo.png"),
+              to: path.join(rootPath, "Images", "photo.png"),
+              resolution: "skip"
+            })
+          ])
+        }
+      });
+      await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
+        .resolves.toBe("existing");
+      await expect(readFile(path.join(rootPath, "photo.png"), "utf8"))
+        .resolves.toBe("image");
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-renames a colliding move under the rename collision policy", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      await mkdir(path.join(rootPath, "Images"), { recursive: true });
+      await writeFile(path.join(rootPath, "Images", "photo.png"), "existing");
+
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, {
+          approved: true,
+          collisionPolicy: "rename"
+        })
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "completed",
+        summary: "6 of 6 operations completed.",
+        result: {
+          collisionPolicy: "rename",
+          totalOperationCount: 6,
+          completedCount: 6,
+          failedCount: 0,
+          skippedCount: 0,
+          destinationVerified: true,
+          resultingNamesVerified: true,
+          completedItems: expect.arrayContaining([
+            expect.objectContaining({
+              operationType: "move_file",
+              from: path.join(rootPath, "photo.png"),
+              to: path.join(rootPath, "Images", "photo (1).png"),
+              resultingName: "photo (1).png",
+              resolution: "rename"
+            })
+          ])
+        }
+      });
+      await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
+        .resolves.toBe("existing");
+      await expect(readFile(path.join(rootPath, "Images", "photo (1).png"), "utf8"))
+        .resolves.toBe("image");
+      await expect(stat(path.join(rootPath, "photo.png"))).rejects.toThrow();
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the full result structure with verification flags when all operations succeed", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, { approved: true })
+      );
+
+      const completed = events.at(-1) as { type: string; summary: string; result: Record<string, unknown> };
+      expect(completed.type).toBe("completed");
+      expect(completed.summary).toBe("6 of 6 operations completed.");
+      expect(completed.result).toMatchObject({
+        schemaVersion: 1,
+        rootPath,
+        destinationPath: rootPath,
+        collisionPolicy: "cancel",
+        totalOperationCount: 6,
+        completedCount: 6,
+        failedCount: 0,
+        skippedCount: 0,
+        destinationVerified: true,
+        resultingNamesVerified: true
+      });
+      expect(completed.summary).toBe(formatFinderTaskResultSummary(completed.result as never));
+      expect(completed.result.completedItems).toHaveLength(6);
+      expect(completed.result.failedItems).toHaveLength(0);
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("emits operationId on action_verified events for per-operation correlation", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, { approved: true })
+      );
+
+      const verified = events.filter((event) => event.type === "action_verified");
+      expect(verified).toHaveLength(6);
+      for (const event of verified) {
+        expect(event.operationId).toEqual(expect.stringMatching(/^op-\d+$/));
+      }
+
+      const completed = events.at(-1) as { result: { completedItems: Array<{ operationId: string }> } };
+      const verifiedIds = verified.map((event) => event.operationId);
+      const completedIds = completed.result.completedItems.map((item) => item.operationId);
+      expect(verifiedIds.sort()).toEqual(completedIds.sort());
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("maps a permission-denied filesystem error to the permission-denied error code", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      const task = runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, { approved: true });
+
+      const started = await task.next();
+      expect(started.value).toMatchObject({ type: "started" });
+      await task.next(); // plan_preview
+      await task.next(); // locating_app
+      await task.next(); // action_verified: create Documents
+      await task.next(); // action_verified: move notes.pdf
+      await task.next(); // action_verified: create Images
+
+      // Make the Images folder read-only so the photo.png move is denied.
+      await chmod(path.join(rootPath, "Images"), 0o555);
+
+      const events: Array<Record<string, unknown>> = [];
+      for await (const event of task) {
+        events.push(event);
+      }
+
+      const completed = events.find((event) => event.type === "completed");
+      expect(completed).toMatchObject({
+        result: {
+          completedCount: 5,
+          failedCount: 1,
+          failedItems: [
+            expect.objectContaining({
+              operationType: "move_file",
+              from: path.join(rootPath, "photo.png"),
+              errorCode: "permission-denied"
+            })
+          ]
+        }
+      });
+    } finally {
+      await chmod(path.join(rootPath, "Images"), 0o755).catch(() => undefined);
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the injected file client and maps atomic move states to error codes", async () => {
+    const rootPath = await createFixture();
+    const atomicMoveFileNoReplace = vi.fn(async (request: { sourcePath: string; destinationPath: string }) => {
+      await rename(request.sourcePath, request.destinationPath);
+      return { state: "moved" as const };
+    });
+    const atomicCopyFileNoReplace = vi.fn(async () => ({ state: "copied" as const }));
+
+    try {
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, {
+          approved: true,
+          fileClient: { atomicMoveFileNoReplace, atomicCopyFileNoReplace }
+        })
+      );
+
+      expect(atomicMoveFileNoReplace).toHaveBeenCalledTimes(3);
+      expect(events.at(-1)).toMatchObject({
+        type: "completed",
+        result: {
+          completedCount: 6,
+          failedCount: 0,
+          destinationVerified: true,
+          resultingNamesVerified: true
+        }
+      });
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("maps an atomic source-changed state to the source-changed error code", async () => {
+    const rootPath = await createFixture();
+    const fileClient = {
+      async atomicMoveFileNoReplace() {
+        return { state: "source-changed" as const };
+      },
+      async atomicCopyFileNoReplace() {
+        return { state: "copied" as const };
+      }
+    };
+
+    try {
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, {
+          approved: true,
+          fileClient: fileClient
+        })
+      );
+
+      const completed = events.at(-1) as { result: Record<string, unknown> };
+      expect(completed.result).toMatchObject({
+        completedCount: 3,
+        failedCount: 3,
+        failedItems: expect.arrayContaining([
+          expect.objectContaining({ errorCode: "source-changed" })
+        ])
+      });
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("treats the replace policy as cancel when the plan was not approved", async () => {
+    const rootPath = await createFixture();
+
+    try {
+      await mkdir(path.join(rootPath, "Images"), { recursive: true });
+      await writeFile(path.join(rootPath, "Images", "photo.png"), "existing");
+
+      const events = await collectEvents(
+        runFinderOrganizationTask(`整理 Finder 测试文件夹 ${rootPath}`, {
+          approved: true,
+          collisionPolicy: "replace"
+        })
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "completed",
+        result: {
+          completedCount: 3,
+          failedCount: 1,
+          failedItems: [
+            expect.objectContaining({
+              errorCode: "destination-exists"
+            })
+          ]
+        }
+      });
+      await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
+        .resolves.toBe("existing");
+    } finally {
+      await rm(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it("overwrites a colliding destination under the replace policy with plan approval", async () => {
+    const rootPath = await createFixture();
+    const desktopClient = {
+      async executeAction(action: DesktopExecutableAction): Promise<DesktopActionResult> {
+        return action.type === "observe_app"
+          ? {
+              bundleId: "com.apple.finder",
+              isRunning: true,
+              isActive: true,
+              screenshotPath: action.screenshotOutputPath,
+              frontmostBundleId: "com.apple.finder",
+              accessibilityTrusted: true,
+              windows: []
+            }
+          : { ok: true };
+      },
+      async getFinderSelection() {
+        return {
+          source: "finder-applescript" as const,
+          targetPath: rootPath,
+          selection: [{
+            path: path.join(rootPath, "photo.png"),
+            name: "photo.png",
+            kind: "file" as const
+          }]
+        };
+      }
+    };
+
+    try {
+      await mkdir(path.join(rootPath, "Images"), { recursive: true });
+      await writeFile(path.join(rootPath, "Images", "photo.png"), "existing");
+
+      const previewEvents = await collectEvents(
+        runFinderOrganizationTask("整理 Finder 选中项目", {
+          approved: true,
+          desktopClient
+        })
+      );
+      const approvedPlanPreview = previewEvents.find((event) => event.type === "plan_preview")
+        ?.preview as FinderPlanPreview | undefined;
+
+      const events = await collectEvents(
+        runFinderOrganizationTask("整理 Finder 选中项目", {
+          approved: true,
+          planApproved: true,
+          approvedPlanPreview,
+          desktopClient,
+          collisionPolicy: "replace"
+        })
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        type: "completed",
+        result: {
+          collisionPolicy: "replace",
+          completedCount: 2,
+          failedCount: 0,
+          completedItems: expect.arrayContaining([
+            expect.objectContaining({
+              operationType: "move_file",
+              resolution: "replace",
+              resultingName: "photo.png"
+            })
+          ])
+        }
+      });
+      await expect(readFile(path.join(rootPath, "Images", "photo.png"), "utf8"))
         .resolves.toBe("image");
     } finally {
       await rm(rootPath, { recursive: true, force: true });

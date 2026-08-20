@@ -15,11 +15,54 @@ export interface FinderPlanPreviewTranscriptPayload {
   copyFiles?: Array<{ from: string; to: string }>;
 }
 
+export interface FinderTaskResultTranscriptPayload {
+  schemaVersion: 1;
+  rootPath: string;
+  destinationPath: string;
+  collisionPolicy: "cancel" | "skip" | "rename" | "replace";
+  totalOperationCount: number;
+  completedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  completedItems: Array<{
+    operationId: string;
+    operationType: "create_folder" | "move_file" | "copy_file";
+    from?: string;
+    to: string;
+    resultingName: string;
+    resolution: "create" | "move" | "copy" | "skip" | "rename" | "replace";
+  }>;
+  failedItems: Array<{
+    operationId: string;
+    operationType: "create_folder" | "move_file" | "copy_file";
+    from?: string;
+    to: string;
+    reason: string;
+    errorCode: string;
+  }>;
+  destinationVerified: boolean;
+  resultingNamesVerified: boolean;
+}
+
 export interface ChromeSubmitConfirmationTranscriptPayload {
   schemaVersion: 1;
   url: string;
   fieldSelectors: string[];
   submitSelector: string;
+}
+
+export interface ChromeWorkflowStepPreviewTranscriptPayload {
+  stepKind: string;
+  selector?: string;
+  url?: string;
+  risk: string;
+}
+
+export interface ChromeWorkflowPlanPreviewTranscriptPayload {
+  planId: string;
+  stepCount: number;
+  steps: ChromeWorkflowStepPreviewTranscriptPayload[];
+  maxSteps: number;
 }
 
 export type ComputerUseTurnEvent =
@@ -30,6 +73,70 @@ export type ComputerUseTurnEvent =
     command: string;
     binding: ChromeSubmitConfirmationTranscriptPayload;
     reason: string;
+  }
+  | {
+    type: "workflow_confirmation_required";
+    command: string;
+    preview: ChromeWorkflowPlanPreviewTranscriptPayload;
+    reason: string;
+  }
+  | {
+    type: "navigation_detected";
+    fromUrl: string;
+    toUrl: string;
+    stepIndex: number;
+    reason: string;
+  }
+  | {
+    type: "new_tab_detected";
+    tabUrl: string;
+    stepIndex: number;
+    reason: string;
+  }
+  | {
+    type: "auth_wall_detected";
+    url: string;
+    reason: string;
+    safetyFindings: Array<{ kind: string; severity: string }>;
+  }
+  | {
+    type: "download_detected";
+    downloadUrl: string;
+    stepIndex: number;
+    reason: string;
+  }
+  | {
+    type: "page_reload_detected";
+    url: string;
+    stepIndex: number;
+    reason: string;
+  }
+  | {
+    type: "dom_verification_passed";
+    stepIndex: number;
+    selector: string;
+    expected: string;
+    actual: string;
+  }
+  | {
+    type: "dom_verification_failed";
+    stepIndex: number;
+    selector: string;
+    expected: string;
+    actual: string;
+    screenshotPath?: string;
+  }
+  | {
+    type: "workflow_step_started";
+    stepIndex: number;
+    stepKind: string;
+    selector?: string;
+  }
+  | {
+    type: "workflow_step_completed";
+    stepIndex: number;
+    stepKind: string;
+    status: "passed";
   }
   | {
     type: "tool_call";
@@ -105,7 +212,12 @@ export type ComputerUseTurnEvent =
   | { type: "typing"; command: string }
   | { type: "submitted"; key: "enter" }
   | { type: "screenshot_after"; path: string; observation: DesktopAppState }
-  | { type: "completed"; command: string; summary: string };
+  | {
+      type: "completed";
+      command: string;
+      summary: string;
+      result?: FinderTaskResultTranscriptPayload;
+    };
 
 export interface TurnTranscriptApp {
   name: string;
@@ -192,6 +304,43 @@ export type TurnTranscriptAction =
     reason: string;
   }
   | {
+    type: "confirm_chrome_workflow";
+    planId: string;
+    stepCount: number;
+    maxSteps: number;
+    reason: string;
+  }
+  | {
+    type: "chrome_page_event";
+    kind:
+      | "navigation_detected"
+      | "new_tab_detected"
+      | "auth_wall_detected"
+      | "download_detected"
+      | "page_reload_detected";
+    stepIndex?: number;
+    fromUrl?: string;
+    toUrl?: string;
+    url?: string;
+    reason: string;
+  }
+  | {
+    type: "chrome_dom_verification";
+    status: "passed" | "failed";
+    stepIndex: number;
+    selector: string;
+    expected: string;
+    actual: string;
+    screenshotPath?: string;
+  }
+  | {
+    type: "chrome_workflow_step";
+    status: "started" | "completed";
+    stepIndex: number;
+    stepKind: string;
+    selector?: string;
+  }
+  | {
     type: "recover";
     action: "activate" | "open" | "reobserve";
     stage: string;
@@ -227,6 +376,7 @@ export interface TurnTranscript {
   screenshots: TurnTranscriptScreenshot[];
   actions: TurnTranscriptAction[];
   outcome: TurnTranscriptOutcome;
+  finderTaskResult?: FinderTaskResultTranscriptPayload;
 }
 
 export function createTurnTranscript(
@@ -240,6 +390,7 @@ export function createTurnTranscript(
   let planner: TurnTranscriptPlanner | undefined;
   let approvalRequired = false;
   let outcome: TurnTranscriptOutcome = "running";
+  let finderTaskResult: FinderTaskResultTranscriptPayload | undefined;
 
   for (const event of events) {
     switch (event.type) {
@@ -263,6 +414,141 @@ export function createTurnTranscript(
           fieldSelectors: [...event.binding.fieldSelectors],
           submitSelector: event.binding.submitSelector,
           reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "workflow_confirmation_required":
+        command = event.command;
+        approvalRequired = true;
+        outcome = "approval_required";
+        actions.push({
+          type: "confirm_chrome_workflow",
+          planId: event.preview.planId,
+          stepCount: event.preview.stepCount,
+          maxSteps: event.preview.maxSteps,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "navigation_detected":
+        actions.push({
+          type: "chrome_page_event",
+          kind: "navigation_detected",
+          stepIndex: event.stepIndex,
+          fromUrl: event.fromUrl,
+          toUrl: event.toUrl,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "new_tab_detected":
+        actions.push({
+          type: "chrome_page_event",
+          kind: "new_tab_detected",
+          stepIndex: event.stepIndex,
+          url: event.tabUrl,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "auth_wall_detected":
+        actions.push({
+          type: "chrome_page_event",
+          kind: "auth_wall_detected",
+          url: event.url,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "download_detected":
+        actions.push({
+          type: "chrome_page_event",
+          kind: "download_detected",
+          stepIndex: event.stepIndex,
+          url: event.downloadUrl,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "page_reload_detected":
+        actions.push({
+          type: "chrome_page_event",
+          kind: "page_reload_detected",
+          stepIndex: event.stepIndex,
+          url: event.url,
+          reason: event.reason
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "dom_verification_passed":
+        actions.push({
+          type: "chrome_dom_verification",
+          status: "passed",
+          stepIndex: event.stepIndex,
+          selector: event.selector,
+          expected: event.expected,
+          actual: event.actual
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "dom_verification_failed":
+        actions.push({
+          type: "chrome_dom_verification",
+          status: "failed",
+          stepIndex: event.stepIndex,
+          selector: event.selector,
+          expected: event.expected,
+          actual: event.actual,
+          ...(event.screenshotPath ? { screenshotPath: event.screenshotPath } : {})
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "workflow_step_started":
+        actions.push({
+          type: "chrome_workflow_step",
+          status: "started",
+          stepIndex: event.stepIndex,
+          stepKind: event.stepKind,
+          ...(event.selector ? { selector: event.selector } : {})
+        });
+        mergeApp(apps, {
+          name: "Chrome",
+          bundleId: "com.google.Chrome"
+        });
+        break;
+      case "workflow_step_completed":
+        actions.push({
+          type: "chrome_workflow_step",
+          status: "completed",
+          stepIndex: event.stepIndex,
+          stepKind: event.stepKind
         });
         mergeApp(apps, {
           name: "Chrome",
@@ -437,6 +723,7 @@ export function createTurnTranscript(
       case "completed":
         command = event.command;
         outcome = "completed";
+        finderTaskResult = event.result;
         break;
     }
   }
@@ -449,7 +736,8 @@ export function createTurnTranscript(
     apps: Array.from(apps.values()),
     screenshots,
     actions,
-    outcome
+    outcome,
+    ...(finderTaskResult ? { finderTaskResult } : {})
   };
 }
 

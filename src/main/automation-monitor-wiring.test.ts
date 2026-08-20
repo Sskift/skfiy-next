@@ -13,7 +13,9 @@ describe("automation monitor main-process wiring", () => {
       "skfiy:duplicate-automation-monitor",
       "skfiy:set-automation-monitor-enabled",
       "skfiy:delete-automation-monitor",
-      "skfiy:preview-tmux-automation"
+      "skfiy:preview-tmux-automation",
+      "skfiy:get-automation-runs",
+      "skfiy:stop-automation-run"
     ]) {
       expect(source).toContain(channel);
     }
@@ -31,18 +33,20 @@ describe("automation monitor main-process wiring", () => {
     expect(payloadSource).not.toContain("preview:");
   });
 
-  it("starts the manager when the app is ready and stops it before quit", () => {
+  it("starts the manager and supervisor when the app is ready and stops them before quit", () => {
     const source = readMainSource();
 
     const readyIndex = source.indexOf("app.whenReady()");
     expect(readyIndex).toBeGreaterThan(-1);
     const readyBlock = source.slice(readyIndex, source.indexOf("app.on(\"activate\"", readyIndex));
     expect(readyBlock).toContain("automationMonitorManager.start()");
+    expect(readyBlock).toContain("automationRunSupervisor.start()");
 
     const quitIndex = source.indexOf("app.on(\"before-quit\"");
     expect(quitIndex).toBeGreaterThan(-1);
     const quitBlock = source.slice(quitIndex, source.indexOf("app.on(\"window-all-closed\"", quitIndex));
     expect(quitBlock).toContain("automationMonitorManager.stop()");
+    expect(quitBlock).toContain("automationRunSupervisor.stop()");
   });
 });
 

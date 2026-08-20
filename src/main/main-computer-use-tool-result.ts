@@ -14,11 +14,14 @@ export function isSameComputerUseToolIdentity(
 
 export function createToolResultFromTaskEvent(event: ComputerUseTaskEvent): AssistantComputerUseToolResult | undefined {
   if (event.type === "completed") {
+    const result = "result" in event ? event.result : undefined;
     return {
       status: "completed",
       summary: event.summary,
       evidence: {
-        summary: "Computer Use route completed with replayed orchestration events."
+        summary: result
+          ? `Computer Use route completed with replayed orchestration events. ${event.summary}`
+          : "Computer Use route completed with replayed orchestration events."
       }
     };
   }

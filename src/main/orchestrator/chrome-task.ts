@@ -14,8 +14,8 @@ import type {
 } from "../computer-use/types.js";
 import type { RiskDecision } from "../../shared/types.js";
 
-const CHROME_APP_NAME = "Chrome";
-const CHROME_BUNDLE_ID = "com.google.Chrome";
+export const CHROME_APP_NAME = "Chrome";
+export const CHROME_BUNDLE_ID = "com.google.Chrome";
 const CHROME_PAGE_PREFIX = "打开 Chrome 测试页面 ";
 const CHROME_PAGE_SUFFIX = " 并提取正文";
 const CHROME_CURRENT_PAGE_COMMAND = "观察 Chrome 当前页面并提取正文";
@@ -71,6 +71,40 @@ type ChromePageIntent =
     }
   | { ok: false; reason: string };
 
+import type { ChromeWorkflowStepKind } from "../computer-use/chrome-workflow-template.js";
+
+export type { ChromeWorkflowStepKind };
+
+export type ChromeWorkflowStepRisk = "low" | "medium" | "high";
+
+/** Value-free preview of one workflow step: kind, selector, URL, and risk — never fill values. */
+export interface ChromeWorkflowStepPreview {
+  stepKind: ChromeWorkflowStepKind;
+  selector?: string;
+  url?: string;
+  risk: ChromeWorkflowStepRisk;
+}
+
+/** Value-free multi-step workflow plan preview used by the chrome-workflow approval gate. */
+export interface ChromeWorkflowPlanPreview {
+  planId: string;
+  stepCount: number;
+  steps: ChromeWorkflowStepPreview[];
+  maxSteps: number;
+}
+
+/** Typed blocker codes for verification failures. Extends the original target_changed code. */
+export type ChromeVerificationBlockerCode =
+  | "target_changed"
+  | "navigation_detected"
+  | "new_tab_opened"
+  | "auth_wall_detected"
+  | "download_triggered"
+  | "page_reloaded"
+  | "dom_verification_failed"
+  | "tab_not_found"
+  | "stale_request";
+
 export type ChromeTaskEvent =
   | {
       type: "started";
@@ -89,6 +123,12 @@ export type ChromeTaskEvent =
       reason: string;
     }
   | {
+      type: "workflow_confirmation_required";
+      command: string;
+      preview: ChromeWorkflowPlanPreview;
+      reason: string;
+    }
+  | {
       type: "locating_app";
       appName: string;
     }
@@ -101,7 +141,7 @@ export type ChromeTaskEvent =
       type: "fallback_switch";
       from: "cdp";
       to: "screenshot_fallback";
-      stage: "connection" | "navigation" | "extraction";
+      stage: "connection" | "navigation" | "interaction" | "verification" | "extraction";
       reason: string;
     }
   | {
@@ -116,14 +156,23 @@ export type ChromeTaskEvent =
         | "fill_selector"
         | "click_selector"
         | "extract_text"
-        | "current_page_snapshot";
+        | "current_page_snapshot"
+        | "scroll"
+        | "verify";
       status: "passed";
       message: string;
     }
   | {
       type: "verification_failed";
-      stage: "input" | "connection" | "navigation" | "interaction" | "extraction" | "sensitive";
-      code?: "target_changed";
+      stage:
+        | "input"
+        | "connection"
+        | "navigation"
+        | "interaction"
+        | "verification"
+        | "extraction"
+        | "sensitive";
+      code?: ChromeVerificationBlockerCode;
       reason: string;
     }
   | {
@@ -131,6 +180,64 @@ export type ChromeTaskEvent =
       stage: "interaction";
       action: "reobserve";
       reason: string;
+    }
+  | {
+      type: "navigation_detected";
+      fromUrl: string;
+      toUrl: string;
+      stepIndex: number;
+      reason: string;
+    }
+  | {
+      type: "new_tab_detected";
+      tabUrl: string;
+      stepIndex: number;
+      reason: string;
+    }
+  | {
+      type: "auth_wall_detected";
+      url: string;
+      reason: string;
+      safetyFindings: Array<{ kind: string; severity: string }>;
+    }
+  | {
+      type: "download_detected";
+      downloadUrl: string;
+      stepIndex: number;
+      reason: string;
+    }
+  | {
+      type: "page_reload_detected";
+      url: string;
+      stepIndex: number;
+      reason: string;
+    }
+  | {
+      type: "dom_verification_passed";
+      stepIndex: number;
+      selector: string;
+      expected: string;
+      actual: string;
+    }
+  | {
+      type: "dom_verification_failed";
+      stepIndex: number;
+      selector: string;
+      expected: string;
+      actual: string;
+      screenshotPath?: string;
+    }
+  | {
+      type: "workflow_step_started";
+      stepIndex: number;
+      stepKind: ChromeWorkflowStepKind;
+      selector?: string;
+    }
+  | {
+      type: "workflow_step_completed";
+      stepIndex: number;
+      stepKind: ChromeWorkflowStepKind;
+      status: "passed";
     }
   | {
       type: "completed";
@@ -442,14 +549,14 @@ function createChromeInteractionFailureEvent(
   };
 }
 
-function readPageIdentity(snapshot: ChromeCurrentPageSnapshot): BrowserPageIdentity {
+export function readPageIdentity(snapshot: ChromeCurrentPageSnapshot): BrowserPageIdentity {
   return {
     url: snapshot.url,
     documentId: snapshot.documentId
   };
 }
 
-function isSamePageIdentity(
+export function isSamePageIdentity(
   left: BrowserPageIdentity,
   right: BrowserPageIdentity
 ): boolean {
@@ -466,6 +573,11 @@ export function requiresChromeSubmitConfirmation(input: string): boolean {
   return parsed.ok && isChromeFormIntent(parsed);
 }
 
+/** True when the value matches the shared sensitive-text patterns (credentials, payments, secrets). */
+export function hasSensitiveChromeText(value: string): boolean {
+  return hasSensitiveText(value);
+}
+
 function hasSensitiveText(value: string): boolean {
   return SENSITIVE_CHROME_TEXT_PATTERNS.some((pattern) => pattern.test(value));
 }
@@ -476,10 +588,10 @@ function hasSensitiveFormInput(fields: readonly ChromeFormField[]): boolean {
   );
 }
 
-async function* captureChromeScreenshotFallback(
+export async function* captureChromeScreenshotFallback(
   options: ChromeTaskOptions,
   failure: {
-    stage: "connection" | "navigation" | "extraction";
+    stage: "connection" | "navigation" | "interaction" | "verification" | "extraction";
     reason: string;
   } = {
     stage: "connection",
@@ -503,15 +615,16 @@ async function* captureChromeScreenshotFallback(
     return;
   }
 
-  const activation = await executeChromeDesktopAction(
+  const observation = await observeChromeDesktopScreenshot(
     options.desktopClient,
-    { type: "activate_app", bundleId: CHROME_BUNDLE_ID }
+    options.createScreenshotPath
   );
-  if (!activation.ok) {
+
+  if (!observation.ok) {
     yield {
       type: "verification_failed",
       stage: failure.stage,
-      reason: `${failure.reason} screenshot fallback activation failed: ${activation.reason}`
+      reason: `${failure.reason} ${observation.reason}`
     };
     return;
   }
@@ -522,10 +635,48 @@ async function* captureChromeScreenshotFallback(
     bundleId: CHROME_BUNDLE_ID
   };
 
-  const screenshotOutputPath = options.createScreenshotPath?.("fallback")
+  yield {
+    type: "screenshot_before",
+    path: observation.result.path,
+    observation: observation.result.observation
+  };
+
+  yield {
+    type: "verification_failed",
+    stage: failure.stage,
+    reason: `${failure.reason} screenshot fallback observation captured: ${observation.result.path}`
+  };
+}
+
+/**
+ * Activates Chrome and captures one observe_app screenshot. Shared by the CDP
+ * fallback path and the DOM-verification screenshot fallback.
+ */
+export async function observeChromeDesktopScreenshot(
+  desktopClient: ChromeDesktopClient,
+  createScreenshotPath?: (stage: "fallback") => string
+): Promise<
+  | {
+      ok: true;
+      result: { path: string; observation: DesktopAppState };
+    }
+  | { ok: false; reason: string }
+> {
+  const activation = await executeChromeDesktopAction(
+    desktopClient,
+    { type: "activate_app", bundleId: CHROME_BUNDLE_ID }
+  );
+  if (!activation.ok) {
+    return {
+      ok: false,
+      reason: `screenshot fallback activation failed: ${activation.reason}`
+    };
+  }
+
+  const screenshotOutputPath = createScreenshotPath?.("fallback")
     ?? defaultChromeFallbackScreenshotPath();
   const observation = await executeChromeDesktopAction(
-    options.desktopClient,
+    desktopClient,
     {
       type: "observe_app",
       bundleId: CHROME_BUNDLE_ID,
@@ -534,33 +685,25 @@ async function* captureChromeScreenshotFallback(
   );
 
   if (!observation.ok) {
-    yield {
-      type: "verification_failed",
-      stage: failure.stage,
-      reason: `${failure.reason} screenshot fallback failed: ${observation.reason}`
+    return {
+      ok: false,
+      reason: `screenshot fallback failed: ${observation.reason}`
     };
-    return;
   }
 
   if (!isDesktopAppState(observation.result)) {
-    yield {
-      type: "verification_failed",
-      stage: failure.stage,
-      reason: `${failure.reason} screenshot fallback did not return app state.`
+    return {
+      ok: false,
+      reason: "screenshot fallback did not return app state."
     };
-    return;
   }
 
-  yield {
-    type: "screenshot_before",
-    path: observation.result.screenshotPath,
-    observation: observation.result
-  };
-
-  yield {
-    type: "verification_failed",
-    stage: failure.stage,
-    reason: `${failure.reason} screenshot fallback observation captured: ${observation.result.screenshotPath}`
+  return {
+    ok: true,
+    result: {
+      path: observation.result.screenshotPath,
+      observation: observation.result
+    }
   };
 }
 
@@ -802,7 +945,7 @@ function readRuntimeStringResult(value: unknown): string {
   throw new Error("Chrome CDP extraction did not return a string value.");
 }
 
-function readCurrentPageSnapshotResult(value: unknown): ChromeCurrentPageSnapshot {
+export function readCurrentPageSnapshotResult(value: unknown): ChromeCurrentPageSnapshot {
   if (
     value
     && typeof value === "object"
@@ -832,6 +975,6 @@ function readCurrentPageSnapshotResult(value: unknown): ChromeCurrentPageSnapsho
   throw new Error("Chrome CDP current page snapshot did not return url, documentId, title, and text.");
 }
 
-function readErrorMessage(error: unknown, fallback: string): string {
+export function readErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }

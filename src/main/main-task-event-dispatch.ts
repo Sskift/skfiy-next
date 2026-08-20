@@ -2,6 +2,10 @@ import type { AssistantComputerUseToolResult } from "./assistant-computer-use-ex
 import { createToolResultFromTaskEvent } from "./main-computer-use-tool-result.js";
 import type { ExecutableCommandRoute } from "./task-routing.js";
 import type { FinderPlanPreview } from "./orchestrator/finder-task.js";
+import type {
+  ChromeSubmitConfirmationBinding,
+  ChromeWorkflowPlanPreview
+} from "./orchestrator/chrome-task.js";
 import {
   createTaskEvent,
   withRouteTaskEventMetadata,
@@ -14,7 +18,8 @@ export interface ComputerUseTaskEventApprovalRequest {
   command: string;
   planApproved: boolean;
   approvedPlanPreview?: FinderPlanPreview;
-  approvedChromeSubmitBinding?: import("./orchestrator/chrome-task.js").ChromeSubmitConfirmationBinding;
+  approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
+  approvedChromeWorkflowPreview?: ChromeWorkflowPlanPreview;
   reason: string;
 }
 
@@ -32,6 +37,7 @@ export function createComputerUseTaskEventDispatch({
   planApproved,
   route,
   chromeSubmitApproved,
+  chromeWorkflowApproved,
   approvedChromeSubmitBinding
 }: {
   approved: boolean;
@@ -41,10 +47,19 @@ export function createComputerUseTaskEventDispatch({
   planApproved: boolean;
   route: ExecutableCommandRoute;
   chromeSubmitApproved?: boolean;
-  approvedChromeSubmitBinding?: import("./orchestrator/chrome-task.js").ChromeSubmitConfirmationBinding;
+  chromeWorkflowApproved?: boolean;
+  approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
 }): ComputerUseTaskEventDispatch {
   return {
-    ...readComputerUseTaskEventApprovalRequest({ approved, command, event, planApproved, chromeSubmitApproved, approvedChromeSubmitBinding }),
+    ...readComputerUseTaskEventApprovalRequest({
+      approved,
+      command,
+      event,
+      planApproved,
+      chromeSubmitApproved,
+      chromeWorkflowApproved,
+      approvedChromeSubmitBinding
+    }),
     taskStatus: withRouteTaskEventMetadata(createTaskEvent(event, mode), route),
     toolResult: createToolResultFromTaskEvent(event)
   };
@@ -56,6 +71,7 @@ function readComputerUseTaskEventApprovalRequest({
   event,
   planApproved,
   chromeSubmitApproved,
+  chromeWorkflowApproved,
   approvedChromeSubmitBinding
 }: {
   approved: boolean;
@@ -63,7 +79,8 @@ function readComputerUseTaskEventApprovalRequest({
   event: ComputerUseTaskEvent;
   planApproved: boolean;
   chromeSubmitApproved?: boolean;
-  approvedChromeSubmitBinding?: import("./orchestrator/chrome-task.js").ChromeSubmitConfirmationBinding;
+  chromeWorkflowApproved?: boolean;
+  approvedChromeSubmitBinding?: ChromeSubmitConfirmationBinding;
 }): Pick<ComputerUseTaskEventDispatch, "approvalRequest"> {
   if (event.type === "approval_required" && !approved) {
     return {
@@ -97,6 +114,17 @@ function readComputerUseTaskEventApprovalRequest({
         planApproved: true,
         approvedChromeSubmitBinding: approvedChromeSubmitBinding ?? event.binding,
         reason: "reason" in event ? event.reason : "Chrome submit confirmation required."
+      }
+    };
+  }
+
+  if (event.type === "workflow_confirmation_required" && !chromeWorkflowApproved) {
+    return {
+      approvalRequest: {
+        command,
+        planApproved: true,
+        approvedChromeWorkflowPreview: event.preview,
+        reason: event.reason
       }
     };
   }

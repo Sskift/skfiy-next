@@ -20,6 +20,13 @@ export interface TmuxMonitorInput {
   timeoutMs?: number;
   triggerMode?: "manual" | "scheduled" | "local-state";
   enabled?: boolean;
+  concurrencyPolicy?: "skip" | "queue" | "allow";
+  maxConcurrency?: number;
+  maxAttempts?: number;
+  backoffMs?: number;
+  backoffMultiplier?: number;
+  maxBackoffMs?: number;
+  runTtlMs?: number;
 }
 
 export interface TmuxAutomationPreviewInput {
@@ -182,6 +189,13 @@ export function readTmuxMonitorInput(input: unknown): TmuxMonitorInput {
   const triggerMode = readAutomationMonitorTriggerMode(record.triggerMode);
   const enabled = typeof record.enabled === "boolean" ? record.enabled : undefined;
   const monitorId = readAutomationMonitorId(record.monitorId);
+  const concurrencyPolicy = readAutomationConcurrencyPolicy(record.concurrencyPolicy);
+  const maxConcurrency = readFiniteNumber(record.maxConcurrency);
+  const maxAttempts = readFiniteNumber(record.maxAttempts);
+  const backoffMs = readFiniteNumber(record.backoffMs);
+  const backoffMultiplier = readFiniteNumber(record.backoffMultiplier);
+  const maxBackoffMs = readFiniteNumber(record.maxBackoffMs);
+  const runTtlMs = readFiniteNumber(record.runTtlMs);
 
   return {
     ...(monitorId ? { monitorId } : {}),
@@ -190,7 +204,14 @@ export function readTmuxMonitorInput(input: unknown): TmuxMonitorInput {
     intervalMs,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(triggerMode === undefined ? {} : { triggerMode }),
-    ...(enabled === undefined ? {} : { enabled })
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(concurrencyPolicy === undefined ? {} : { concurrencyPolicy }),
+    ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
+    ...(maxAttempts === undefined ? {} : { maxAttempts }),
+    ...(backoffMs === undefined ? {} : { backoffMs }),
+    ...(backoffMultiplier === undefined ? {} : { backoffMultiplier }),
+    ...(maxBackoffMs === undefined ? {} : { maxBackoffMs }),
+    ...(runTtlMs === undefined ? {} : { runTtlMs })
   };
 }
 
@@ -222,6 +243,27 @@ export function readAutomationMonitorId(value: unknown): string | undefined {
     && /^tmux-session:[A-Za-z0-9_.:-]+$/u.test(normalized)
     ? normalized
     : undefined;
+}
+
+const MAX_AUTOMATION_RUN_ID_LENGTH = 240;
+
+export function readAutomationRunId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0
+    && normalized.length <= MAX_AUTOMATION_RUN_ID_LENGTH
+    && /^tmux-session:[A-Za-z0-9_.:-]+:run:\d+$/u.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function readAutomationConcurrencyPolicy(
+  value: unknown
+): TmuxMonitorInput["concurrencyPolicy"] | undefined {
+  return value === "skip" || value === "queue" || value === "allow" ? value : undefined;
 }
 
 function readAutomationMonitorTriggerMode(

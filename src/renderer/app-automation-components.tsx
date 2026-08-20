@@ -13,7 +13,8 @@ import type {
   AutomationMonitorDefinitionPreview,
   AutomationMonitorRuntime,
   AutomationMonitorSnapshot,
-  AutomationMonitorTriggerMode
+  AutomationMonitorTriggerMode,
+  AutomationRunSnapshot
 } from "./app-types";
 import {
   describeAutomationMonitorOutcome,
@@ -26,6 +27,7 @@ import {
   readAutomationTriggerModeLabel,
   type AutomationFeedback
 } from "./app-automation-state";
+import { AutomationRunPanel } from "./app-automation-run-components";
 
 export interface AutomationDefinitionDraft {
   monitorId?: string;
@@ -47,6 +49,7 @@ export interface AutomationPreviewState {
 
 export interface AutomationControlCenterPanelProps {
   snapshot: AutomationMonitorSnapshot;
+  runs: AutomationRunSnapshot;
   feedback: AutomationFeedback | null;
   actionPending: boolean;
   editor: AutomationEditorState | null;
@@ -62,10 +65,12 @@ export interface AutomationControlCenterPanelProps {
   onCancelEditor: () => void;
   onConfirmPreview: (enabled: boolean) => void;
   onCancelPreview: () => void;
+  onStopRun: (runId: string) => void;
 }
 
 export function AutomationControlCenterPanel({
   snapshot,
+  runs,
   feedback,
   actionPending,
   editor,
@@ -80,7 +85,8 @@ export function AutomationControlCenterPanel({
   onSubmitDefinition,
   onCancelEditor,
   onConfirmPreview,
-  onCancelPreview
+  onCancelPreview,
+  onStopRun
 }: AutomationControlCenterPanelProps) {
   return (
     <section className="automation-control-center" aria-label="自动化监控">
@@ -139,6 +145,11 @@ export function AutomationControlCenterPanel({
           onCancel={onCancelPreview}
         />
       ) : null}
+      <AutomationRunPanel
+        snapshot={runs}
+        actionPending={actionPending}
+        onStopRun={onStopRun}
+      />
       <AutomationFeedbackLine feedback={feedback} />
     </section>
   );

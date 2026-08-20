@@ -143,6 +143,11 @@ export interface AdapterCompletedEvent {
   type: "completed";
   command: string;
   summary: string;
+  /**
+   * Structured terminal result for adapters that report partial outcomes
+   * (e.g. Finder's completed/failed/skipped operation breakdown).
+   */
+  result?: unknown;
 }
 
 export interface AdapterVerificationFailedEvent {
