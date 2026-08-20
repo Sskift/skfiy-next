@@ -36,7 +36,7 @@ The pet renderer is intentionally independent from the backend: main emits task 
 ```bash
 nvm use            # Node 22
 npm install
-npm test           # vitest, ~886 tests, ~45s
+npm test           # vitest, ~1121 tests, ~45s
 npm run typecheck  # tsc --noEmit, strict, zero any
 npm run dev        # vite dev server (renderer)
 npm run dev:electron  # electron pointing at the dev server
@@ -45,7 +45,7 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~886 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1121 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
@@ -64,6 +64,10 @@ npm run build      # vite build + tsc electron + swift helper
   - Memory: pending write approval, journal, settings, dashboard panel (entries/usage/pending/journal)
   - Browser Context: tab targeting, freshness, pause/disconnect, blocker categories, renderer panel
   - Provider Discovery: registry, bounded test request, fallback, readiness badge, offline banner, discovery panel
+- [x] **M3 features shipped** — Automation Definitions, Adapter Contract, Workspace Profiles
+  - Automation: trigger modes (manual/scheduled/local-state), timeout enforcement, preview-before-save, duplicate/pause/resume/delete, control center panel
+  - Adapter Contract: unified 11-dimension contract, 4 thin adapters (ghostty/chrome/finder/tmux), registry, task-routing wired through registry
+  - Profiles: per-profile provider/planner/memory/app-policy, explicit switching, policy broadening guard, export/import, memory isolation, profile panel + indicator
 
 ## Cut from the old repo (intentionally)
 
