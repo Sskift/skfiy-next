@@ -10,7 +10,7 @@
 **Trigger:** any change that adds a state, retry, multi-tool behavior, or changes terminal outcome semantics requires model expansion across the remaining sites.
 
 ### 2. The Supported App Adapter interface is not one executable contract
-**Status: still open.** The adapter interface is normative in the roadmap but the four orchestrators (`ghostty-task`, `chrome-task`, `finder-task`, `tmux-supervision-task`) each define their own client interfaces.
+**Status: partially mitigated (2026-08-20).** The unified `AdapterContract` interface in `src/shared/adapter-contract.ts` now declares all eleven roadmap dimensions (route selection, capabilities, permissions, risk, plan schema, execution hooks, verification, stop behavior, replay events, typed blockers, smoke contract). Four thin adapter wrappers (`src/main/adapter/`) delegate to the existing orchestrators, and `task-routing.ts` consults the adapter registry. The orchestrators still define their own client interfaces internally, but the adapter contract provides the single executable surface for route selection, capability discovery, and approval gates.
 **Trigger:** adding an app, changing routing, or moving app-private approval data requires upgraded review.
 
 ### 3. Evidence semantics do not bind Claim/Oracle
