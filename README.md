@@ -36,7 +36,7 @@ The pet renderer is intentionally independent from the backend: main emits task 
 ```bash
 nvm use            # Node 22
 npm install
-npm test           # vitest, ~1296 tests, ~45s
+npm test           # vitest, ~1560 tests, ~45s
 npm run typecheck  # tsc --noEmit, strict, zero any
 npm run dev        # vite dev server (renderer)
 npm run dev:electron  # electron pointing at the dev server
@@ -45,7 +45,7 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1296 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1560 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
@@ -72,6 +72,10 @@ npm run build      # vite build + tsc electron + swift helper
   - Finder: structured result model, collision policies (cancel/skip/rename/replace), partial success, destination + name verification
   - Browser: page-state classifiers (navigation/reload/auth-wall/download/new-tab), DOM-first verification, value-free workflow templates, multi-step runner with per-step recovery
   - Automation Run: 8-state machine, single-flight concurrency, retry/backoff, TTL sweep, restart reconciliation, run panel with timeline
+- [x] **M5 features shipped** — Supervision Recovery, Unified Diagnostics, Data Export/Recovery
+  - Supervision: tmux recovery actions (send_input/restart_step/collect_summary) with two-gate approval, budgets, stalled/waiting/completed attention signals
+  - Diagnostics: 31 typed blockers from 7 state machines, 6 component versions, redaction before serialization, export preview
+  - Data Export: 5 domains (profiles/memory/sessions/automation/runtime), per-domain reset, storage health, migration with backup, retention controls, two-phase restore
 
 ## Cut from the old repo (intentionally)
 
