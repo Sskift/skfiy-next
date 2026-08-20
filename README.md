@@ -36,7 +36,7 @@ The pet renderer is intentionally independent from the backend: main emits task 
 ```bash
 nvm use            # Node 22
 npm install
-npm test           # vitest, ~1720 tests, ~50s
+npm test           # vitest, ~1835 tests, ~50s
 npm run typecheck  # tsc --noEmit, strict, zero any
 npm run dev        # vite dev server (renderer)
 npm run dev:electron  # electron pointing at the dev server
@@ -45,7 +45,7 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1720 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1835 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
@@ -81,6 +81,10 @@ npm run build      # vite build + tsc electron + swift helper
   - MCP: tools for status, observation, approved action, stop, replay with pet-level permission boundaries
   - Pet: keyboard paths (Enter/Space/Shift+F10/Escape), task event notifications, attention watchdog, skin panel with preview/import/reset, dynamic aria-labels
   - Ghostty: terminal context observation, command preview with risk, bounded exit status, retry events
+- [x] **M7 features shipped** — Install and Update: update mechanism, release workflow, extension compatibility
+  - Update: GitHub releases API check, update settings, first-launch/upgrade detection, IPC + preload wiring
+  - Release: GitHub Actions release workflow, build provenance (commit hash + build time), sign/notarize scripts, entitlements, release notes generation, release-process docs
+  - Compatibility: Chrome extension version compatibility check, native-host health, first-run readiness warning, diagnostic blockers, renderer banner
 
 ## Cut from the old repo (intentionally)
 
