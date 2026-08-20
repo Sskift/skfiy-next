@@ -50,7 +50,7 @@ npm run build      # vite build + tsc electron + swift helper
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
 - [x] **smoke:cli passes** — 5 dist-module contract collectors green
-- [x] smoke:chrome adapted (native-host/installed-extension lanes cut, CDP lanes kept)
+- [x] **smoke:chrome passes** — Chrome CDP integration, form fill, submit confirmation
 - [x] CI green on GitHub Actions (macOS: typecheck + vitest + build)
 - [x] **M1 features shipped** — first-run readiness, conversation continuity (session store + history wiring), task control (start/stop store + wiring)
 - [x] Task recovery dispatch (`task-recovery-dispatch` + registry + stage runtime)
