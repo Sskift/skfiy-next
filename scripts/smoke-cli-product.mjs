@@ -217,11 +217,11 @@ async function collectRealTurnIdentityProviderContract(runAssistantAgentTurn, se
       && prompt.includes("When asked who you are, answer as skfiy."),
     runnerSawUserPrompt: prompt.includes(`User: ${userInput}`),
     skfiyIdentityBeforeUser: identityIndex >= 0 && userIndex > identityIndex,
-    providerBoundaryPresent: prompt.includes("Codex is only the backend provider used to run this turn.")
-      && prompt.includes("Treat Codex as an internal backend implementation detail.")
-      && prompt.includes("Do not introduce yourself as Codex, an OpenAI model, or a generic assistant."),
+    providerBoundaryPresent: prompt.includes("Codex, Claude Code, and Hermes are only backend providers used to run this turn.")
+      && prompt.includes("Treat Codex, Claude Code, and Hermes as internal backend implementation details.")
+      && prompt.includes("Do not introduce yourself as Codex, Claude Code, Hermes, an OpenAI model, Anthropic Claude, or a generic assistant."),
     providerDefaultOverridePresent: prompt.includes("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply."),
-    replyPrefixBlocked: prompt.includes("Do not prefix replies with Codex: or any backend provider label."),
+    replyPrefixBlocked: prompt.includes("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label."),
     responseProviderLabel: turn.providerLabel,
     responseMessage: turn.message,
     runnerCwdIsProductRoot: capturedOptions?.cwd === ROOT_DIR,
@@ -497,16 +497,16 @@ function createProviderPromptContract(
   const browserContextIndex = prompt.indexOf("Current Chrome page");
   const userIndex = prompt.indexOf(`User: ${userInput}`);
   const providerIdentityInternalized = prompt.includes("The speaking assistant identity for this conversation is skfiy.")
-    && prompt.includes("Treat Codex as an internal backend implementation detail.")
-    && prompt.includes("If asked about the backend, explain that skfiy uses Codex behind the pet.")
+    && prompt.includes("Treat Codex, Claude Code, and Hermes as internal backend implementation details.")
+    && prompt.includes("If asked about the backend, explain that skfiy can use Codex, Claude Code, or Hermes behind the pet.")
     && prompt.includes("Speak from skfiy's first-person perspective");
   const identitySelfAcceptancePresent = prompt.includes("In real user-facing interaction, your active identity is skfiy.")
     && prompt.includes("Accept skfiy as your active identity for this user-facing interaction.");
   const providerDefaultOverridePresent = prompt.includes("If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.");
-  const replyPrefixBlocked = prompt.includes("Do not prefix replies with Codex: or any backend provider label.");
-  const providerBoundaryPresent = prompt.includes("Codex is only the backend provider used to run this turn.")
+  const replyPrefixBlocked = prompt.includes("Do not prefix replies with Codex:, Claude Code:, Hermes:, or any backend provider label.");
+  const providerBoundaryPresent = prompt.includes("Codex, Claude Code, and Hermes are only backend providers used to run this turn.")
     && prompt.includes("When asked who you are, answer as skfiy.")
-    && prompt.includes("Do not introduce yourself as Codex, an OpenAI model, or a generic assistant.")
+    && prompt.includes("Do not introduce yourself as Codex, Claude Code, Hermes, an OpenAI model, Anthropic Claude, or a generic assistant.")
     && prompt.includes("Computer Use is a tool capability")
     && prompt.includes("Do not execute commands, edit files, or control apps directly from this provider call.");
 
