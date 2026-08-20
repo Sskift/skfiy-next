@@ -59,7 +59,7 @@ npm run build      # vite build + tsc electron + swift helper
 - [x] Bounded Computer Use agent loop ported (step-budgeted plan/act/verify loop in `computer-use/agent-loop.ts`)
 - [x] Pet skin legacy WebP fallback (`origin-visible.webp` frame candidates)
 - [x] Automation monitor notifications (tmux-session monitor → attention/completed/failure notices)
-- [ ] Electron 39 → 43 upgrade
+- [x] Electron 39 → 43 upgrade (43.4.1, with explicit postinstall binary download)
 
 ## Cut from the old repo (intentionally)
 
