@@ -11,6 +11,7 @@ import {
   type FinderAutomationReadiness
 } from "./main-finder-automation-readiness.js";
 import type { BrowserReadinessEvidence } from "./main-browser-readiness.js";
+import type { ChromeCompatibilityHealth } from "./chrome-compatibility-health.js";
 
 export interface FirstRunReadinessControllerDependencies {
   readProviderReadiness: () => Promise<FirstRunProviderReadiness>;
@@ -25,6 +26,11 @@ export interface FirstRunReadinessControllerDependencies {
   }>;
   readBrowserReadiness: () => Promise<BrowserReadinessEvidence>;
   testFinderAutomation: () => Promise<FinderAutomationReadiness>;
+  /**
+   * Optional Chrome extension compatibility evidence. When supplied, the
+   * browser-context step carries a non-blocking compatibility warning.
+   */
+  readChromeCompatibility?: () => Promise<ChromeCompatibilityHealth>;
 }
 
 export interface FirstRunReadinessController {
@@ -53,10 +59,11 @@ export function createFirstRunReadinessController(
   const createSnapshot = async (
     providerReadiness: FirstRunProviderReadiness
   ): Promise<FirstRunReadinessSnapshot> => {
-    const [permissions, desktopSession, browser] = await Promise.all([
+    const [permissions, desktopSession, browser, compatibility] = await Promise.all([
       dependencies.readPermissions(),
       dependencies.readDesktopSession(),
-      dependencies.readBrowserReadiness()
+      dependencies.readBrowserReadiness(),
+      readChromeCompatibilitySafely(dependencies.readChromeCompatibility)
     ]);
     const snapshot = createFirstRunReadinessSnapshot({
       providerReadiness,
@@ -77,7 +84,15 @@ export function createFirstRunReadinessController(
           state: browser.browserContextState,
           reason: browser.reason,
           nextAction: browser.nextAction
-        }
+        },
+        ...(compatibility ? {
+          compatibility: {
+            state: compatibility.compatibility.state,
+            extensionVersion: compatibility.compatibility.extensionVersion,
+            minVersion: compatibility.compatibility.minVersion,
+            reason: compatibility.compatibility.reason
+          }
+        } : {})
       },
       previousResumeStepId
     });
@@ -128,4 +143,18 @@ function normalizeChromeLiveConnectionState(
     : state === "unknown"
       ? "unknown"
       : "disconnected";
+}
+
+async function readChromeCompatibilitySafely(
+  reader: (() => Promise<ChromeCompatibilityHealth>) | undefined
+): Promise<ChromeCompatibilityHealth | undefined> {
+  if (!reader) {
+    return undefined;
+  }
+
+  try {
+    return await reader();
+  } catch {
+    return undefined;
+  }
 }

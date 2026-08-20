@@ -45,10 +45,12 @@ export type DiagnosticReportBlockerType =
   | "chrome-native-host-mismatched"
   | "chrome-native-host-cli-missing"
   | "chrome-native-host-invalid"
+  | "chrome-native-host-stale"
   | "chrome-host-policy-invalid"
   | "chrome-extension-disconnected"
   | "chrome-extension-stale"
   | "chrome-extension-invalid"
+  | "chrome-extension-outdated"
   // Browser context
   | "browser-context-blocked"
   | "browser-context-partial"
@@ -96,6 +98,10 @@ export interface DiagnosticComponentVersion {
   source: string;
   state: DiagnosticComponentState;
   detail?: string;
+  /** Embedded build-info commit (short SHA), for the app component when packaged. */
+  commit?: string;
+  /** Embedded build-info build time (ISO-8601), for the app component when packaged. */
+  buildTime?: string;
 }
 
 export interface DiagnosticReportRedaction {

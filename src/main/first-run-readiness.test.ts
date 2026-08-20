@@ -27,6 +27,22 @@ function createDependencies() {
       reason: "skfiy read Finder selection without changing files.",
       nextAction: "Finder workflows are ready for planning and approval.",
       evidenceSource: "finder-selection-test" as const
+    }),
+    readChromeCompatibility: vi.fn().mockResolvedValue({
+      schemaVersion: 1 as const,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      appVersion: "0.1.0",
+      nativeHost: { state: "unknown" as const, installedSkfiyVersion: null, reason: "" },
+      extension: { state: "unknown" as const, version: null, source: "unknown" },
+      compatibility: {
+        state: "unknown" as const,
+        appVersion: "0.1.0",
+        extensionVersion: null,
+        minVersion: "0.0.16",
+        maxTestedVersion: "0.0.17",
+        reason: ""
+      },
+      staleness: { nativeHostStale: false, extensionStale: false, cliStale: false, helperStale: false }
     })
   };
 }
@@ -141,5 +157,66 @@ describe("first-run readiness controller", () => {
 
     expect(first.resumeStepId).toBe("finder-automation");
     expect(second.resumeStepId).toBe("finder-automation");
+  });
+
+  it("carries the extension compatibility warning into the browser-context step", async () => {
+    const dependencies = createDependencies();
+    dependencies.readProviderReadiness.mockResolvedValue("chat-ready");
+    dependencies.readBrowserReadiness.mockResolvedValue({
+      nativeHostState: "installed",
+      liveConnectionState: "connected",
+      browserContextState: "ready",
+      reason: "Browser Context is ready for the current Chrome page.",
+      nextAction: "No setup action is required."
+    });
+    dependencies.readChromeCompatibility = vi.fn().mockResolvedValue({
+      schemaVersion: 1 as const,
+      generatedAt: "2026-08-20T00:00:00.000Z",
+      appVersion: "0.1.0",
+      nativeHost: {
+        state: "installed" as const,
+        installedSkfiyVersion: "0.1.0",
+        reason: "Chrome Native Messaging host is installed."
+      },
+      extension: {
+        state: "connected" as const,
+        version: "0.0.1",
+        source: "running-extension-heartbeat"
+      },
+      compatibility: {
+        state: "extension_outdated" as const,
+        appVersion: "0.1.0",
+        extensionVersion: "0.0.1",
+        minVersion: "0.0.16",
+        maxTestedVersion: "0.0.17",
+        reason: "Chrome extension v0.0.1 is older than the minimum supported v0.0.16.",
+        nextAction: "Reload the unpacked extension from chrome-extension/ to update."
+      },
+      staleness: {
+        nativeHostStale: false,
+        extensionStale: true,
+        cliStale: false,
+        helperStale: false
+      }
+    });
+    const controller = createFirstRunReadinessController(dependencies);
+
+    const snapshot = await controller.read();
+
+    expect(dependencies.readChromeCompatibility).toHaveBeenCalledTimes(1);
+    const browserContext = snapshot.steps.find((step) => step.id === "browser-context");
+    expect(browserContext?.state).toBe("ready");
+    expect(browserContext?.warning).toContain("older than the minimum supported");
+  });
+
+  it("tolerates a failing compatibility reader without breaking the snapshot", async () => {
+    const dependencies = createDependencies();
+    dependencies.readChromeCompatibility = vi.fn().mockRejectedValue(new Error("boom"));
+    const controller = createFirstRunReadinessController(dependencies);
+
+    const snapshot = await controller.read();
+
+    const browserContext = snapshot.steps.find((step) => step.id === "browser-context");
+    expect(browserContext?.warning).toBeUndefined();
   });
 });

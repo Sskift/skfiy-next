@@ -363,6 +363,22 @@ beforeEach(() => {
       generatedAt: new Date(0).toISOString(),
       runs: []
     }),
+    getChromeCompatibility: vi.fn<DesktopApi["getChromeCompatibility"]>().mockResolvedValue({
+      schemaVersion: 1,
+      generatedAt: new Date(0).toISOString(),
+      appVersion: "0.1.0",
+      nativeHost: { state: "unknown", installedSkfiyVersion: null, reason: "" },
+      extension: { state: "unknown", version: null, source: "unknown" },
+      compatibility: {
+        state: "unknown",
+        appVersion: "0.1.0",
+        extensionVersion: null,
+        minVersion: "0.0.16",
+        maxTestedVersion: "0.0.17",
+        reason: ""
+      },
+      staleness: { nativeHostStale: false, extensionStale: false, cliStale: false, helperStale: false }
+    }),
     getRuntimeStatus: vi.fn<DesktopApi["getRuntimeStatus"]>().mockResolvedValue({
       stopTurnHotkey: {
         accelerator: "Control+Alt+Shift+Esc",

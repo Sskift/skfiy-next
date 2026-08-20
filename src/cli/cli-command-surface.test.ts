@@ -23,7 +23,7 @@ const baseDeps = {
 };
 
 describe("CLI command surface", () => {
-  it("returns schemaVersion 1 and exactly the 8 slim commands", async () => {
+  it("returns schemaVersion 1 and exactly the 9 slim commands", async () => {
     const output = createOutputCapture();
     const exitCode = await runSkfiyCli({
       argv: ["commands"],
@@ -48,6 +48,7 @@ describe("CLI command surface", () => {
       "export",
       "restore preview",
       "capabilities",
+      "provenance",
       "mcp serve"
     ]);
   });

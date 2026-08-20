@@ -395,6 +395,11 @@ function FirstRunReadinessPanel({
                   </button>
                 </div>
               ) : null}
+              {step.warning ? (
+                <p className="first-run-step-warning" role="status">
+                  {step.warning}
+                </p>
+              ) : null}
             </div>
           );
         })}

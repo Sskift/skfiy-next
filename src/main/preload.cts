@@ -106,6 +106,9 @@ import {
   type DiagnosticReportSectionId,
   type DiagnosticReportState
 } from "../shared/diagnostic-report.js";
+import {
+  type ChromeCompatibilityHealth
+} from "../shared/chrome-extension-compatibility.js";
 
 type ManualMode = "active" | "quiet";
 type PetWindowMode = "compact" | "expanded";
@@ -1051,6 +1054,7 @@ interface DesktopApi {
   getPermissionDiagnostics: () => Promise<PermissionDiagnostics>;
   getDesktopSessionDiagnostics: () => Promise<DesktopSessionDiagnostics>;
   getDiagnosticReport: () => Promise<DiagnosticReport>;
+  getChromeCompatibility: () => Promise<ChromeCompatibilityHealth>;
   openPermissionSettings: (permission: PermissionSettingsTarget) => Promise<void>;
   getStartupWarnings: () => Promise<StartupWarning[]>;
   getAppPolicySettings: () => Promise<AppPolicySettings>;
@@ -1466,6 +1470,35 @@ const api: DesktopApi = {
     return isDiagnosticReport(payload)
       ? payload
       : createUnknownDiagnosticReport();
+  },
+  async getChromeCompatibility() {
+    const payload = await ipcRenderer.invoke("skfiy:get-chrome-compatibility");
+    if (
+      payload
+      && typeof payload === "object"
+      && !Array.isArray(payload)
+      && "schemaVersion" in payload
+      && payload.schemaVersion === 1
+      && "compatibility" in payload
+    ) {
+      return payload as ChromeCompatibilityHealth;
+    }
+    return {
+      schemaVersion: 1,
+      generatedAt: new Date(0).toISOString(),
+      appVersion: "unknown",
+      nativeHost: { state: "unknown", installedSkfiyVersion: null, reason: "Compatibility data unavailable." },
+      extension: { state: "unknown", version: null, source: "unknown" },
+      compatibility: {
+        state: "unknown",
+        appVersion: "unknown",
+        extensionVersion: null,
+        minVersion: "0.0.16",
+        maxTestedVersion: "0.0.17",
+        reason: "Compatibility data unavailable."
+      },
+      staleness: { nativeHostStale: false, extensionStale: false, cliStale: false, helperStale: false }
+    };
   },
   async openPermissionSettings(permission) {
     if (!isPermissionSettingsTarget(permission)) {

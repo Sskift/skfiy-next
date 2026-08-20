@@ -231,6 +231,7 @@ import {
   readDiagnosticReportForRenderer,
   resolveHelperInfoPlistPath
 } from "./diagnostic-report.js";
+import { readChromeCompatibilityHealth } from "./chrome-compatibility-health.js";
 import { readAppPolicySettingsUpdate, readPlannerProviderSettingsUpdate } from "./main-settings-updates.js";
 import {
   createManualScreenshotCompletedTaskEvent,
@@ -354,6 +355,18 @@ const firstRunReadinessController = createFirstRunReadinessController({
   readBrowserReadiness: () => readBrowserReadinessEvidence({
     homeDir: os.homedir(),
     cliShimPath: resolveCliShimPath()
+  }),
+  readChromeCompatibility: () => readChromeCompatibilityHealth({
+    homeDir: os.homedir(),
+    cliShimPath: resolveCliShimPath(),
+    extensionIds: [],
+    appVersion: app.getVersion(),
+    extensionManifestPath: path.join(app.getAppPath(), "chrome-extension", "manifest.json"),
+    helperInfoPlistPath: resolveHelperInfoPlistPath({
+      appPath: app.getAppPath(),
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath
+    })
   }),
   testFinderAutomation: () => testFinderAutomationReadiness({
     getFinderSelection: () => createDesktopHelper().getFinderSelection()
@@ -2589,6 +2602,18 @@ ipcMain.handle("skfiy:get-diagnostic-report", async () => {
         cliShimPath: resolveCliShimPath()
       }),
       readChromeHostPolicy: () => readChromeHostPolicyState({ homeDir: os.homedir() }),
+      readChromeCompatibility: () => readChromeCompatibilityHealth({
+        homeDir: os.homedir(),
+        cliShimPath: resolveCliShimPath(),
+        extensionIds: [],
+        appVersion: app.getVersion(),
+        extensionManifestPath: path.join(app.getAppPath(), "chrome-extension", "manifest.json"),
+        helperInfoPlistPath: resolveHelperInfoPlistPath({
+          appPath: app.getAppPath(),
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath
+        })
+      }),
       readFinderAutomation: () => testFinderAutomationReadiness({
         getFinderSelection: () => createDesktopHelper().getFinderSelection()
       }),
@@ -2603,6 +2628,9 @@ ipcMain.handle("skfiy:get-diagnostic-report", async () => {
       readComponentVersions: () => readComponentVersions({
         appVersion: app.getVersion(),
         cliShimPath: resolveCliShimPath(),
+        ...(app.isPackaged
+          ? { buildInfoPath: path.join(process.resourcesPath, "build-info.json") }
+          : {}),
         helperInfoPlistPath: resolveHelperInfoPlistPath({
           appPath: app.getAppPath(),
           isPackaged: app.isPackaged,
@@ -2621,6 +2649,21 @@ ipcMain.handle("skfiy:get-diagnostic-report", async () => {
         providerStates
       })
     }
+  });
+});
+
+ipcMain.handle("skfiy:get-chrome-compatibility", async () => {
+  return readChromeCompatibilityHealth({
+    homeDir: os.homedir(),
+    cliShimPath: resolveCliShimPath(),
+    extensionIds: [],
+    appVersion: app.getVersion(),
+    extensionManifestPath: path.join(app.getAppPath(), "chrome-extension", "manifest.json"),
+    helperInfoPlistPath: resolveHelperInfoPlistPath({
+      appPath: app.getAppPath(),
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath
+    })
   });
 });
 

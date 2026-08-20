@@ -14,6 +14,8 @@ import type { FinderAutomationReadiness } from "./main-finder-automation-readine
 import type { AssistantAgentProviderState } from "./assistant-agent";
 import type { StartupWarning } from "./startup-guard";
 import type { ChromeHostPolicyState } from "./chrome-host-policy";
+import type { ChromeCompatibilityHealth } from "./chrome-compatibility-health";
+import { evaluateChromeExtensionCompatibility } from "../shared/chrome-extension-compatibility";
 import type { DiagnosticReport } from "../shared/diagnostic-report";
 import { renderDiagnosticReportExport } from "../shared/diagnostic-report";
 
@@ -119,6 +121,59 @@ function createChromeHostPolicy(
   return {
     state: "default",
     ...overrides
+  };
+}
+
+function createChromeCompatibilityHealth(
+  overrides: Partial<ChromeCompatibilityHealth> & {
+    compatibilityState?: ChromeCompatibilityHealth["compatibility"]["state"];
+    extensionVersion?: string | null;
+    nativeHostStale?: boolean;
+    installedSkfiyVersion?: string | null;
+  } = {}
+): ChromeCompatibilityHealth {
+  const {
+    compatibilityState = "compatible",
+    extensionVersion = "0.0.17",
+    nativeHostStale = false,
+    installedSkfiyVersion = "0.1.0",
+    compatibility: compatibilityOverride,
+    ...rest
+  } = overrides;
+
+  const baseCompatibility = evaluateChromeExtensionCompatibility({
+    appVersion: "0.1.0",
+    extensionVersion
+  });
+  const compatibility = compatibilityOverride
+    ?? (baseCompatibility.state === compatibilityState
+      ? baseCompatibility
+      : { ...baseCompatibility, state: compatibilityState });
+
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-20T00:00:00.000Z",
+    appVersion: "0.1.0",
+    nativeHost: {
+      state: nativeHostStale ? "mismatched" : "installed",
+      installedSkfiyVersion,
+      reason: nativeHostStale
+        ? "Chrome Native Messaging host does not match the current skfiy build."
+        : "Chrome Native Messaging host is installed."
+    },
+    extension: {
+      state: "connected",
+      version: extensionVersion,
+      source: "running-extension-heartbeat"
+    },
+    compatibility,
+    staleness: {
+      nativeHostStale,
+      extensionStale: compatibilityState === "extension_outdated",
+      cliStale: false,
+      helperStale: false
+    },
+    ...rest
   };
 }
 
@@ -654,6 +709,49 @@ describe("chrome blockers", () => {
     const section = report.sections.find((s) => s.id === "chrome");
     expect(section?.state).toBe("unknown");
   });
+
+  it("derives chrome-extension-outdated when the extension is below the minimum version", () => {
+    const report = createDiagnosticReport({
+      ...createAllReadyInput(),
+      chromeCompatibility: createChromeCompatibilityHealth({
+        compatibilityState: "extension_outdated",
+        extensionVersion: "0.0.1"
+      })
+    });
+
+    const blocker = report.blockers.find((b) => b.type === "chrome-extension-outdated");
+    expect(blocker).toBeDefined();
+    expect(blocker?.severity).toBe("action-required");
+    expect(blocker?.detail).toContain("0.0.1");
+  });
+
+  it("derives chrome-native-host-stale when the installed host predates the app", () => {
+    const report = createDiagnosticReport({
+      ...createAllReadyInput(),
+      chromeCompatibility: createChromeCompatibilityHealth({
+        nativeHostStale: true,
+        installedSkfiyVersion: "0.0.9"
+      })
+    });
+
+    const blocker = report.blockers.find((b) => b.type === "chrome-native-host-stale");
+    expect(blocker).toBeDefined();
+    expect(blocker?.severity).toBe("blocked");
+    expect(blocker?.detail).toContain("0.0.9");
+  });
+
+  it("emits no compatibility blockers when the installation is compatible", () => {
+    const report = createDiagnosticReport({
+      ...createAllReadyInput(),
+      chromeCompatibility: createChromeCompatibilityHealth({
+        compatibilityState: "compatible",
+        extensionVersion: "0.0.17"
+      })
+    });
+
+    expect(report.blockers.find((b) => b.type === "chrome-extension-outdated")).toBeUndefined();
+    expect(report.blockers.find((b) => b.type === "chrome-native-host-stale")).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -980,6 +1078,61 @@ describe("readComponentVersions", () => {
     expect(app?.version).toBe("0.1.0");
     expect(app?.source).toBe("electron-app.getVersion");
     expect(app?.state).toBe("available");
+  });
+
+  it("includes embedded commit and build time when build-info.json is present", async () => {
+    const io = createIo({
+      exists: async (filePath: string) => filePath.endsWith("build-info.json"),
+      readFile: async (filePath: string) => {
+        if (filePath.endsWith("build-info.json")) {
+          return JSON.stringify({
+            schemaVersion: 1,
+            appName: "skfiy",
+            commitShortSha: "abc1234",
+            buildTimeIso: "2026-08-20T12:00:00.000Z"
+          });
+        }
+        return "";
+      }
+    });
+    const versions = await readComponentVersions({
+      ...baseOptions,
+      buildInfoPath: "/app/Contents/Resources/build-info.json",
+      io
+    });
+    const app = versions.find((v) => v.component === "app");
+    expect(app?.state).toBe("available");
+    expect(app?.version).toBe("0.1.0");
+    expect(app?.commit).toBe("abc1234");
+    expect(app?.buildTime).toBe("2026-08-20T12:00:00.000Z");
+  });
+
+  it("reports the app component as unknown when build-info is wired but missing", async () => {
+    const io = createIo({
+      exists: async (filePath: string) => !filePath.endsWith("build-info.json")
+    });
+    const versions = await readComponentVersions({
+      ...baseOptions,
+      buildInfoPath: "/app/Contents/Resources/build-info.json",
+      io
+    });
+    const app = versions.find((v) => v.component === "app");
+    expect(app?.state).toBe("unknown");
+    expect(app?.commit).toBeUndefined();
+  });
+
+  it("reports the app component as unknown when build-info is malformed", async () => {
+    const io = createIo({
+      readFile: async (filePath: string) =>
+        filePath.endsWith("build-info.json") ? "{not json" : ""
+    });
+    const versions = await readComponentVersions({
+      ...baseOptions,
+      buildInfoPath: "/app/Contents/Resources/build-info.json",
+      io
+    });
+    const app = versions.find((v) => v.component === "app");
+    expect(app?.state).toBe("unknown");
   });
 
   it("probes CLI version from shim --version", async () => {

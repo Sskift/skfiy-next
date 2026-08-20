@@ -284,4 +284,68 @@ describe("createFirstRunReadinessSnapshot", () => {
     expect(serialized).toContain("[local path]");
     expect(serialized).toContain("[redacted]");
   });
+
+  it("attaches a non-blocking warning when the extension is outdated", () => {
+    const snapshot = createFirstRunReadinessSnapshot(createInput({
+      chrome: {
+        nativeHostState: "installed",
+        liveConnectionState: "connected",
+        browserContext: {
+          state: "ready"
+        },
+        compatibility: {
+          state: "extension_outdated",
+          extensionVersion: "0.0.1",
+          minVersion: "0.0.16",
+          reason: "Chrome extension v0.0.1 is older than the minimum supported v0.0.16."
+        }
+      }
+    }));
+
+    expect(snapshot.steps[4].state).toBe("ready");
+    expect(snapshot.steps[4].warning).toContain("older than the minimum supported");
+    expect(snapshot.chatReady).toBe(true);
+    expect(snapshot.computerUseReady).toBe(true);
+    expect(snapshot.readyWorkflows).toContain("browser-context");
+  });
+
+  it("attaches a non-blocking warning when the extension version is unknown", () => {
+    const snapshot = createFirstRunReadinessSnapshot(createInput({
+      chrome: {
+        nativeHostState: "installed",
+        liveConnectionState: "connected",
+        browserContext: {
+          state: "ready"
+        },
+        compatibility: {
+          state: "unknown",
+          extensionVersion: null,
+          minVersion: "0.0.16",
+          reason: "Chrome extension version has not been reported."
+        }
+      }
+    }));
+
+    expect(snapshot.steps[4].state).toBe("ready");
+    expect(snapshot.steps[4].warning).toContain("has not been reported");
+  });
+
+  it("does not attach a warning when the extension is compatible", () => {
+    const snapshot = createFirstRunReadinessSnapshot(createInput({
+      chrome: {
+        nativeHostState: "installed",
+        liveConnectionState: "connected",
+        browserContext: {
+          state: "ready"
+        },
+        compatibility: {
+          state: "compatible",
+          extensionVersion: "0.0.17",
+          minVersion: "0.0.16"
+        }
+      }
+    }));
+
+    expect(snapshot.steps[4].warning).toBeUndefined();
+  });
 });

@@ -8,6 +8,10 @@ import {
   createChromeReadinessConnectionPath,
   createChromeReadinessDiagnostics
 } from "./chrome-readiness";
+import {
+  MAX_TESTED_EXTENSION_VERSION,
+  MIN_COMPATIBLE_EXTENSION_VERSION
+} from "../shared/chrome-extension-compatibility";
 
 function createMemoryChromeReadinessIo(files: Record<string, string> = {}) {
   const store = { ...files };
@@ -131,6 +135,15 @@ describe("Chrome extension readiness diagnostics", () => {
         launchOrigin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
         messageType: "skfiy.page.observe",
         requestId: "request-1"
+      },
+      compatibility: {
+        state: "unknown",
+        appVersion: null,
+        extensionVersion: null,
+        minVersion: MIN_COMPATIBLE_EXTENSION_VERSION,
+        maxTestedVersion: MAX_TESTED_EXTENSION_VERSION,
+        reason: "Chrome extension version has not been reported.",
+        nextAction: "Reload the unpacked extension from chrome-extension/ to update."
       },
       setupGuide: {
         schemaVersion: 1,
@@ -288,5 +301,71 @@ describe("Chrome extension readiness diagnostics", () => {
 
   it("exposes the same heartbeat path used by native-host connection evidence", () => {
     expect(createChromeReadinessConnectionPath(homeDir)).toBe(connectionPath);
+  });
+
+  it("evaluates extension compatibility from the packaged manifest and app version", async () => {
+    const manifest = createChromeNativeHostManifest({
+      cliShimPath,
+      extensionIds
+    });
+    const io = createMemoryChromeReadinessIo({
+      [cliShimPath]: "#!/usr/bin/env node\n",
+      [manifestPath]: JSON.stringify(manifest),
+      [`${extensionPath}/manifest.json`]: JSON.stringify({ version: "0.0.17" })
+    });
+
+    await expect(createChromeReadinessDiagnostics({
+      homeDir,
+      cliShimPath,
+      extensionIds,
+      extensionPath,
+      appVersion: "0.1.0",
+      generatedAt: "2026-06-20T00:02:00.000Z",
+      io
+    })).resolves.toMatchObject({
+      compatibility: {
+        state: "compatible",
+        appVersion: "0.1.0",
+        extensionVersion: "0.0.17",
+        minVersion: MIN_COMPATIBLE_EXTENSION_VERSION,
+        maxTestedVersion: MAX_TESTED_EXTENSION_VERSION
+      }
+    });
+  });
+
+  it("prefers the running extension version from the heartbeat over the packaged manifest", async () => {
+    const manifest = createChromeNativeHostManifest({
+      cliShimPath,
+      extensionIds
+    });
+    const io = createMemoryChromeReadinessIo({
+      [cliShimPath]: "#!/usr/bin/env node\n",
+      [manifestPath]: JSON.stringify(manifest),
+      [`${extensionPath}/manifest.json`]: JSON.stringify({ version: "0.0.17" }),
+      [connectionPath]: JSON.stringify({
+        schemaVersion: 1,
+        hostName: "com.sskift.skfiy",
+        observedAt: "2026-06-20T00:00:00.000Z",
+        launchOrigin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
+        messageType: "skfiy.page.observe",
+        requestId: "request-1",
+        extensionVersion: "0.0.1"
+      })
+    });
+
+    await expect(createChromeReadinessDiagnostics({
+      homeDir,
+      cliShimPath,
+      extensionIds,
+      extensionPath,
+      appVersion: "0.1.0",
+      generatedAt: "2026-06-20T00:02:00.000Z",
+      io
+    })).resolves.toMatchObject({
+      compatibility: {
+        state: "extension_outdated",
+        extensionVersion: "0.0.1"
+      }
+    });
   });
 });

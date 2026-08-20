@@ -83,6 +83,14 @@ export const CLI_COMMAND_DEFINITIONS: readonly CliCommandDefinition[] = [
     outputShape: "adapter-capabilities"
   },
   {
+    path: "provenance",
+    summary: "Embedded build provenance: commit, build time, and codesign identity of the installed app.",
+    jsonOutput: true,
+    plannedMutation: false,
+    executesSystemMutation: false,
+    outputShape: "provenance"
+  },
+  {
     path: "mcp serve",
     summary: "Run the skfiy MCP stdio server (status, observation, replay, approve, stop).",
     jsonOutput: true,

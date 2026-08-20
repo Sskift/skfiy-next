@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   readChromeApprovalPolicyHost
 } from "./chrome-approval-policy.js";
@@ -16,6 +17,10 @@ import {
   type ChromeNativeHostIo,
   type ChromeNativeHostStatus
 } from "./chrome-native-host.js";
+import {
+  evaluateChromeExtensionCompatibility,
+  type ChromeExtensionCompatibilityVerdict
+} from "../shared/chrome-extension-compatibility.js";
 
 export interface ChromeReadinessDiagnosticsInput {
   homeDir: string;
@@ -24,6 +29,8 @@ export interface ChromeReadinessDiagnosticsInput {
   extensionPath?: string;
   approvalProbeCommand?: string;
   generatedAt?: string;
+  /** App version used for the extension compatibility verdict. */
+  appVersion?: string;
   io?: ChromeNativeHostIo & ChromeHostPolicyIo;
 }
 
@@ -110,6 +117,7 @@ export interface ChromeReadinessDiagnostics {
     messageType?: string;
     requestId?: string;
   };
+  compatibility: ChromeExtensionCompatibilityVerdict;
   setupGuide: ChromeReadinessSetupGuide;
 }
 
@@ -120,6 +128,7 @@ export async function createChromeReadinessDiagnostics({
   extensionPath,
   approvalProbeCommand,
   generatedAt = new Date().toISOString(),
+  appVersion,
   io
 }: ChromeReadinessDiagnosticsInput): Promise<ChromeReadinessDiagnostics> {
   const nativeHost = await readChromeNativeHostStatus({
@@ -136,6 +145,11 @@ export async function createChromeReadinessDiagnostics({
     homeDir,
     generatedAt,
     io
+  });
+  const packagedExtensionVersion = await readPackagedExtensionVersion(extensionPath, io);
+  const compatibility = evaluateChromeExtensionCompatibility({
+    appVersion,
+    extensionVersion: liveConnection.extensionVersion ?? packagedExtensionVersion
   });
   const installPlan = createChromeNativeHostInstallPlan({
     homeDir,
@@ -206,8 +220,35 @@ export async function createChromeReadinessDiagnostics({
       ...(liveConnection.messageType ? { messageType: liveConnection.messageType } : {}),
       ...(liveConnection.requestId ? { requestId: liveConnection.requestId } : {})
     },
+    compatibility,
     setupGuide
   };
+}
+
+/**
+ * Read the version from the on-disk packaged extension manifest. Returns
+ * null when the extension path is unknown or the manifest cannot be read,
+ * so the compatibility verdict degrades to "unknown" instead of throwing.
+ */
+async function readPackagedExtensionVersion(
+  extensionPath: string | undefined,
+  io: (ChromeNativeHostIo & ChromeHostPolicyIo) | undefined
+): Promise<string | null> {
+  if (!extensionPath || !io?.readFile) {
+    return null;
+  }
+
+  try {
+    const manifest = JSON.parse(
+      await io.readFile(path.join(extensionPath, "manifest.json"))
+    ) as { version?: unknown };
+
+    return typeof manifest.version === "string" && manifest.version.trim()
+      ? manifest.version.trim()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function createChromeReadinessConnectionPath(homeDir: string): string {

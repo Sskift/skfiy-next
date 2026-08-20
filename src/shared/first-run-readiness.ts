@@ -81,9 +81,28 @@ export type FirstRunBrowserContextState =
   | "unavailable"
   | "unknown";
 
+export type FirstRunChromeCompatibilityState =
+  | "compatible"
+  | "extension_outdated"
+  | "extension_untested"
+  | "unknown";
+
+export interface FirstRunChromeCompatibility {
+  state: FirstRunChromeCompatibilityState;
+  extensionVersion?: string | null;
+  minVersion?: string;
+  reason?: string;
+}
+
 interface FirstRunReadinessStepBase {
   id: FirstRunReadinessStepId;
   requirement: FirstRunReadinessRequirement;
+  /**
+   * Optional non-blocking warning line rendered under the step. Used by the
+   * browser-context step to surface extension compatibility warnings without
+   * changing the step state (browser-context is an optional step).
+   */
+  warning?: string;
 }
 
 export interface FirstRunReadyStep extends FirstRunReadinessStepBase {
@@ -123,6 +142,7 @@ export interface FirstRunReadinessInput {
       reason?: string;
       nextAction?: string;
     };
+    compatibility?: FirstRunChromeCompatibility;
   };
   previousResumeStepId?: FirstRunReadinessStepId;
 }
@@ -343,20 +363,26 @@ function createBrowserContextStep(
   const nativeHostState = chrome?.nativeHostState ?? "unknown";
 
   if (nativeHostState === "unknown") {
-    return createNonReadyStep(
-      "browser-context",
-      "unknown",
-      "Chrome Native Messaging host status is unknown.",
-      "Refresh Chrome setup status."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "unknown",
+        "Chrome Native Messaging host status is unknown.",
+        "Refresh Chrome setup status."
+      ),
+      chrome?.compatibility
     );
   }
 
   if (nativeHostState === "missing") {
-    return createNonReadyStep(
-      "browser-context",
-      "action-required",
-      "Chrome Native Messaging host is not installed.",
-      "Install the skfiy Chrome Native Messaging host."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "action-required",
+        "Chrome Native Messaging host is not installed.",
+        "Install the skfiy Chrome Native Messaging host."
+      ),
+      chrome?.compatibility
     );
   }
 
@@ -367,53 +393,108 @@ function createBrowserContextStep(
       invalid: "Chrome Native Messaging host configuration is invalid."
     };
 
-    return createNonReadyStep(
-      "browser-context",
-      "blocked",
-      reasonByState[nativeHostState],
-      "Repair the skfiy Chrome Native Messaging host installation."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "blocked",
+        reasonByState[nativeHostState],
+        "Repair the skfiy Chrome Native Messaging host installation."
+      ),
+      chrome?.compatibility
     );
   }
 
   const liveConnectionState = chrome?.liveConnectionState ?? "unknown";
 
   if (liveConnectionState === "unknown") {
-    return createNonReadyStep(
-      "browser-context",
-      "unknown",
-      "Chrome extension connection status is unknown.",
-      "Refresh Chrome extension connection status."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "unknown",
+        "Chrome extension connection status is unknown.",
+        "Refresh Chrome extension connection status."
+      ),
+      chrome?.compatibility
     );
   }
 
   if (liveConnectionState === "stale") {
-    return createNonReadyStep(
-      "browser-context",
-      "blocked",
-      "Chrome extension connection is stale.",
-      "Refresh the skfiy Chrome extension connection."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "blocked",
+        "Chrome extension connection is stale.",
+        "Refresh the skfiy Chrome extension connection."
+      ),
+      chrome?.compatibility
     );
   }
 
   if (liveConnectionState === "disconnected") {
-    return createNonReadyStep(
-      "browser-context",
-      "blocked",
-      "Chrome extension is not connected.",
-      "Open Chrome and connect the skfiy extension."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "blocked",
+        "Chrome extension is not connected.",
+        "Open Chrome and connect the skfiy extension."
+      ),
+      chrome?.compatibility
     );
   }
 
   if (liveConnectionState === "invalid") {
-    return createNonReadyStep(
-      "browser-context",
-      "blocked",
-      "Chrome extension connection evidence is invalid.",
-      "Reload the skfiy Chrome extension, then refresh connection status."
+    return withChromeCompatibilityWarning(
+      createNonReadyStep(
+        "browser-context",
+        "blocked",
+        "Chrome extension connection evidence is invalid.",
+        "Reload the skfiy Chrome extension, then refresh connection status."
+      ),
+      chrome?.compatibility
     );
   }
 
-  return createBrowserPageContextStep(chrome?.browserContext);
+  return withChromeCompatibilityWarning(
+    createBrowserPageContextStep(chrome?.browserContext),
+    chrome?.compatibility
+  );
+}
+
+/**
+ * Attach a non-blocking compatibility warning to the browser-context step
+ * when the extension is outdated or its version is unknown. The warning
+ * never changes the step state, so it cannot block chat/computer-use
+ * readiness.
+ */
+function withChromeCompatibilityWarning(
+  step: FirstRunReadinessStep,
+  compatibility: FirstRunChromeCompatibility | undefined
+): FirstRunReadinessStep {
+  const warning = readChromeCompatibilityWarning(compatibility);
+
+  return warning ? { ...step, warning } : step;
+}
+
+function readChromeCompatibilityWarning(
+  compatibility: FirstRunChromeCompatibility | undefined
+): string | undefined {
+  if (!compatibility) {
+    return undefined;
+  }
+
+  if (compatibility.state === "extension_outdated") {
+    const extensionVersion = compatibility.extensionVersion ?? "unknown";
+    const minVersion = compatibility.minVersion ?? "a newer";
+    return sanitizeReadinessText(compatibility.reason)
+      ?? `Chrome extension v${extensionVersion} is older than the minimum supported v${minVersion}. Reload the unpacked extension from chrome-extension/ to update.`;
+  }
+
+  if (compatibility.state === "unknown") {
+    return sanitizeReadinessText(compatibility.reason)
+      ?? "Chrome extension version is unknown, so compatibility cannot be verified. Reload the unpacked extension from chrome-extension/ to update.";
+  }
+
+  return undefined;
 }
 
 function createBrowserPageContextStep(

@@ -2092,6 +2092,58 @@ textarea:focus-visible {
   color: rgba(238, 247, 255, 0.64);
 }
 
+.first-run-step-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 214, 122, 0.4);
+  border-radius: 6px;
+  background: rgba(255, 214, 122, 0.12);
+  color: #ffd67a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.browser-context-compatibility-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(238, 247, 255, 0.14);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.browser-context-compatibility-banner.tone-ready {
+  display: none;
+}
+
+.browser-context-compatibility-banner.tone-warning {
+  border-color: rgba(255, 214, 122, 0.4);
+  background: rgba(255, 214, 122, 0.12);
+  color: #ffd67a;
+}
+
+.browser-context-compatibility-banner.tone-danger {
+  border-color: rgba(255, 171, 166, 0.4);
+  background: rgba(255, 171, 166, 0.12);
+  color: #ffaba6;
+}
+
+.browser-context-compatibility-banner.tone-neutral {
+  border-color: rgba(238, 247, 255, 0.14);
+  background: rgba(238, 247, 255, 0.06);
+  color: rgba(238, 247, 255, 0.64);
+}
+
+.browser-context-compatibility-banner strong {
+  font-weight: 700;
+}
+
+.browser-context-compatibility-banner .browser-context-compatibility-action {
+  opacity: 0.85;
+}
+
 .browser-context-selected-tab {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

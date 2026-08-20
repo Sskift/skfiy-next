@@ -18,7 +18,7 @@
 **Trigger:** a change may cite current events as Observations, but cannot claim high-confidence user-goal verification without an explicit Oracle.
 
 ### 4. Release provenance is label-based
-**Status: still open.** `scripts/package-macos-app.mjs` can label a pre-existing app with current HEAD without proving the package was built from that source revision.
+**Status: fixed (2026-08-20).** `scripts/package-macos-app.mjs` now embeds `build-info.json` (commit SHA, tree status, build time, Node/Electron versions, builder) inside the signed bundle at `Contents/Resources/build-info.json` during packaging. `.github/workflows/release.yml` gates every release on `scripts/verify-build-provenance.mjs`, which fails unless the embedded `commitSha` equals the workflow's `GITHUB_SHA` and the embedded version matches the tag, the bundled `Resources/app/package.json`, and the root `package.json`. A pre-existing app built from another commit carries its own embedded commit and cannot be relabeled without rebuilding. See `docs/release-process.md`.
 **Trigger:** release acceptance requires provenance hardening rather than relying on filename or manifest labels.
 
 ## Medium

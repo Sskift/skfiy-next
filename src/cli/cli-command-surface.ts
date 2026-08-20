@@ -13,7 +13,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFile as nodeExecFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   CliExitCode,
   createCliError,
@@ -48,6 +50,7 @@ import {
   type CliExportDeps
 } from "./cli-export.js";
 import { runMcpServeCommand } from "./cli-mcp.js";
+import { runProvenanceCommand } from "./cli-provenance.js";
 import {
   createLoopbackControlClientFromHome,
   type ControlClient
@@ -70,6 +73,10 @@ export interface RunSkfiyCliOptions {
   readonly appPath?: string;
   readonly helperPath?: string | null;
   readonly cliShimPath?: string;
+  readonly execFile?: (
+    command: string,
+    args: string[]
+  ) => Promise<{ stdout: string; stderr: string }>;
 }
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -84,6 +91,16 @@ function readAppVersion(): string {
   } catch {
     return "0.0.0";
   }
+}
+
+const execFileAsync = promisify(nodeExecFile);
+
+async function defaultSurfaceExecFile(
+  command: string,
+  args: string[]
+): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsync(command, args);
+  return { stdout: stdout.toString(), stderr: stderr.toString() };
 }
 
 export async function runSkfiyCli(options: RunSkfiyCliOptions): Promise<number> {
@@ -108,6 +125,7 @@ export async function runSkfiyCli(options: RunSkfiyCliOptions): Promise<number> 
     ? path.join(REPO_ROOT, "dist", "skfiy-helper")
     : options.helperPath;
   const cliShimPath = options.cliShimPath ?? path.join(REPO_ROOT, "bin", "skfiy.mjs");
+  const execFile = options.execFile ?? defaultSurfaceExecFile;
 
   const controlClient = options.controlClient === undefined
     ? createLoopbackControlClientFromHome(appSupportDir, {
@@ -164,7 +182,8 @@ export async function runSkfiyCli(options: RunSkfiyCliOptions): Promise<number> 
         controlClient,
         appPath,
         helperPath,
-        cliShimPath
+        cliShimPath,
+        execFile
       }
     });
 
@@ -276,6 +295,18 @@ async function dispatchCommand(input: {
         : buildCliErrorEnvelope(commandPath, result.error, now);
     }
 
+    case "provenance": {
+      const result = await runProvenanceCommand({
+        appPath: deps.appPath,
+        exists: deps.exists,
+        readFile: deps.readFile,
+        execFile: deps.execFile
+      });
+      return result.ok
+        ? buildCliOkEnvelope(commandPath, result.data, now)
+        : buildCliErrorEnvelope(commandPath, result.error, now);
+    }
+
     default:
       return buildCliErrorEnvelope(
         commandPath,
@@ -302,6 +333,10 @@ interface CliSurfaceDeps {
   appPath: string;
   helperPath: string | null;
   cliShimPath: string;
+  execFile: (
+    command: string,
+    args: string[]
+  ) => Promise<{ stdout: string; stderr: string }>;
 }
 
 function createStatusDeps(deps: CliSurfaceDeps): CliStatusDeps {

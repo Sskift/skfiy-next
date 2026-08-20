@@ -19,6 +19,7 @@ import {
   type DiagnosticReportState
 } from "../shared/diagnostic-report.js";
 import type { AssistantAgentProviderState } from "./assistant-agent.js";
+import type { ChromeCompatibilityHealth } from "./chrome-compatibility-health.js";
 import type { DesktopSessionDiagnostics } from "./desktop-session-diagnostics.js";
 import type { BrowserReadinessEvidence } from "./main-browser-readiness.js";
 import type { FinderAutomationReadiness } from "./main-finder-automation-readiness.js";
@@ -35,6 +36,7 @@ export interface DiagnosticReportInput {
   desktopSession?: DesktopSessionDiagnostics;
   browserReadiness?: BrowserReadinessEvidence;
   chromeHostPolicy?: Pick<ChromeHostPolicyState, "state" | "reason">;
+  chromeCompatibility?: ChromeCompatibilityHealth;
   finderAutomation?: FinderAutomationReadiness;
   providerStates?: AssistantAgentProviderState[];
   startupWarnings?: StartupWarning[];
@@ -47,6 +49,7 @@ export interface DiagnosticReportSources {
   readDesktopSession?: () => Promise<DesktopSessionDiagnostics>;
   readBrowserReadiness?: () => Promise<BrowserReadinessEvidence>;
   readChromeHostPolicy?: () => Promise<Pick<ChromeHostPolicyState, "state" | "reason">>;
+  readChromeCompatibility?: () => Promise<ChromeCompatibilityHealth>;
   readFinderAutomation?: () => Promise<FinderAutomationReadiness>;
   readProviderStates?: () => Promise<AssistantAgentProviderState[]>;
   readStartupWarnings?: () => Promise<StartupWarning[]>;
@@ -65,7 +68,7 @@ export function createDiagnosticReport(input: DiagnosticReportInput = {}): Diagn
     createDesktopSessionSection(input.desktopSession, counts),
     createPermissionsSection(input.permissions, counts),
     createProviderSection(input.providerStates, counts),
-    createChromeSection(input.browserReadiness, input.chromeHostPolicy, counts),
+    createChromeSection(input.browserReadiness, input.chromeHostPolicy, input.chromeCompatibility, counts),
     createBrowserContextSection(input.browserReadiness, counts),
     createFinderAutomationSection(input.finderAutomation, counts),
     createStartupSection(input.startupWarnings, counts)
@@ -109,6 +112,7 @@ export async function readDiagnosticReportForRenderer({
       desktopSession,
       browserReadiness,
       chromeHostPolicy,
+      chromeCompatibility,
       finderAutomation,
       providerStates,
       startupWarnings,
@@ -118,6 +122,7 @@ export async function readDiagnosticReportForRenderer({
       readSourceSafely(sources.readDesktopSession, "desktop session", onError),
       readSourceSafely(sources.readBrowserReadiness, "browser readiness", onError),
       readSourceSafely(sources.readChromeHostPolicy, "chrome host policy", onError),
+      readSourceSafely(sources.readChromeCompatibility, "chrome compatibility", onError),
       readSourceSafely(sources.readFinderAutomation, "finder automation", onError),
       readSourceSafely(sources.readProviderStates, "provider states", onError),
       readSourceSafely(sources.readStartupWarnings, "startup warnings", onError),
@@ -129,6 +134,7 @@ export async function readDiagnosticReportForRenderer({
       desktopSession,
       browserReadiness,
       chromeHostPolicy,
+      chromeCompatibility,
       finderAutomation,
       providerStates,
       startupWarnings,
@@ -483,6 +489,7 @@ function createProviderSection(
 function createChromeSection(
   evidence: BrowserReadinessEvidence | undefined,
   hostPolicy: Pick<ChromeHostPolicyState, "state" | "reason"> | undefined,
+  compatibility: ChromeCompatibilityHealth | undefined,
   counts: DiagnosticRedactionCounts
 ): DiagnosticReportSection {
   if (!evidence) {
@@ -586,6 +593,36 @@ function createChromeSection(
         title: "Chrome extension is not connected",
         detail: "Chrome extension has not connected to the native host recently.",
         nextAction: "Open Chrome and connect the skfiy extension.",
+        counts
+      })
+    );
+  }
+
+  // Compatibility warnings (non-blocking unless the native host is stale)
+  if (compatibility?.staleness.nativeHostStale) {
+    const installedVersion = compatibility.nativeHost.installedSkfiyVersion ?? "unknown";
+    blockers.push(
+      createBlocker({
+        type: "chrome-native-host-stale",
+        severity: "blocked",
+        title: "Chrome Native Messaging host is from an older skfiy build",
+        detail: `Chrome Native Messaging host was installed by skfiy v${installedVersion} but the current app is v${compatibility.appVersion}.`,
+        nextAction: "Repair the skfiy Chrome Native Messaging host installation.",
+        counts
+      })
+    );
+  }
+
+  if (compatibility?.compatibility.state === "extension_outdated") {
+    const extensionVersion = compatibility.compatibility.extensionVersion ?? "unknown";
+    const minVersion = compatibility.compatibility.minVersion;
+    blockers.push(
+      createBlocker({
+        type: "chrome-extension-outdated",
+        severity: "action-required",
+        title: "Chrome extension is older than the minimum supported version",
+        detail: `Chrome extension v${extensionVersion} is older than the minimum supported v${minVersion}.`,
+        nextAction: "Reload the unpacked extension from chrome-extension/ to update.",
         counts
       })
     );
@@ -898,6 +935,11 @@ export interface ComponentVersionReaderOptions {
   extensionManifestPath: string;
   nativeHostManifestPath: string;
   providerStates: AssistantAgentProviderState[];
+  /**
+   * Path to the embedded Contents/Resources/build-info.json. Wired in main.ts
+   * from process.resourcesPath when packaged; undefined in dev builds.
+   */
+  buildInfoPath?: string;
   io?: Partial<ComponentVersionIo>;
 }
 
@@ -910,12 +952,13 @@ export async function readComponentVersions({
   extensionManifestPath,
   nativeHostManifestPath,
   providerStates,
+  buildInfoPath,
   io
 }: ComponentVersionReaderOptions): Promise<DiagnosticComponentVersion[]> {
   const resolvedIo = resolveComponentVersionIo(io);
 
   const [app, cli, helper, provider, extension, nativeHost] = await Promise.all([
-    readAppComponentVersion(appVersion),
+    readAppComponentVersion(appVersion, buildInfoPath, resolvedIo),
     readCliComponentVersion(cliShimPath, resolvedIo),
     readHelperComponentVersion(helperInfoPlistPath, resolvedIo),
     readProviderComponentVersion(providerStates),
@@ -972,14 +1015,48 @@ async function defaultExists(filePath: string): Promise<boolean> {
 }
 
 async function readAppComponentVersion(
-  appVersion: string
+  appVersion: string,
+  buildInfoPath: string | undefined,
+  io: ComponentVersionIo
 ): Promise<DiagnosticComponentVersion> {
-  return {
+  const base: DiagnosticComponentVersion = {
     component: "app",
     version: appVersion,
     source: "electron-app.getVersion",
     state: "available"
   };
+
+  if (!buildInfoPath) {
+    // Dev builds have no embedded build-info; version still comes from
+    // app.getVersion().
+    return base;
+  }
+
+  try {
+    if (!(await io.exists(buildInfoPath))) {
+      return { ...base, state: "unknown" };
+    }
+    const buildInfo = JSON.parse(await io.readFile(buildInfoPath)) as {
+      schemaVersion?: unknown;
+      appName?: unknown;
+      commitShortSha?: unknown;
+      buildTimeIso?: unknown;
+    };
+    if (buildInfo.schemaVersion !== 1 || buildInfo.appName !== "skfiy") {
+      return { ...base, state: "unknown" };
+    }
+    return {
+      ...base,
+      ...(typeof buildInfo.commitShortSha === "string"
+        ? { commit: buildInfo.commitShortSha }
+        : {}),
+      ...(typeof buildInfo.buildTimeIso === "string"
+        ? { buildTime: buildInfo.buildTimeIso }
+        : {})
+    };
+  } catch {
+    return { ...base, state: "unknown" };
+  }
 }
 
 async function readCliComponentVersion(

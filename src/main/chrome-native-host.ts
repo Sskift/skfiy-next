@@ -7,6 +7,10 @@ import {
   type ChromeHostPolicyIo
 } from "./chrome-host-policy.js";
 import { readRecord } from "./record-utils.js";
+import {
+  compareChromeExtensionVersions,
+  evaluateChromeExtensionCompatibility
+} from "../shared/chrome-extension-compatibility.js";
 
 export const CHROME_NATIVE_HOST_NAME = "com.sskift.skfiy";
 export const CHROME_NATIVE_MESSAGE_SCHEMA_VERSION = 1;
@@ -27,6 +31,12 @@ const CHROME_NATIVE_BRIDGE_MESSAGE_TYPES = new Set([
 export interface ChromeNativeHostManifestInput {
   cliShimPath: string;
   extensionIds: string[];
+  /**
+   * App version stamped into the installed manifest as `skfiyVersion`. Chrome
+   * ignores unknown manifest keys, so this is safe to add; the app reads it
+   * back to detect native-host staleness after an upgrade.
+   */
+  skfiyVersion?: string;
 }
 
 export interface ChromeNativeHostManifest {
@@ -35,6 +45,7 @@ export interface ChromeNativeHostManifest {
   path: string;
   type: "stdio";
   allowed_origins: string[];
+  skfiyVersion?: string;
 }
 
 export interface ChromeNativeHostInstallPlanInput extends ChromeNativeHostManifestInput {
@@ -58,6 +69,12 @@ export interface ChromeNativeHostIo {
 
 export interface ChromeNativeHostCommandInput extends ChromeNativeHostInstallPlanInput {
   io?: ChromeNativeHostIo;
+  /**
+   * App version to compare against the installed manifest's `skfiyVersion`.
+   * When omitted, the skfiyVersion staleness check is skipped (legacy
+   * callers keep their existing behavior).
+   */
+  appVersion?: string;
 }
 
 export interface ChromeNativeHostMutationResult {
@@ -78,6 +95,8 @@ export interface ChromeNativeHostStatus {
   allowedOrigins: string[];
   installedCliShimPath?: string;
   installedAllowedOrigins?: string[];
+  /** `skfiyVersion` read back from the installed manifest, when present. */
+  installedSkfiyVersion?: string;
   manifestDiagnostics: ChromeNativeHostManifestDiagnostics;
   reason: string;
 }
@@ -119,6 +138,13 @@ export interface ChromeNativeBridgeDispatchInput {
   homeDir: string;
   launchOrigin?: string;
   io?: ChromeHostPolicyIo;
+  /**
+   * App version reported back to the extension in every native response,
+   * alongside a compatibility verdict for the extension version carried in
+   * the request payload. Lets the popup display desktop-app staleness
+   * without an extra round trip.
+   */
+  appVersion?: string;
 }
 
 export interface ChromeNativeBridgeInput {
@@ -143,6 +169,8 @@ export interface ChromeExtensionConnectionHeartbeatInput {
   messageType: string;
   requestId: string;
   result?: ChromeNativeBridgeResponse["result"];
+  /** Version of the running extension, reported in the native message payload. */
+  extensionVersion?: string;
   pageControl?: Record<string, unknown>;
   pageObservation?: Record<string, unknown>;
   pageActionResult?: Record<string, unknown>;
@@ -171,6 +199,8 @@ export interface ChromeExtensionConnectionStatus {
   launchOrigin?: string;
   messageType?: string;
   requestId?: string;
+  /** Version of the running extension, when the heartbeat carried one. */
+  extensionVersion?: string;
   pageControl?: Record<string, unknown>;
   pageObservation?: Record<string, unknown>;
   pageActionResult?: Record<string, unknown>;
@@ -194,6 +224,7 @@ export interface ChromeNativeMessagingHostIo {
     "observedAt" | "messageType" | "requestId"
   >> & {
     result: ChromeNativeBridgeResponse["result"];
+    extensionVersion?: string;
     pageControl?: Record<string, unknown>;
     pageObservation?: Record<string, unknown>;
     pageActionResult?: Record<string, unknown>;
@@ -204,25 +235,32 @@ export interface ChromeNativeMessagingHostIo {
 
 export function createChromeNativeHostManifest({
   cliShimPath,
-  extensionIds
+  extensionIds,
+  skfiyVersion
 }: ChromeNativeHostManifestInput): ChromeNativeHostManifest {
   if (!path.isAbsolute(cliShimPath)) {
     throw new Error("Chrome native messaging host path must be absolute.");
   }
+
+  const normalizedVersion = typeof skfiyVersion === "string" && skfiyVersion.trim()
+    ? skfiyVersion.trim()
+    : undefined;
 
   return {
     name: CHROME_NATIVE_HOST_NAME,
     description: "skfiy desktop Computer Use bridge",
     path: cliShimPath,
     type: "stdio",
-    allowed_origins: extensionIds.map((extensionId) => `chrome-extension://${extensionId}/`)
+    allowed_origins: extensionIds.map((extensionId) => `chrome-extension://${extensionId}/`),
+    ...(normalizedVersion ? { skfiyVersion: normalizedVersion } : {})
   };
 }
 
 export function createChromeNativeHostInstallPlan({
   homeDir,
   cliShimPath,
-  extensionIds
+  extensionIds,
+  skfiyVersion
 }: ChromeNativeHostInstallPlanInput): ChromeNativeHostInstallPlan {
   return {
     hostName: CHROME_NATIVE_HOST_NAME,
@@ -237,7 +275,8 @@ export function createChromeNativeHostInstallPlan({
     ),
     manifest: createChromeNativeHostManifest({
       cliShimPath,
-      extensionIds
+      extensionIds,
+      ...(skfiyVersion ? { skfiyVersion } : {})
     })
   };
 }
@@ -246,12 +285,14 @@ export async function installChromeNativeHost({
   homeDir,
   cliShimPath,
   extensionIds,
+  skfiyVersion,
   io = createDefaultChromeNativeHostIo()
 }: ChromeNativeHostCommandInput): Promise<ChromeNativeHostMutationResult> {
   const plan = createChromeNativeHostInstallPlan({
     homeDir,
     cliShimPath,
-    extensionIds
+    extensionIds,
+    ...(skfiyVersion ? { skfiyVersion } : {})
   });
 
   if (!(await io.exists(cliShimPath))) {
@@ -295,12 +336,20 @@ export async function readChromeNativeHostStatus({
   homeDir,
   cliShimPath,
   extensionIds,
+  skfiyVersion,
+  appVersion,
   io = createDefaultChromeNativeHostIo()
 }: ChromeNativeHostCommandInput): Promise<ChromeNativeHostStatus> {
+  const expectedSkfiyVersion = typeof appVersion === "string" && appVersion.trim()
+    ? appVersion.trim()
+    : (typeof skfiyVersion === "string" && skfiyVersion.trim()
+      ? skfiyVersion.trim()
+      : undefined);
   const plan = createChromeNativeHostInstallPlan({
     homeDir,
     cliShimPath,
-    extensionIds
+    extensionIds,
+    ...(expectedSkfiyVersion ? { skfiyVersion: expectedSkfiyVersion } : {})
   });
 
   if (!(await io.exists(cliShimPath))) {
@@ -336,10 +385,13 @@ export async function readChromeNativeHostStatus({
   });
 
   if (!diagnostics.manifestMatches) {
+    const staleByVersion = diagnostics.mismatchedFields.includes("skfiyVersion");
     return createStatus(
       plan,
       "mismatched",
-      "Chrome Native Messaging host manifest does not match the current skfiy CLI.",
+      staleByVersion
+        ? `Chrome Native Messaging host was installed by skfiy v${installedManifest.skfiyVersion ?? "unknown"} but the current app is v${expectedSkfiyVersion ?? "unknown"}.`
+        : "Chrome Native Messaging host manifest does not match the current skfiy CLI.",
       {
         cliShimExists: true,
         manifestExists: true,
@@ -375,6 +427,7 @@ export async function writeChromeExtensionConnectionHeartbeat({
   launchOrigin,
   messageType,
   requestId,
+  extensionVersion,
   pageControl,
   pageObservation,
   pageActionResult,
@@ -389,6 +442,7 @@ export async function writeChromeExtensionConnectionHeartbeat({
   const boundedPageActionResult = summarizePageActionResultForHeartbeat(pageActionResult);
   const boundedPageScreenshot = summarizePageScreenshotForHeartbeat(pageScreenshot);
   const boundedPageTabs = summarizePageTabsForHeartbeat(pageTabs);
+  const boundedExtensionVersion = readBoundedString(extensionVersion, 64);
   const latestCommand = await createLatestCommandEvidence({
     io,
     statePath,
@@ -408,6 +462,7 @@ export async function writeChromeExtensionConnectionHeartbeat({
     ...(launchOrigin ? { launchOrigin } : {}),
     messageType,
     requestId,
+    ...(boundedExtensionVersion ? { extensionVersion: boundedExtensionVersion } : {}),
     ...(pageControl ? { pageControl } : {}),
     ...(pageObservation ? { pageObservation } : {}),
     ...(boundedPageActionResult ? { pageActionResult: boundedPageActionResult } : {}),
@@ -554,6 +609,9 @@ export async function readChromeExtensionConnectionStatus({
     ...(typeof heartbeat.launchOrigin === "string" ? { launchOrigin: heartbeat.launchOrigin } : {}),
     ...(typeof heartbeat.messageType === "string" ? { messageType: heartbeat.messageType } : {}),
     ...(typeof heartbeat.requestId === "string" ? { requestId: heartbeat.requestId } : {}),
+    ...(typeof heartbeat.extensionVersion === "string" && heartbeat.extensionVersion.trim()
+      ? { extensionVersion: heartbeat.extensionVersion.trim() }
+      : {}),
     ...(readRecord(heartbeat.pageControl) ? { pageControl: readRecord(heartbeat.pageControl) } : {}),
     ...(readRecord(heartbeat.pageObservation) ? { pageObservation: readRecord(heartbeat.pageObservation) } : {}),
     ...(summarizePageActionResultForHeartbeat(heartbeat.pageActionResult)
@@ -601,13 +659,26 @@ export function decodeChromeNativeMessageFrame(frame: Buffer): unknown {
 export function createChromeNativeBridgeDispatch({
   homeDir,
   launchOrigin,
-  io
+  io,
+  appVersion
 }: ChromeNativeBridgeDispatchInput): ChromeNativeBridgeDispatch {
+  const normalizedAppVersion = typeof appVersion === "string" && appVersion.trim()
+    ? appVersion.trim()
+    : undefined;
+
   return async (message) => {
+    const payload = readRecord(message.payload);
+    const extensionVersion = readBoundedString(payload?.extensionVersion, 64);
+    const extensionCompatibility = evaluateChromeExtensionCompatibility({
+      appVersion: normalizedAppVersion,
+      extensionVersion: extensionVersion ?? undefined
+    });
     const common = {
       bridgeState: "connected",
       ...(launchOrigin ? { launchOrigin } : {}),
-      messageType: message.type
+      messageType: message.type,
+      ...(normalizedAppVersion ? { appVersion: normalizedAppVersion } : {}),
+      extensionCompatibility
     };
 
     if (message.type === "skfiy.host_policy.request") {
@@ -724,6 +795,7 @@ async function recordConnectionHeartbeat({
     return;
   }
   const payload = readRecord(record.payload);
+  const extensionVersion = readBoundedString(payload?.extensionVersion, 64);
   const pageControl = readRecord(payload?.pageControl);
   const pageObservation = readRecord(payload?.pageObservation);
   const pageActionResult = summarizePageActionResultForHeartbeat(payload?.pageActionResult);
@@ -736,6 +808,7 @@ async function recordConnectionHeartbeat({
       messageType: record.type,
       requestId: record.requestId,
       result: response.result,
+      ...(extensionVersion ? { extensionVersion } : {}),
       ...(pageControl ? { pageControl } : {}),
       ...(pageObservation ? { pageObservation } : {}),
       ...(pageActionResult ? { pageActionResult } : {}),
@@ -827,6 +900,9 @@ function createStatus(
     allowedOrigins: plan.manifest.allowed_origins,
     ...(diagnostics.installedPath ? { installedCliShimPath: diagnostics.installedPath } : {}),
     ...(diagnostics.installedAllowedOrigins ? { installedAllowedOrigins: diagnostics.installedAllowedOrigins } : {}),
+    ...(typeof input.installedManifest?.skfiyVersion === "string" && input.installedManifest.skfiyVersion.trim()
+      ? { installedSkfiyVersion: input.installedManifest.skfiyVersion.trim() }
+      : {}),
     manifestDiagnostics: diagnostics,
     reason
   };
@@ -896,8 +972,31 @@ function collectManifestMismatches(
       && origins.missingAllowedOrigins.length === 0
       && origins.extraAllowedOrigins.length === 0
       ? ""
-      : "allowed_origins"
+      : "allowed_origins",
+    readSkfiyVersionMismatch(expected.skfiyVersion, installed.skfiyVersion)
   ].filter(Boolean);
+}
+
+/**
+ * Compare the expected app version against the installed manifest's
+ * `skfiyVersion`. Returns "skfiyVersion" when the installed manifest
+ * predates the app (or predates the version-stamping feature entirely);
+ * returns "" when the versions match or no comparison was requested.
+ */
+function readSkfiyVersionMismatch(
+  expectedSkfiyVersion: string | undefined,
+  installedSkfiyVersion: string | undefined
+): string {
+  if (!expectedSkfiyVersion) {
+    return "";
+  }
+
+  if (!installedSkfiyVersion) {
+    return "skfiyVersion";
+  }
+
+  const comparison = compareChromeExtensionVersions(installedSkfiyVersion, expectedSkfiyVersion);
+  return comparison === 0 ? "" : "skfiyVersion";
 }
 
 function readExtensionIdFromAllowedOrigin(origin: string): string {

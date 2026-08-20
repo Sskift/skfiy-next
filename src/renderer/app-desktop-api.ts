@@ -102,6 +102,22 @@ export const fallbackDesktopApi: DesktopApi = {
   previewTmuxAutomation: async () => createDefaultAutomationMonitorPreview(),
   getAutomationRuns: async () => DEFAULT_AUTOMATION_RUN_SNAPSHOT,
   stopAutomationRun: async () => DEFAULT_AUTOMATION_RUN_SNAPSHOT,
+  getChromeCompatibility: async () => ({
+    schemaVersion: 1,
+    generatedAt: new Date(0).toISOString(),
+    appVersion: "unknown",
+    nativeHost: { state: "unknown", installedSkfiyVersion: null, reason: "Compatibility data unavailable." },
+    extension: { state: "unknown", version: null, source: "unknown" },
+    compatibility: {
+      state: "unknown",
+      appVersion: "unknown",
+      extensionVersion: null,
+      minVersion: "0.0.16",
+      maxTestedVersion: "0.0.17",
+      reason: "Compatibility data unavailable."
+    },
+    staleness: { nativeHostStale: false, extensionStale: false, cliStale: false, helperStale: false }
+  }),
   getRuntimeStatus: async () => ({
     stopTurnHotkey: {
       accelerator: "",

@@ -1,0 +1,230 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      # Re-run the CI gates on the tag itself: a tag whose content differs
+      # from what was reviewed cannot release.
+      - name: Typecheck (tag)
+        run: npm run typecheck
+
+      - name: Unit tests (tag)
+        run: npx vitest run
+
+      - name: Guard clean tree
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Release builds require a clean git tree"
+            git status --porcelain
+            exit 1
+          fi
+
+      - name: Build (embeds build-info.json)
+        run: npm run build
+
+      # The provenance gate: fails the release unless the commit embedded in
+      # the signed bundle equals GITHUB_SHA of the workspace that just built
+      # it. A pre-existing app built from another commit cannot pass.
+      - name: Verify build provenance
+        run: |
+          node scripts/verify-build-provenance.mjs \
+            --app dist/skfiy.app \
+            --commit "$GITHUB_SHA" \
+            --version "${RELEASE_TAG#v}" \
+            --require-clean \
+            --execute \
+            --json-output .skfiy-release/provenance.json
+
+      - name: Stage embedded build-info
+        run: |
+          mkdir -p .skfiy-release
+          cp dist/skfiy.app/Contents/Resources/build-info.json .skfiy-release/build-info.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skfiy-app
+          path: |
+            dist/skfiy.app
+            .skfiy-release/provenance.json
+            .skfiy-release/build-info.json
+
+  smoke:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: skfiy-app
+          path: .
+
+      # Run against the not-yet-signed build exactly as a user upgrade would
+      # see it, before any signing step can mask a packaging regression.
+      - name: CLI smoke
+        run: npm run smoke:cli
+
+      - name: Chrome smoke (native-host + extension compatibility)
+        run: npm run smoke:chrome
+
+      - name: UI smoke
+        run: npm run smoke:ui
+
+  sign-notarize-release:
+    needs: smoke
+    runs-on: macos-15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: skfiy-app
+          path: .
+
+      - name: Derive version
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Import signing identity
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          mkdir -p .skfiy-release
+          echo "$APPLE_CERTIFICATE_P12" | base64 -d > .skfiy-release/cert.p12
+          security create-keychain -p "$APPLE_CERTIFICATE_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$APPLE_CERTIFICATE_PASSWORD" build.keychain
+          security import .skfiy-release/cert.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$APPLE_CERTIFICATE_PASSWORD" build.keychain
+
+      - name: Sign and notarize
+        env:
+          SKFIY_DEVELOPER_ID_APPLICATION: ${{ secrets.SKFIY_DEVELOPER_ID_APPLICATION }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          node scripts/sign-notarize-macos.mjs --sign --notarize --execute \
+            --identity "$SKFIY_DEVELOPER_ID_APPLICATION" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --json-output .skfiy-release/release-report.json
+
+      - name: Verify stapled signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/skfiy.app
+          spctl --assess --type execute --verbose dist/skfiy.app
+          xcrun stapler validate dist/skfiy.app
+
+      # The distributable zip is built AFTER staple: the stapled ticket must
+      # be inside the shipped artifact.
+      - name: Create distributable zip and checksums
+        run: |
+          ditto -c -k --keepParent dist/skfiy.app ".skfiy-release/skfiy-macos-${VERSION}.zip"
+          shasum -a 256 ".skfiy-release/skfiy-macos-${VERSION}.zip" > .skfiy-release/SHA256SUMS
+
+      - name: Generate release notes
+        run: |
+          node scripts/generate-release-notes.mjs \
+            --to "$RELEASE_TAG" \
+            --build-info dist/skfiy.app/Contents/Resources/build-info.json \
+            --checksums .skfiy-release/SHA256SUMS \
+            --output .skfiy-release/notes.md \
+            --execute
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRERELEASE_FLAG=""
+          # v0.* and hyphenated tags (v0.1.0-alpha.1) publish as pre-releases.
+          case "$RELEASE_TAG" in
+            v0.*|*-*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
+          gh release create "$RELEASE_TAG" \
+            ".skfiy-release/skfiy-macos-${VERSION}.zip" \
+            ".skfiy-release/build-info.json" \
+            ".skfiy-release/SHA256SUMS" \
+            ".skfiy-release/provenance.json" \
+            --notes-file .skfiy-release/notes.md \
+            $PRERELEASE_FLAG
+
+      # Optional SLSA-verifiable attestation on top of the embedded
+      # build-info. Requires id-token: write (declared on this job); no-op
+      # outside tag pushes. See docs/release-process.md.
+      - name: Attest build provenance (SLSA)
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ".skfiy-release/skfiy-macos-${{ env.VERSION }}.zip"

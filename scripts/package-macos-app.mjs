@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { createBuildInfo } from "./generate-build-info.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,7 @@ export function createPackagePlan({
     bundledExecutablePath: path.join(appBundlePath, "Contents", "MacOS", "skfiy"),
     bundledHelperPath: path.join(appBundlePath, "Contents", "MacOS", "skfiy-helper"),
     appPackageJsonPath: path.join(resourcesPath, "app", "package.json"),
+    buildInfoPath: path.join(resourcesPath, "build-info.json"),
     sourceHelperPath: path.join(rootDir, "dist", "skfiy-helper"),
     sourceMainPath: path.join(rootDir, "dist", "main"),
     sourceRendererPath: path.join(rootDir, "dist", "renderer"),
@@ -48,8 +50,10 @@ export function createPackagePlan({
 
 export async function packageMacosApp({
   rootDir = DEFAULT_ROOT_DIR,
-  electronAppPath
+  electronAppPath,
+  io
 } = {}) {
+  const resolvedIo = resolvePackageIo(io);
   const plan = createPackagePlan({ rootDir, electronAppPath });
 
   assertPathExists(plan.electronAppPath, "Electron.app");
@@ -80,12 +84,27 @@ export async function packageMacosApp({
   );
   await fs.copyFile(plan.sourceHelperPath, plan.bundledHelperPath);
   await fs.chmod(plan.bundledHelperPath, 0o755);
-  await clearMacosExtendedAttributes(plan.appBundlePath);
-  await signNestedCode(plan.nestedCodePaths);
-  await execFileAsync(plan.adhocSignCommand.command, plan.adhocSignCommand.args);
-  await execFileAsync(plan.verifyCodeSignCommand.command, plan.verifyCodeSignCommand.args);
+  // Embed build provenance BEFORE signing so the signature covers it. The
+  // commit is captured from this live checkout; a pre-existing app cannot be
+  // relabeled without rebuilding. Degrades gracefully without git.
+  const buildInfo = await createBuildInfo({ rootDir });
+  await fs.writeFile(plan.buildInfoPath, `${JSON.stringify(buildInfo, null, 2)}\n`);
+  await clearMacosExtendedAttributes(plan.appBundlePath, resolvedIo);
+  await signNestedCode(plan.nestedCodePaths, resolvedIo);
+  await resolvedIo.execFile(plan.adhocSignCommand.command, plan.adhocSignCommand.args);
+  await resolvedIo.execFile(plan.verifyCodeSignCommand.command, plan.verifyCodeSignCommand.args);
 
   return plan;
+}
+
+/**
+ * Normalizes the injectable io. Tests pass a fake execFile so packaging runs
+ * without codesign, xattr, or a Mac.
+ */
+export function resolvePackageIo(io) {
+  return {
+    execFile: io?.execFile ?? execFileAsync
+  };
 }
 
 export function createAdhocCodeSignCommand(appPath) {
@@ -137,9 +156,9 @@ function createNestedCodePaths(appBundlePath) {
   ];
 }
 
-async function signNestedCode(nestedCodePaths) {
+async function signNestedCode(nestedCodePaths, io) {
   for (const nestedCodePath of nestedCodePaths) {
-    await execFileAsync("codesign", [
+    await io.execFile("codesign", [
       "--force",
       "--sign",
       "-",
@@ -224,9 +243,9 @@ export function createNativeMessagingSafeCliShim(source, nodePath = process.exec
   return source.replace(/^#![^\n]*(\n|$)/, `#!${checkedNodePath}\n`);
 }
 
-async function clearMacosExtendedAttributes(targetPath) {
+async function clearMacosExtendedAttributes(targetPath, io) {
   try {
-    await execFileAsync("xattr", ["-cr", targetPath]);
+    await io.execFile("xattr", ["-cr", targetPath]);
   } catch {
     // xattr is macOS-specific cleanup. Packaging can continue on filesystems
     // where extended attributes are unavailable.

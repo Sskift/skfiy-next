@@ -27,6 +27,7 @@ import type {
   BrowserContextTabDiscoveryResult,
   BrowserContextTabSummary
 } from "../shared/browser-context-source.js";
+import type { ChromeCompatibilityHealth } from "../shared/chrome-extension-compatibility.js";
 import type {
   PolicyBroadening,
   Profile,
@@ -56,6 +57,8 @@ export type {
   BrowserContextTabDiscoveryResult,
   BrowserContextTabSummary
 };
+
+export type { ChromeCompatibilityHealth };
 
 export type {
   ConversationHistorySnapshot,
@@ -779,6 +782,7 @@ export interface DesktopApi {
   ) => Promise<AutomationMonitorDefinitionPreview | null>;
   getAutomationRuns: () => Promise<AutomationRunSnapshot>;
   stopAutomationRun: (runId: string) => Promise<AutomationRunSnapshot>;
+  getChromeCompatibility: () => Promise<ChromeCompatibilityHealth>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetAtlasManifest | null>;
   importPetSkin: () => Promise<PetAtlasManifest | null>;

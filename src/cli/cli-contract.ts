@@ -29,6 +29,7 @@ export type CliErrorCode =
   | "invalid-bundle"
   | "adapter-not-found"
   | "file-not-found"
+  | "provenance-unavailable"
   | "internal";
 
 export interface CliError {
