@@ -36,7 +36,7 @@ The pet renderer is intentionally independent from the backend: main emits task 
 ```bash
 nvm use            # Node 22
 npm install
-npm test           # vitest, ~1560 tests, ~45s
+npm test           # vitest, ~1720 tests, ~50s
 npm run typecheck  # tsc --noEmit, strict, zero any
 npm run dev        # vite dev server (renderer)
 npm run dev:electron  # electron pointing at the dev server
@@ -45,7 +45,7 @@ npm run build      # vite build + tsc electron + swift helper
 
 ## Status
 
-- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1560 tests green, typecheck green
+- [x] Core ported: renderer, agent, computer-use, orchestrators, shared contracts — ~1720 tests green, typecheck green
 - [x] Electron shell ported and slimmed (personalization sprawl + tmux-replay wiring cut)
 - [x] App builds and packages: `npm run build` + `package:mac` produce `dist/skfiy.app`
 - [x] **smoke:ui passes end-to-end** — app launches, pet renders, agent turn, approval + stop flows work
@@ -76,6 +76,11 @@ npm run build      # vite build + tsc electron + swift helper
   - Supervision: tmux recovery actions (send_input/restart_step/collect_summary) with two-gate approval, budgets, stalled/waiting/completed attention signals
   - Diagnostics: 31 typed blockers from 7 state machines, 6 component versions, redaction before serialization, export preview
   - Data Export: 5 domains (profiles/memory/sessions/automation/runtime), per-domain reset, storage health, migration with backup, retention controls, two-phase restore
+- [x] **M6 features shipped** — Local Integration Surface, Pet Experience Polish, Ghostty Observation
+  - CLI: versioned JSON contracts, capabilities/status/diagnostic/export commands, MCP launcher, bin/skfiy entry
+  - MCP: tools for status, observation, approved action, stop, replay with pet-level permission boundaries
+  - Pet: keyboard paths (Enter/Space/Shift+F10/Escape), task event notifications, attention watchdog, skin panel with preview/import/reset, dynamic aria-labels
+  - Ghostty: terminal context observation, command preview with risk, bounded exit status, retry events
 
 ## Cut from the old repo (intentionally)
 
