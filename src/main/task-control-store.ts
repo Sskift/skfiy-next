@@ -286,11 +286,11 @@ function isValidActivePhaseTransition(
   }
   if (current.phase === "executing") {
     return next === "verifying"
-      || (next === "approval" && current.sideEffectState === "none");
+      || (next === "approval" && current.sideEffectState !== "occurred");
   }
   if (current.phase === "verifying") {
     return next === "executing"
-      || (next === "approval" && current.sideEffectState === "none");
+      || (next === "approval" && current.sideEffectState !== "occurred");
   }
 
   return false;

@@ -82,11 +82,6 @@ describe("main Task Control projection", () => {
         recoveryActions: ["revise_plan"]
       },
       {
-        event: routed({ status: "needs_confirmation", message: "Verification needs confirmation." }),
-        outcome: "confirmation_required",
-        recoveryActions: ["retry_observation", "retry_verification", "revise_plan", "open_readiness"]
-      },
-      {
         event: routed({ status: "failed", message: "Verification failed." }),
         outcome: "failed",
         recoveryActions: ["retry_observation", "retry_verification", "revise_plan", "open_readiness"]

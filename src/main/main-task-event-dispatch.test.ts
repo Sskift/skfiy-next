@@ -42,7 +42,7 @@ describe("createComputerUseTaskEventDispatch", () => {
 
     expect(dispatch).toMatchObject({
       approvalRequest: {
-        command: "pwd",
+        command: "run pwd in Ghostty",
         planApproved: false,
         reason: "Terminal command needs approval."
       },

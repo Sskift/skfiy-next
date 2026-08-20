@@ -68,7 +68,10 @@ function readComputerUseTaskEventApprovalRequest({
   if (event.type === "approval_required" && !approved) {
     return {
       approvalRequest: {
-        command: "command" in event ? event.command : command,
+        // Use the full input command, not event.command — Chrome events
+        // carry the parsed URL for display, but the resume flow needs the
+        // original command to re-parse the intent.
+        command,
         planApproved: false,
         approvedChromeSubmitBinding,
         reason: event.risk.reason
@@ -90,9 +93,9 @@ function readComputerUseTaskEventApprovalRequest({
   if (event.type === "submit_confirmation_required" && !chromeSubmitApproved) {
     return {
       approvalRequest: {
-        command: "command" in event ? event.command : command,
+        command,
         planApproved: true,
-        approvedChromeSubmitBinding,
+        approvedChromeSubmitBinding: approvedChromeSubmitBinding ?? event.binding,
         reason: "reason" in event ? event.reason : "Chrome submit confirmation required."
       }
     };

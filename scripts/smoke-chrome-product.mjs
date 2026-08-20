@@ -887,13 +887,19 @@ async function approveCurrentTask(cdp) {
     returnByValue: true
   });
   const snapshot = taskControl.result?.value;
-  if (!snapshot?.executionId || !snapshot.plan?.planId) {
+  if (!snapshot?.executionId) {
+    return;
+  }
+  // Chrome submit confirmations and Finder plan confirmations use a derived
+  // planId stored on the approval, not the base plan's planId.
+  const planId = snapshot.approval?.planId ?? snapshot.plan?.planId;
+  if (!planId) {
     return;
   }
   await cdp.send("Runtime.evaluate", {
     expression: `window.skfiy.approveTask(${JSON.stringify({
       executionId: snapshot.executionId,
-      planId: snapshot.plan.planId
+      planId
     })})`,
     awaitPromise: true,
     returnByValue: true
@@ -941,7 +947,7 @@ function extractCompletedChromeCurrentPageText(events) {
 function extractChromeCurrentPageSnapshot(events) {
   const extractedText = extractCompletedChromeCurrentPageText(events);
   const event = events.findLast((item) =>
-    item?.status === "executing"
+    item?.status === "verifying"
       && typeof item.message === "string"
       && item.message.startsWith("Verified current_page_snapshot:")
   );

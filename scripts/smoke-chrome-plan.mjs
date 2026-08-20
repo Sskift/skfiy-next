@@ -160,6 +160,10 @@ export function classifyChromeSmokeEvidence({
     return SENSITIVE_EXPECTED_RESULT;
   }
 
+  if (last.status === "failed" && isChromeSensitivePauseMessage(last.message)) {
+    return SENSITIVE_EXPECTED_RESULT;
+  }
+
   if (last.status === "failed" && isChromeBlockedMessage(last.message)) {
     return "blocked";
   }

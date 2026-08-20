@@ -208,6 +208,15 @@ describe("task control store", () => {
       message: "Executing operation two."
     })).toMatchObject({ phase: "executing", sideEffectState: "possible" });
 
+    // Side effects "possible" still allows a late confirmation gate (e.g.
+    // Chrome submit confirmation before the actual mutation). Once side
+    // effects have "occurred", returning to approval must be rejected.
+    store.transition({
+      executionId: "execution-1",
+      phase: "verifying",
+      message: "Verifying operation two.",
+      sideEffectState: "occurred"
+    });
     expect(() => store.transition({
       executionId: "execution-1",
       phase: "approval",

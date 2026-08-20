@@ -170,8 +170,6 @@ function readTaskControlOutcome(event: TaskEvent): TaskControlOutcome | undefine
     case "blocked":
     case "chrome_host_policy_denied":
       return "blocked";
-    case "needs_confirmation":
-      return "confirmation_required";
     case "failed":
       return "failed";
     case "cancelled":
@@ -186,8 +184,6 @@ function readTaskControlOutcome(event: TaskEvent): TaskControlOutcome | undefine
       return event.denialKind === "app_policy" ? "app_policy_denied" : "user_denied";
     case "blocked":
       return event.denialKind === "app_policy" ? "app_policy_denied" : "blocked";
-    case "needs_confirmation":
-      return "confirmation_required";
     case "failed":
       return "failed";
     case "cancelled":
@@ -204,6 +200,7 @@ function readActiveTaskControlPhase(
 ): "waiting" | "approval" | "executing" | "verifying" {
   switch (event.status) {
     case "approval_required":
+    case "needs_confirmation":
       return "approval";
     case "executing":
     case "running":
