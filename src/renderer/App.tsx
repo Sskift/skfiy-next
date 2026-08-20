@@ -105,9 +105,32 @@ import {
   type PersonalMemoryFeedback
 } from "./app-memory-state";
 import { MemoryControlCenterPanel } from "./app-memory-components";
+import {
+  DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
+  createAutomationFeedback,
+  type AutomationFeedback
+} from "./app-automation-state";
+import {
+  AutomationControlCenterPanel,
+  type AutomationDefinitionDraft,
+  type AutomationEditorState,
+  type AutomationPreviewState
+} from "./app-automation-components";
 import { ProviderDiscoveryPanel } from "./provider-discovery-panel";
 import { useBrowserContextSource } from "./app-browser-context-state";
 import { BrowserContextPanel } from "./app-browser-context-panel";
+import {
+  createProfileSwitchBanner,
+  useProfileState
+} from "./app-profile-state";
+import {
+  ProfilePanel,
+  ProfileSwitchConfirmationDialog
+} from "./profile-panel";
+import {
+  ProfileIndicator,
+  ProfileSwitchBanner
+} from "./profile-indicator";
 import type {
   AppPolicy,
   AppPolicySettings,
@@ -115,6 +138,7 @@ import type {
   AssistantAgentProviderRuntime,
   AssistantAgentProviderState,
   AssistantAgentSettingsResponse,
+  AutomationMonitorRuntime,
   ConversationHistorySnapshot,
   ConversationRetryResult,
   DesktopSessionDiagnostics,
@@ -124,6 +148,7 @@ import type {
   PersonalMemoryDashboardSnapshot,
   PlannerProviderMode,
   PlannerProviderSettings,
+  ProfileSwitchResult,
   StartupWarning,
   TaskApprovalDecisionInput,
   TaskEvent,
@@ -469,6 +494,16 @@ export default function App() {
   const [personalMemoryFeedback, setPersonalMemoryFeedback] =
     useState<PersonalMemoryFeedback | null>(null);
   const [personalMemoryActionPending, setPersonalMemoryActionPending] = useState(false);
+  const [automationMonitors, setAutomationMonitors] = useState(
+    DEFAULT_AUTOMATION_MONITOR_SNAPSHOT
+  );
+  const [automationFeedback, setAutomationFeedback] =
+    useState<AutomationFeedback | null>(null);
+  const [automationActionPending, setAutomationActionPending] = useState(false);
+  const [automationEditor, setAutomationEditor] = useState<AutomationEditorState | null>(null);
+  const [automationPreview, setAutomationPreview] = useState<AutomationPreviewState | null>(
+    null
+  );
   const [turnReplay, setTurnReplay] = useState<TurnReplay | null>(null);
   const [task, setTask] = useState<TaskView>(() => createInitialTaskView());
   const [taskControl, setTaskControl] = useState<TaskControlSnapshot | null>(null);
@@ -484,6 +519,7 @@ export default function App() {
   const [taskStopPending, setTaskStopPending] = useState(false);
   const [replayRecords, setReplayRecords] = useState<ObserveAppReplayRecord[]>([]);
   const browserContextSource = useBrowserContextSource(api);
+  const profileState = useProfileState(api);
   const assistantInputRef = useRef<HTMLTextAreaElement | null>(null);
   const petDragRef = useRef<PetDragState | null>(null);
   const pendingAssistantPromptRef = useRef<string | null>(null);
@@ -645,6 +681,158 @@ export default function App() {
       }
     },
     [api, applyPersonalMemorySnapshot]
+  );
+
+  const applyAutomationSnapshot = useCallback((snapshot: typeof DEFAULT_AUTOMATION_MONITOR_SNAPSHOT) => {
+    setAutomationMonitors(snapshot);
+  }, []);
+
+  const refreshAutomationMonitors = useCallback(async () => {
+    try {
+      applyAutomationSnapshot(await api.getAutomationMonitors());
+    } catch {
+      setAutomationFeedback(createAutomationFeedback("danger", "自动化监控状态不可用。"));
+    }
+  }, [api, applyAutomationSnapshot]);
+
+  useEffect(() => {
+    void refreshAutomationMonitors();
+  }, [refreshAutomationMonitors]);
+
+  const runAutomationMonitorNow = useCallback(
+    async (id: string) => {
+      setAutomationActionPending(true);
+      try {
+        applyAutomationSnapshot(await api.runAutomationMonitorNow(id));
+        setAutomationFeedback(createAutomationFeedback("success", "已触发一次手动检查。"));
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "手动检查失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api, applyAutomationSnapshot]
+  );
+
+  const toggleAutomationMonitor = useCallback(
+    async (id: string, enabled: boolean) => {
+      setAutomationActionPending(true);
+      try {
+        applyAutomationSnapshot(await api.setAutomationMonitorEnabled(id, enabled));
+        setAutomationFeedback(createAutomationFeedback(
+          "success",
+          enabled ? "已恢复该监控。" : "已暂停该监控。"
+        ));
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "更新监控状态失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api, applyAutomationSnapshot]
+  );
+
+  const duplicateAutomationMonitor = useCallback(
+    async (id: string) => {
+      setAutomationActionPending(true);
+      try {
+        applyAutomationSnapshot(await api.duplicateAutomationMonitor(id));
+        setAutomationFeedback(createAutomationFeedback("success", "已复制为停用的新监控。"));
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "复制监控失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api, applyAutomationSnapshot]
+  );
+
+  const deleteAutomationMonitor = useCallback(
+    async (id: string) => {
+      setAutomationActionPending(true);
+      try {
+        applyAutomationSnapshot(await api.deleteAutomationMonitor(id));
+        setAutomationFeedback(createAutomationFeedback("success", "已删除该监控。"));
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "删除监控失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api, applyAutomationSnapshot]
+  );
+
+  const openAutomationCreator = useCallback(() => {
+    setAutomationPreview(null);
+    setAutomationEditor({ mode: "create" });
+  }, []);
+
+  const openAutomationEditor = useCallback((monitor: AutomationMonitorRuntime) => {
+    setAutomationPreview(null);
+    setAutomationEditor({ mode: "edit", monitor });
+  }, []);
+
+  const closeAutomationEditor = useCallback(() => {
+    setAutomationEditor(null);
+    setAutomationPreview(null);
+  }, []);
+
+  const submitAutomationDefinition = useCallback(
+    async (draft: AutomationDefinitionDraft) => {
+      setAutomationActionPending(true);
+      try {
+        const preview = await api.previewTmuxAutomation({
+          sessionName: draft.sessionName,
+          timeoutMs: draft.timeoutMs,
+          triggerMode: draft.triggerMode
+        });
+        if (preview) {
+          setAutomationPreview({ preview, draft });
+          setAutomationFeedback(null);
+        } else {
+          setAutomationFeedback(createAutomationFeedback("danger", "无法生成安全边界预览。"));
+        }
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "生成安全边界预览失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api]
+  );
+
+  const confirmAutomationDefinition = useCallback(
+    async (enabled: boolean) => {
+      const pending = automationPreview;
+      if (!pending) {
+        return;
+      }
+
+      setAutomationActionPending(true);
+      try {
+        const snapshot = await api.upsertTmuxMonitor({
+          ...(pending.draft.monitorId ? { monitorId: pending.draft.monitorId } : {}),
+          sessionName: pending.draft.sessionName,
+          ...(pending.draft.label ? { label: pending.draft.label } : {}),
+          intervalMs: pending.draft.intervalMs,
+          timeoutMs: pending.draft.timeoutMs,
+          triggerMode: pending.draft.triggerMode,
+          enabled
+        });
+        applyAutomationSnapshot(snapshot);
+        setAutomationEditor(null);
+        setAutomationPreview(null);
+        setAutomationFeedback(createAutomationFeedback(
+          "success",
+          enabled ? "已保存并启用该监控。" : "已保存该监控（停用）。"
+        ));
+      } catch {
+        setAutomationFeedback(createAutomationFeedback("danger", "保存监控定义失败。"));
+      } finally {
+        setAutomationActionPending(false);
+      }
+    },
+    [api, applyAutomationSnapshot, automationPreview]
   );
 
   useEffect(() => {
@@ -851,6 +1039,97 @@ export default function App() {
   useEffect(() => {
     void refreshAssistantAgentSettings();
   }, [refreshAssistantAgentSettings]);
+
+  const {
+    switchTo: switchProfile,
+    confirmSwitch: confirmProfileSwitch,
+    showBanner: showProfileBanner
+  } = profileState;
+
+  const refreshProfileScopedSettings = useCallback(async () => {
+    const [nextAppPolicy, nextAssistant, nextPlanner] = await Promise.all([
+      api.getAppPolicySettings(),
+      api.getAssistantAgentSettings(),
+      api.getPlannerProviderSettings()
+    ]);
+    setAppPolicySettings(nextAppPolicy);
+    setAssistantAgentSettings(nextAssistant);
+    setPlannerProviderSettings(nextPlanner);
+    void refreshPersonalMemory();
+    return {
+      appPolicy: nextAppPolicy,
+      assistant: nextAssistant,
+      planner: nextPlanner
+    };
+  }, [api, refreshPersonalMemory]);
+
+  const applyProfileSwitchResult = useCallback(
+    async (
+      result: ProfileSwitchResult | null,
+      before: {
+        assistantMode: AssistantAgentMode;
+        plannerMode: PlannerProviderMode;
+        appPolicy: AppPolicySettings;
+        memoryScope: "shared" | "isolated";
+      }
+    ) => {
+      if (result?.status !== "switched") {
+        return;
+      }
+
+      const after = await refreshProfileScopedSettings();
+      showProfileBanner(createProfileSwitchBanner({
+        profileName: result.profile.name,
+        before,
+        after: {
+          assistantMode: after.assistant.settings.mode,
+          plannerMode: after.planner.mode,
+          appPolicy: after.appPolicy,
+          memoryScope: result.profile.memoryScope
+        }
+      }));
+    },
+    [refreshProfileScopedSettings, showProfileBanner]
+  );
+
+  const handleSwitchProfile = useCallback(
+    async (profileId: string) => {
+      const before = {
+        assistantMode: assistantAgentSettings.settings.mode,
+        plannerMode: plannerProviderSettings.mode,
+        appPolicy: appPolicySettings,
+        memoryScope: profileState.snapshot.memoryBaseDirScope
+      };
+      const result = await switchProfile(profileId);
+      await applyProfileSwitchResult(result, before);
+    },
+    [
+      assistantAgentSettings.settings.mode,
+      plannerProviderSettings.mode,
+      appPolicySettings,
+      profileState.snapshot.memoryBaseDirScope,
+      switchProfile,
+      applyProfileSwitchResult
+    ]
+  );
+
+  const handleConfirmProfileSwitch = useCallback(async () => {
+    const before = {
+      assistantMode: assistantAgentSettings.settings.mode,
+      plannerMode: plannerProviderSettings.mode,
+      appPolicy: appPolicySettings,
+      memoryScope: profileState.snapshot.memoryBaseDirScope
+    };
+    const result = await confirmProfileSwitch();
+    await applyProfileSwitchResult(result, before);
+  }, [
+    assistantAgentSettings.settings.mode,
+    plannerProviderSettings.mode,
+    appPolicySettings,
+    profileState.snapshot.memoryBaseDirScope,
+    confirmProfileSwitch,
+    applyProfileSwitchResult
+  ]);
 
   const refreshPermissions = useCallback(async () => {
     setPermissionsLoading(true);
@@ -1670,7 +1949,9 @@ export default function App() {
     setAssistantInput("");
 
     try {
-      await api.runCommand(transition.command, { mode: "active" });
+      await api.runCommand(transition.command, {
+        mode: profileState.snapshot.activeProfile?.workflowDefaults.defaultManualMode ?? "active"
+      });
       if (conversationHistoryAvailable) {
         await refreshConversationHistory();
       }
@@ -1914,7 +2195,24 @@ export default function App() {
                 <div className="settings-section-heading">
                   <strong>日常设置</strong>
                   <span>Agent 与应用策略</span>
+                  <ProfileIndicator activeProfile={profileState.snapshot.activeProfile} />
                 </div>
+                <ProfileSwitchBanner
+                  banner={profileState.banner}
+                  onDismiss={profileState.dismissBanner}
+                />
+                <ProfilePanel
+                  state={profileState}
+                  onSwitch={(profileId) => void handleSwitchProfile(profileId)}
+                />
+                {profileState.switchRequest ? (
+                  <ProfileSwitchConfirmationDialog
+                    request={profileState.switchRequest}
+                    pending={profileState.actionPending}
+                    onConfirm={() => void handleConfirmProfileSwitch()}
+                    onCancel={profileState.cancelSwitch}
+                  />
+                ) : null}
                 <div className="settings-grid">
                   <div className="app-policy-panel" aria-label="Background Agent 设置">
                     <div className="app-policy-heading">
@@ -2046,6 +2344,24 @@ export default function App() {
                   onRefresh={() => void refreshPersonalMemory()}
                   onUpdateSettings={(update) => void updatePersonalMemorySettings(update)}
                   snapshot={personalMemory}
+                />
+                <AutomationControlCenterPanel
+                  actionPending={automationActionPending}
+                  editor={automationEditor}
+                  feedback={automationFeedback}
+                  onCancelEditor={closeAutomationEditor}
+                  onCancelPreview={closeAutomationEditor}
+                  onConfirmPreview={(enabled) => void confirmAutomationDefinition(enabled)}
+                  onCreate={openAutomationCreator}
+                  onDelete={(id) => void deleteAutomationMonitor(id)}
+                  onDuplicate={(id) => void duplicateAutomationMonitor(id)}
+                  onEdit={openAutomationEditor}
+                  onRefresh={() => void refreshAutomationMonitors()}
+                  onRunNow={(id) => void runAutomationMonitorNow(id)}
+                  onSubmitDefinition={(draft) => void submitAutomationDefinition(draft)}
+                  onToggleEnabled={(id, enabled) => void toggleAutomationMonitor(id, enabled)}
+                  preview={automationPreview}
+                  snapshot={automationMonitors}
                 />
               </div>
             </>

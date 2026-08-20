@@ -3,13 +3,23 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("personal memory main-process wiring", () => {
-  it("instantiates the journal, pending, and settings stores next to the durable memory store", () => {
+  it("instantiates the journal, pending, and settings stores through the memory bundle factory", () => {
     const source = readMainSource();
+    const bundleSource = readMemoryStoresSource();
 
-    expect(source).toContain("createPersonalMemoryJournalStore");
-    expect(source).toContain("createPendingPersonalMemoryStore");
-    expect(source).toContain("createPersonalMemorySettingsStore");
+    // main.ts rebuilds the bundle (including for isolated profiles) and reads
+    // the dashboard through the active bundle's base dir.
+    expect(source).toContain("createMemoryStores");
+    expect(source).toContain("let memoryStores = createMemoryStores");
     expect(source).toContain("readPersonalMemoryDashboardSnapshot");
+
+    // The six memory stores are constructed together in the bundle factory.
+    expect(bundleSource).toContain("createPersonalMemoryJournalStore");
+    expect(bundleSource).toContain("createPendingPersonalMemoryStore");
+    expect(bundleSource).toContain("createPersonalMemorySettingsStore");
+    expect(bundleSource).toContain("createPersonalMemoryStore");
+    expect(bundleSource).toContain("createSessionMemoryStore");
+    expect(bundleSource).toContain("createPersonalSkillSettingsStore");
   });
 
   it("delegates completed assistant turns to the personalization learning loop", () => {
@@ -19,10 +29,10 @@ describe("personal memory main-process wiring", () => {
     const scheduleBlock = source.slice(scheduleIndex, source.indexOf("function emitAssistantToolPlanTaskEvent", scheduleIndex));
 
     expect(source).toContain("recordCompletedAssistantTurnForPersonalization");
-    expect(scheduleBlock).toContain("memoryStore: personalMemoryStore");
-    expect(scheduleBlock).toContain("memoryJournalStore: personalMemoryJournalStore");
-    expect(scheduleBlock).toContain("pendingMemoryStore: pendingPersonalMemoryStore");
-    expect(scheduleBlock).toContain("sessionMemoryStore");
+    expect(scheduleBlock).toContain("memoryStore: memoryStores.personalMemory");
+    expect(scheduleBlock).toContain("memoryJournalStore: memoryStores.personalMemoryJournal");
+    expect(scheduleBlock).toContain("pendingMemoryStore: memoryStores.pendingPersonalMemory");
+    expect(scheduleBlock).toContain("sessionMemoryStore: memoryStores.sessionMemory");
     expect(scheduleBlock).toContain("memoryWriteApprovalEnabled: settings.writeApprovalEnabled");
     expect(scheduleBlock).toContain("postTurnLearningEnabled");
     expect(scheduleBlock).toContain("runReviewTurn: (reviewPrompt, { personalMemory }) => runAssistantAgentTurn(reviewPrompt");
@@ -48,4 +58,8 @@ describe("personal memory main-process wiring", () => {
 
 function readMainSource(): string {
   return readFileSync(path.join(process.cwd(), "src/main/main.ts"), "utf8");
+}
+
+function readMemoryStoresSource(): string {
+  return readFileSync(path.join(process.cwd(), "src/main/memory-stores.ts"), "utf8");
 }

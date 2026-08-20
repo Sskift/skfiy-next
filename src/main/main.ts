@@ -41,16 +41,17 @@ import {
   readInitialAssistantAgentSettingsFromConfig
 } from "./assistant-agent-settings.js";
 import { testAssistantAgentProvider } from "./assistant-agent-provider-test.js";
+import { createSkfiyApplicationSupportPath } from "./personal-memory.js";
+import { createMemoryStores } from "./memory-stores.js";
+import { createProfileStore } from "./profile-store.js";
 import {
-  createPersonalMemoryStore,
-  createSkfiyApplicationSupportPath
-} from "./personal-memory.js";
-import { createPersonalMemoryJournalStore } from "./personal-memory-journal.js";
-import { createPendingPersonalMemoryStore } from "./personal-memory-pending.js";
-import {
-  createPersonalMemorySettingsStore,
-  readPersonalMemorySettingsUpdate
-} from "./personal-memory-settings.js";
+  createIsolatedProfileMemoryBaseDir,
+  createProfileRuntime
+} from "./profile-runtime.js";
+import { registerProfileIpc } from "./main-profile-wiring.js";
+import { captureProfileSettings } from "./profile-settings.js";
+import { readChromeHostPolicyState } from "./chrome-host-policy.js";
+import { readPersonalMemorySettingsUpdate } from "./personal-memory-settings.js";
 import {
   approvePendingPersonalMemoryWrite,
   forgetPersonalMemoryEntry,
@@ -60,9 +61,7 @@ import {
   rejectPendingPersonalMemoryWrite
 } from "./personal-memory-dashboard.js";
 import { recordCompletedAssistantTurnForPersonalization } from "./personalization-learning-loop.js";
-import { createPersonalSkillSettingsStore } from "./personal-skills.js";
 import {
-  createSessionMemoryStore,
   searchSessionMemory
 } from "./session-memory.js";
 import {
@@ -149,6 +148,8 @@ import {
   createAutomationMonitorManager,
   createAutomationMonitorStatePath,
   createAutomationMonitorStore,
+  createTmuxAutomationMonitorPreview,
+  normalizeMonitorTimeoutMs,
   type AutomationMonitorNotificationEvent,
   type AutomationMonitorStoreIo
 } from "./automation-monitor.js";
@@ -156,12 +157,14 @@ import {
   createAutomationMonitorNotificationCoordinator
 } from "./automation-monitor-notification.js";
 import {
+  readAutomationMonitorId,
   readConversationRenameRequest,
   readConversationRetryRequest,
   readConversationSessionId,
   readPermissionSettingsTarget,
   readRunCommandRequest,
   readTaskApprovalDecisionRequest,
+  readTmuxAutomationPreviewInput,
   readTmuxMonitorInput
 } from "./main-ipc-payload.js";
 import {
@@ -306,23 +309,51 @@ const firstRunReadinessController = createFirstRunReadinessController({
     getFinderSelection: () => createDesktopHelper().getFinderSelection()
   })
 });
-const personalMemoryStore = createPersonalMemoryStore({
-  baseDir: skfiyAppSupportDir
+// Memory stores are rebuilt against a profile-scoped base dir when an
+// isolated profile is active, so every existing memory consumer reads
+// profile-scoped data with no further changes. The Default profile keeps
+// the global base dir, preserving existing USER.md / AGENT.md / sessions.jsonl.
+let memoryStores = createMemoryStores(skfiyAppSupportDir);
+const profileStore = createProfileStore({
+  baseDir: skfiyAppSupportDir,
+  seed: captureProfileSettings({
+    assistantAgent: assistantAgentSettingsStore.get(),
+    plannerProvider: plannerProviderSettingsStore.get(),
+    appPolicy: appPolicySettingsStore.get(),
+    personalMemory: memoryStores.personalMemorySettings.read(),
+    defaultManualMode: "active"
+  })
 });
-const personalSkillSettingsStore = createPersonalSkillSettingsStore({
-  baseDir: skfiyAppSupportDir
-});
-const sessionMemoryStore = createSessionMemoryStore({
-  baseDir: skfiyAppSupportDir
-});
-const personalMemoryJournalStore = createPersonalMemoryJournalStore({
-  baseDir: skfiyAppSupportDir
-});
-const pendingPersonalMemoryStore = createPendingPersonalMemoryStore({
-  baseDir: skfiyAppSupportDir
-});
-const personalMemorySettingsStore = createPersonalMemorySettingsStore({
-  baseDir: skfiyAppSupportDir
+const profileRuntime = createProfileRuntime({
+  store: profileStore,
+  liveSettings: {
+    assistantAgent: assistantAgentSettingsStore,
+    plannerProvider: plannerProviderSettingsStore,
+    appPolicy: appPolicySettingsStore,
+    personalMemory: {
+      read: () => memoryStores.personalMemorySettings.read(),
+      update: (update) => memoryStores.personalMemorySettings.update(update)
+    }
+  },
+  sharedMemoryBaseDir: skfiyAppSupportDir,
+  isolatedMemoryBaseDir: (profileId) =>
+    createIsolatedProfileMemoryBaseDir(skfiyAppSupportDir, profileId),
+  rebuildMemoryStores: (baseDir) => {
+    memoryStores = createMemoryStores(baseDir);
+  },
+  readHostPolicy: async () =>
+    (await readChromeHostPolicyState({ homeDir: os.homedir() })).policy,
+  removeProfileDirectory: (profileId) => {
+    fs.rmSync(createIsolatedProfileMemoryBaseDir(skfiyAppSupportDir, profileId), {
+      recursive: true,
+      force: true
+    });
+  },
+  emitChanged: (snapshot) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("skfiy:profile-changed", snapshot);
+    }
+  }
 });
 const PERSONAL_MEMORY_REVIEW_TIMEOUT_MS = 15_000;
 type ConversationSessionStore = ReturnType<typeof createConversationSessionStore>;
@@ -474,7 +505,7 @@ function emitPersonalMemoryChanged(): void {
 
   window.webContents.send(
     "skfiy:personal-memory-changed",
-    readPersonalMemoryDashboardSnapshot({ baseDir: skfiyAppSupportDir })
+    readPersonalMemoryDashboardSnapshot({ baseDir: memoryStores.baseDir })
   );
 }
 
@@ -820,10 +851,10 @@ async function createAssistantAgentTaskTurn(
   const browserPageContext = isRetry
     ? undefined
     : await browserContextSourceActions.readTurnContext();
-  const personalMemory = personalMemoryStore.read();
-  const personalSkillSettings = personalSkillSettingsStore.read();
+  const personalMemory = memoryStores.personalMemory.read();
+  const personalSkillSettings = memoryStores.personalSkillSettings.read();
   const recallableRecords = conversationSessionStore?.readRecallableRecords()
-    ?? sessionMemoryStore.readAll();
+    ?? memoryStores.sessionMemory.readAll();
   const currentSessionRecords = sessionId && conversationSessionStore
     ? conversationSessionStore.readRecallableRecords({ sessionId }).slice(-3)
     : [];
@@ -868,7 +899,7 @@ function schedulePersonalMemoryPostTurnReview(
   turn: AssistantAgentTurnResult,
   browserPageContext: BrowserPageContext | undefined
 ): void {
-  const settings = personalMemorySettingsStore.read();
+  const settings = memoryStores.personalMemorySettings.read();
   if (!settings.postTurnLearningEnabled) {
     return;
   }
@@ -878,10 +909,10 @@ function schedulePersonalMemoryPostTurnReview(
     userInput,
     turn,
     browserPageContext: browserPageContext ?? { state: "unavailable" },
-    memoryStore: personalMemoryStore,
-    memoryJournalStore: personalMemoryJournalStore,
-    pendingMemoryStore: pendingPersonalMemoryStore,
-    sessionMemoryStore,
+    memoryStore: memoryStores.personalMemory,
+    memoryJournalStore: memoryStores.personalMemoryJournal,
+    pendingMemoryStore: memoryStores.pendingPersonalMemory,
+    sessionMemoryStore: memoryStores.sessionMemory,
     memoryWriteApprovalEnabled: settings.writeApprovalEnabled,
     runReviewTurn: (reviewPrompt, { personalMemory }) => runAssistantAgentTurn(reviewPrompt, {
       settings: {
@@ -2165,7 +2196,9 @@ ipcMain.handle("skfiy:get-app-policy-settings", () => {
 });
 
 ipcMain.handle("skfiy:set-app-policy", (_event, update: unknown) => {
-  return appPolicySettingsStore.set(readAppPolicySettingsUpdate(update));
+  const settings = appPolicySettingsStore.set(readAppPolicySettingsUpdate(update));
+  profileRuntime.captureActiveProfile();
+  return settings;
 });
 
 ipcMain.handle("skfiy:get-planner-provider-settings", () => {
@@ -2173,7 +2206,9 @@ ipcMain.handle("skfiy:get-planner-provider-settings", () => {
 });
 
 ipcMain.handle("skfiy:set-planner-provider-settings", (_event, update: unknown) => {
-  return plannerProviderSettingsStore.set(readPlannerProviderSettingsUpdate(update));
+  const settings = plannerProviderSettingsStore.set(readPlannerProviderSettingsUpdate(update));
+  profileRuntime.captureActiveProfile();
+  return settings;
 });
 
 ipcMain.handle("skfiy:get-assistant-agent-settings", async () => {
@@ -2184,18 +2219,21 @@ ipcMain.handle("skfiy:get-assistant-agent-settings", async () => {
 
 ipcMain.handle("skfiy:set-assistant-agent-settings", async (_event, update: unknown) => {
   firstRunReadinessController.resetBackgroundAgentTest();
-  return updateAssistantAgentSettingsResponse({
+  const response = await updateAssistantAgentSettingsResponse({
     store: assistantAgentSettingsStore,
     update
   });
+  profileRuntime.captureActiveProfile();
+  return response;
 });
 
 ipcMain.handle("skfiy:get-personal-memory", () => {
-  return readPersonalMemoryDashboardSnapshot({ baseDir: skfiyAppSupportDir });
+  return readPersonalMemoryDashboardSnapshot({ baseDir: memoryStores.baseDir });
 });
 
 ipcMain.handle("skfiy:set-personal-memory-settings", (_event, update: unknown) => {
-  const settings = personalMemorySettingsStore.update(readPersonalMemorySettingsUpdate(update));
+  const settings = memoryStores.personalMemorySettings.update(readPersonalMemorySettingsUpdate(update));
+  profileRuntime.captureActiveProfile();
   emitPersonalMemoryChanged();
   return settings;
 });
@@ -2206,7 +2244,7 @@ ipcMain.handle("skfiy:forget-personal-memory", (_event, input: unknown) => {
     throw new Error("Personal memory forget requires target user or agent and exact content.");
   }
 
-  const result = forgetPersonalMemoryEntry({ baseDir: skfiyAppSupportDir, ...request });
+  const result = forgetPersonalMemoryEntry({ baseDir: memoryStores.baseDir, ...request });
   emitPersonalMemoryChanged();
   return result;
 });
@@ -2218,7 +2256,7 @@ ipcMain.handle("skfiy:approve-pending-memory", (_event, input: unknown) => {
   }
 
   const result = approvePendingPersonalMemoryWrite({
-    baseDir: skfiyAppSupportDir,
+    baseDir: memoryStores.baseDir,
     pendingId: request.pendingId
   });
   emitPersonalMemoryChanged();
@@ -2232,7 +2270,7 @@ ipcMain.handle("skfiy:reject-pending-memory", (_event, input: unknown) => {
   }
 
   const result = rejectPendingPersonalMemoryWrite({
-    baseDir: skfiyAppSupportDir,
+    baseDir: memoryStores.baseDir,
     pendingId: request.pendingId
   });
   emitPersonalMemoryChanged();
@@ -2462,6 +2500,52 @@ ipcMain.handle("skfiy:run-automation-monitor-now", async (_event, id: unknown) =
   return automationMonitorManager.readSnapshot();
 });
 
+ipcMain.handle("skfiy:duplicate-automation-monitor", (_event, id: unknown) => {
+  const monitorId = readAutomationMonitorId(id);
+  if (!monitorId) {
+    throw new Error("Automation monitor id is invalid.");
+  }
+
+  automationMonitorManager.duplicateMonitor(monitorId);
+  return automationMonitorManager.readSnapshot();
+});
+
+ipcMain.handle(
+  "skfiy:set-automation-monitor-enabled",
+  (_event, id: unknown, enabled: unknown) => {
+    const monitorId = readAutomationMonitorId(id);
+    if (!monitorId || typeof enabled !== "boolean") {
+      throw new Error("Automation monitor lifecycle request is invalid.");
+    }
+
+    automationMonitorManager.setMonitorEnabled(monitorId, enabled);
+    return automationMonitorManager.readSnapshot();
+  }
+);
+
+ipcMain.handle("skfiy:delete-automation-monitor", (_event, id: unknown) => {
+  const monitorId = readAutomationMonitorId(id);
+  if (!monitorId) {
+    throw new Error("Automation monitor id is invalid.");
+  }
+  if (!automationMonitorManager.deleteMonitor(monitorId)) {
+    throw new Error(`Unknown automation monitor: ${monitorId}`);
+  }
+
+  return automationMonitorManager.readSnapshot();
+});
+
+ipcMain.handle("skfiy:preview-tmux-automation", (_event, input: unknown) => {
+  const request = readTmuxAutomationPreviewInput(input);
+  const sessionName = request.sessionName.trim();
+  if (!/^[A-Za-z0-9_.:-]+$/u.test(sessionName)) {
+    throw new Error("Automation monitor tmux session name is invalid.");
+  }
+
+  const timeoutMs = normalizeMonitorTimeoutMs(request.timeoutMs);
+  return createTmuxAutomationMonitorPreview(sessionName, timeoutMs);
+});
+
 ipcMain.handle("skfiy:get-runtime-status", () => {
   return createRuntimeStatusResponse(stopTurnHotkeyRegistered);
 });
@@ -2473,6 +2557,11 @@ ipcMain.handle("skfiy:get-pet-skin", async () => {
 registerBrowserContextSourceIpc({
   ipcMain,
   actions: browserContextSourceActions
+});
+
+registerProfileIpc({
+  ipcMain,
+  runtime: profileRuntime
 });
 
 app.whenReady().then(async () => {

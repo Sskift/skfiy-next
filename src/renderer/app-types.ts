@@ -27,6 +27,25 @@ import type {
   BrowserContextTabDiscoveryResult,
   BrowserContextTabSummary
 } from "../shared/browser-context-source.js";
+import type {
+  PolicyBroadening,
+  Profile,
+  ProfileExportBundle,
+  ProfileMemoryScope,
+  ProfileRuntimeSnapshot,
+  ProfileSummary,
+  ProfileSwitchResult
+} from "../shared/profile.js";
+
+export type {
+  PolicyBroadening,
+  Profile,
+  ProfileExportBundle,
+  ProfileMemoryScope,
+  ProfileRuntimeSnapshot,
+  ProfileSummary,
+  ProfileSwitchResult
+};
 
 export type {
   BrowserContextBlocker,
@@ -327,6 +346,7 @@ export type AutomationMonitorStatus =
   | "scheduler_inactive";
 export type AutomationSchedulerState = "active" | "inactive";
 export type AutomationMonitorLastResult = "observing" | "needs_attention" | "blocked" | "error";
+export type AutomationMonitorTriggerMode = "manual" | "scheduled" | "local-state";
 
 export interface AutomationMonitorSchedulerStatus {
   state: AutomationSchedulerState;
@@ -338,13 +358,31 @@ export interface AutomationMonitorSchedulerStatus {
   reason?: string;
 }
 
+export interface AutomationMonitorDefinitionPreview {
+  adapter: "tmux-supervision";
+  triggerModes: ["manual", "scheduled"];
+  target: {
+    kind: "tmux-session";
+    sessionName: string;
+  };
+  requiredPermissions: [];
+  readWriteBehavior: "read-only";
+  approvalMode: "not-required";
+  timeoutMs: number;
+  verification: "tmux session, window, pane, and bounded recent pane-output observation";
+  mutatesSession: false;
+}
+
 export interface AutomationMonitorRuntime {
   id: string;
   kind: "tmux-session";
   label: string;
   enabled: boolean;
   intervalMs: number;
+  timeoutMs: number;
+  triggerMode: AutomationMonitorTriggerMode;
   sessionName: string;
+  preview: AutomationMonitorDefinitionPreview;
   status: AutomationMonitorStatus;
   checkCount: number;
   lastCheckedAt?: string;
@@ -582,9 +620,27 @@ export interface DesktopApi {
   getTurnReplay: () => Promise<TurnReplay | null>;
   getAutomationMonitors: () => Promise<AutomationMonitorSnapshot>;
   upsertTmuxMonitor: (
-    input: { sessionName: string; label?: string; intervalMs: number; enabled?: boolean }
+    input: {
+      monitorId?: string;
+      sessionName: string;
+      label?: string;
+      intervalMs: number;
+      timeoutMs?: number;
+      triggerMode?: AutomationMonitorTriggerMode;
+      enabled?: boolean;
+    }
   ) => Promise<AutomationMonitorSnapshot>;
+  duplicateAutomationMonitor: (id: string) => Promise<AutomationMonitorSnapshot>;
   runAutomationMonitorNow: (id: string) => Promise<AutomationMonitorSnapshot>;
+  setAutomationMonitorEnabled: (id: string, enabled: boolean) => Promise<AutomationMonitorSnapshot>;
+  deleteAutomationMonitor: (id: string) => Promise<AutomationMonitorSnapshot>;
+  previewTmuxAutomation: (
+    input: {
+      sessionName: string;
+      timeoutMs?: number;
+      triggerMode?: AutomationMonitorTriggerMode;
+    }
+  ) => Promise<AutomationMonitorDefinitionPreview | null>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetAtlasManifest | null>;
   getWindowBounds: () => Promise<WindowBounds | null>;
@@ -616,6 +672,28 @@ export interface DesktopApi {
   clearBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
   onBrowserContextChanged: (
     callback: (snapshot: BrowserContextSourceSnapshot) => void
+  ) => () => void;
+  getProfiles: () => Promise<ProfileRuntimeSnapshot>;
+  switchProfile: (
+    input: { profileId: string; confirm?: boolean }
+  ) => Promise<ProfileSwitchResult>;
+  createProfile: (input: {
+    name: string;
+    memoryScope?: ProfileMemoryScope;
+    cloneFromActive?: boolean;
+    defaultManualMode?: "active" | "quiet";
+  }) => Promise<ProfileRuntimeSnapshot>;
+  updateProfile: (
+    input: { profileId: string; name?: string }
+  ) => Promise<ProfileRuntimeSnapshot>;
+  deleteProfile: (profileId: string) => Promise<ProfileRuntimeSnapshot>;
+  exportProfile: (input: {
+    profileId: string;
+    includeMemory?: boolean
+  }) => Promise<ProfileExportBundle>;
+  importProfile: (bundle: ProfileExportBundle) => Promise<ProfileRuntimeSnapshot>;
+  onProfileChanged: (
+    callback: (snapshot: ProfileRuntimeSnapshot) => void
   ) => () => void;
 }
 

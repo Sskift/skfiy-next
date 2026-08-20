@@ -63,4 +63,35 @@ describe("app desktop api", () => {
     await expect(api.setPlannerProviderSettings({ mode: "disabled" }))
       .resolves.toMatchObject({ mode: "disabled" });
   });
+
+  it("falls back to inert automation monitor defaults", async () => {
+    const api: DesktopApi = getDesktopApi();
+
+    const expected = {
+      schemaVersion: 1,
+      activeCount: 0,
+      attentionCount: 0,
+      schedulerInactiveCount: 0,
+      monitors: []
+    };
+    await expect(api.getAutomationMonitors()).resolves.toMatchObject(expected);
+    await expect(api.upsertTmuxMonitor({
+      sessionName: "money-run-goal",
+      intervalMs: 600_000
+    })).resolves.toMatchObject(expected);
+    await expect(api.duplicateAutomationMonitor("tmux-session:money-run-goal"))
+      .resolves.toMatchObject(expected);
+    await expect(api.runAutomationMonitorNow("tmux-session:money-run-goal"))
+      .resolves.toMatchObject(expected);
+    await expect(api.setAutomationMonitorEnabled("tmux-session:money-run-goal", false))
+      .resolves.toMatchObject(expected);
+    await expect(api.deleteAutomationMonitor("tmux-session:money-run-goal"))
+      .resolves.toMatchObject(expected);
+    await expect(api.previewTmuxAutomation({ sessionName: "money-run-goal" }))
+      .resolves.toMatchObject({
+        adapter: "tmux-supervision",
+        readWriteBehavior: "read-only",
+        target: { kind: "tmux-session", sessionName: "" }
+      });
+  });
 });

@@ -13,6 +13,14 @@ import type {
   TaskControlRecoveryRequest,
   TaskControlSnapshot
 } from "../shared/task-control.js";
+import type {
+  PolicyBroadening,
+  ProfileExportBundle,
+  ProfileMemoryScope,
+  ProfileRuntimeSnapshot,
+  ProfileSummary,
+  ProfileSwitchResult
+} from "../shared/profile.js";
 
 type ManualMode = "active" | "quiet";
 type PetWindowMode = "compact" | "expanded";
@@ -730,6 +738,7 @@ type AutomationMonitorStatus =
   | "scheduler_inactive";
 type AutomationSchedulerState = "active" | "inactive";
 type AutomationMonitorLastResult = "observing" | "needs_attention" | "blocked" | "error";
+type AutomationMonitorTriggerMode = "manual" | "scheduled" | "local-state";
 
 interface AutomationMonitorSchedulerStatus {
   state: AutomationSchedulerState;
@@ -741,13 +750,31 @@ interface AutomationMonitorSchedulerStatus {
   reason?: string;
 }
 
+interface AutomationMonitorDefinitionPreview {
+  adapter: "tmux-supervision";
+  triggerModes: ["manual", "scheduled"];
+  target: {
+    kind: "tmux-session";
+    sessionName: string;
+  };
+  requiredPermissions: [];
+  readWriteBehavior: "read-only";
+  approvalMode: "not-required";
+  timeoutMs: number;
+  verification: "tmux session, window, pane, and bounded recent pane-output observation";
+  mutatesSession: false;
+}
+
 interface AutomationMonitorRuntime {
   id: string;
   kind: "tmux-session";
   label: string;
   enabled: boolean;
   intervalMs: number;
+  timeoutMs: number;
+  triggerMode: AutomationMonitorTriggerMode;
   sessionName: string;
+  preview: AutomationMonitorDefinitionPreview;
   status: AutomationMonitorStatus;
   checkCount: number;
   lastCheckedAt?: string;
@@ -868,9 +895,27 @@ interface DesktopApi {
   getTurnReplay: () => Promise<TurnReplay | null>;
   getAutomationMonitors: () => Promise<AutomationMonitorSnapshot>;
   upsertTmuxMonitor: (
-    input: { sessionName: string; label?: string; intervalMs: number; enabled?: boolean }
+    input: {
+      monitorId?: string;
+      sessionName: string;
+      label?: string;
+      intervalMs: number;
+      timeoutMs?: number;
+      triggerMode?: AutomationMonitorTriggerMode;
+      enabled?: boolean;
+    }
   ) => Promise<AutomationMonitorSnapshot>;
+  duplicateAutomationMonitor: (id: string) => Promise<AutomationMonitorSnapshot>;
   runAutomationMonitorNow: (id: string) => Promise<AutomationMonitorSnapshot>;
+  setAutomationMonitorEnabled: (id: string, enabled: boolean) => Promise<AutomationMonitorSnapshot>;
+  deleteAutomationMonitor: (id: string) => Promise<AutomationMonitorSnapshot>;
+  previewTmuxAutomation: (
+    input: {
+      sessionName: string;
+      timeoutMs?: number;
+      triggerMode?: AutomationMonitorTriggerMode;
+    }
+  ) => Promise<AutomationMonitorDefinitionPreview | null>;
   getRuntimeStatus: () => Promise<RuntimeStatus>;
   getPetSkin: () => Promise<PetSkinManifest | null>;
   getWindowBounds: () => Promise<WindowBounds | null>;
@@ -902,6 +947,28 @@ interface DesktopApi {
   clearBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
   onBrowserContextChanged: (
     callback: (snapshot: BrowserContextSourceSnapshot) => void
+  ) => () => void;
+  getProfiles: () => Promise<ProfileRuntimeSnapshot>;
+  switchProfile: (
+    input: { profileId: string; confirm?: boolean }
+  ) => Promise<ProfileSwitchResult>;
+  createProfile: (input: {
+    name: string;
+    memoryScope?: ProfileMemoryScope;
+    cloneFromActive?: boolean;
+    defaultManualMode?: "active" | "quiet";
+  }) => Promise<ProfileRuntimeSnapshot>;
+  updateProfile: (
+    input: { profileId: string; name?: string }
+  ) => Promise<ProfileRuntimeSnapshot>;
+  deleteProfile: (profileId: string) => Promise<ProfileRuntimeSnapshot>;
+  exportProfile: (input: {
+    profileId: string;
+    includeMemory?: boolean;
+  }) => Promise<ProfileExportBundle>;
+  importProfile: (bundle: ProfileExportBundle) => Promise<ProfileRuntimeSnapshot>;
+  onProfileChanged: (
+    callback: (snapshot: ProfileRuntimeSnapshot) => void
   ) => () => void;
 }
 
@@ -1377,13 +1444,31 @@ const api: DesktopApi = {
   },
   async upsertTmuxMonitor(input) {
     const payload = await ipcRenderer.invoke("skfiy:upsert-tmux-monitor", {
+      monitorId: typeof input.monitorId === "string" ? input.monitorId : undefined,
       sessionName: typeof input.sessionName === "string" ? input.sessionName : "",
       label: typeof input.label === "string" ? input.label : undefined,
       intervalMs: typeof input.intervalMs === "number" && Number.isFinite(input.intervalMs)
         ? input.intervalMs
         : 300_000,
+      timeoutMs: typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
+        ? input.timeoutMs
+        : undefined,
+      triggerMode: input.triggerMode === "manual"
+        || input.triggerMode === "scheduled"
+        || input.triggerMode === "local-state"
+        ? input.triggerMode
+        : undefined,
       enabled: typeof input.enabled === "boolean" ? input.enabled : undefined
     });
+    return isAutomationMonitorSnapshot(payload)
+      ? payload
+      : createDefaultAutomationMonitorSnapshot();
+  },
+  async duplicateAutomationMonitor(id) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:duplicate-automation-monitor",
+      typeof id === "string" ? id : ""
+    );
     return isAutomationMonitorSnapshot(payload)
       ? payload
       : createDefaultAutomationMonitorSnapshot();
@@ -1396,6 +1481,41 @@ const api: DesktopApi = {
     return isAutomationMonitorSnapshot(payload)
       ? payload
       : createDefaultAutomationMonitorSnapshot();
+  },
+  async setAutomationMonitorEnabled(id, enabled) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:set-automation-monitor-enabled",
+      typeof id === "string" ? id : "",
+      enabled === true
+    );
+    return isAutomationMonitorSnapshot(payload)
+      ? payload
+      : createDefaultAutomationMonitorSnapshot();
+  },
+  async deleteAutomationMonitor(id) {
+    const payload = await ipcRenderer.invoke(
+      "skfiy:delete-automation-monitor",
+      typeof id === "string" ? id : ""
+    );
+    return isAutomationMonitorSnapshot(payload)
+      ? payload
+      : createDefaultAutomationMonitorSnapshot();
+  },
+  async previewTmuxAutomation(input) {
+    const payload = await ipcRenderer.invoke("skfiy:preview-tmux-automation", {
+      sessionName: typeof input.sessionName === "string" ? input.sessionName : "",
+      timeoutMs: typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
+        ? input.timeoutMs
+        : undefined,
+      triggerMode: input.triggerMode === "manual"
+        || input.triggerMode === "scheduled"
+        || input.triggerMode === "local-state"
+        ? input.triggerMode
+        : undefined
+    });
+    return isAutomationMonitorDefinitionPreview(payload)
+      ? payload
+      : null;
   },
   async getRuntimeStatus() {
     const payload = await ipcRenderer.invoke("skfiy:get-runtime-status");
@@ -1565,6 +1685,81 @@ const api: DesktopApi = {
 
     ipcRenderer.on("skfiy:browser-context-changed", listener);
     return () => ipcRenderer.removeListener("skfiy:browser-context-changed", listener);
+  },
+  async getProfiles() {
+    const payload = await ipcRenderer.invoke("skfiy:get-profiles");
+    return isProfileRuntimeSnapshot(payload)
+      ? payload
+      : createDefaultProfileRuntimeSnapshot();
+  },
+  async switchProfile(input) {
+    const payload = await ipcRenderer.invoke("skfiy:switch-profile", {
+      profileId: typeof input?.profileId === "string" ? input.profileId : undefined,
+      confirm: input?.confirm === true
+    });
+    return isProfileSwitchResult(payload)
+      ? payload
+      : {
+          status: "blocked",
+          profileId: typeof input?.profileId === "string" ? input.profileId : "",
+          reason: "Profile switch is unavailable in this renderer environment."
+        };
+  },
+  async createProfile(input) {
+    const payload = await ipcRenderer.invoke("skfiy:create-profile", {
+      name: typeof input?.name === "string" ? input.name : undefined,
+      memoryScope: input?.memoryScope,
+      cloneFromActive: input?.cloneFromActive === true,
+      ...(input?.defaultManualMode !== undefined
+        ? { defaultManualMode: input.defaultManualMode }
+        : {})
+    });
+    return isProfileRuntimeSnapshot(payload)
+      ? payload
+      : createDefaultProfileRuntimeSnapshot();
+  },
+  async updateProfile(input) {
+    const payload = await ipcRenderer.invoke("skfiy:update-profile", {
+      profileId: typeof input?.profileId === "string" ? input.profileId : undefined,
+      ...(typeof input?.name === "string" ? { name: input.name } : {})
+    });
+    return isProfileRuntimeSnapshot(payload)
+      ? payload
+      : createDefaultProfileRuntimeSnapshot();
+  },
+  async deleteProfile(profileId) {
+    const payload = await ipcRenderer.invoke("skfiy:delete-profile", {
+      profileId: typeof profileId === "string" ? profileId : undefined
+    });
+    return isProfileRuntimeSnapshot(payload)
+      ? payload
+      : createDefaultProfileRuntimeSnapshot();
+  },
+  async exportProfile(input) {
+    const payload = await ipcRenderer.invoke("skfiy:export-profile", {
+      profileId: typeof input?.profileId === "string" ? input.profileId : undefined,
+      includeMemory: input?.includeMemory === true
+    });
+    if (!isProfileExportBundle(payload)) {
+      throw new Error("Profile export is unavailable in this renderer environment.");
+    }
+    return payload;
+  },
+  async importProfile(bundle) {
+    const payload = await ipcRenderer.invoke("skfiy:import-profile", bundle);
+    return isProfileRuntimeSnapshot(payload)
+      ? payload
+      : createDefaultProfileRuntimeSnapshot();
+  },
+  onProfileChanged(callback) {
+    const listener = (_event: IpcRendererEvent, payload: unknown) => {
+      if (isProfileRuntimeSnapshot(payload)) {
+        callback(payload);
+      }
+    };
+
+    ipcRenderer.on("skfiy:profile-changed", listener);
+    return () => ipcRenderer.removeListener("skfiy:profile-changed", listener);
   }
 };
 
@@ -3147,7 +3342,15 @@ function isAutomationMonitorRuntime(value: unknown): value is AutomationMonitorR
     && typeof monitor.enabled === "boolean"
     && typeof monitor.intervalMs === "number"
     && Number.isFinite(monitor.intervalMs)
+    && typeof monitor.timeoutMs === "number"
+    && Number.isFinite(monitor.timeoutMs)
+    && (
+      monitor.triggerMode === "manual"
+      || monitor.triggerMode === "scheduled"
+      || monitor.triggerMode === "local-state"
+    )
     && typeof monitor.sessionName === "string"
+    && isAutomationMonitorDefinitionPreview(monitor.preview)
     && isAutomationMonitorStatus(monitor.status)
     && typeof monitor.checkCount === "number"
     && Number.isFinite(monitor.checkCount)
@@ -3197,6 +3400,32 @@ function isAutomationMonitorRuntime(value: unknown): value is AutomationMonitorR
       || monitor.mutatesSession === false
     )
   );
+}
+
+function isAutomationMonitorDefinitionPreview(
+  value: unknown
+): value is AutomationMonitorDefinitionPreview {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const preview = value as Partial<AutomationMonitorDefinitionPreview>;
+  return preview.adapter === "tmux-supervision"
+    && Array.isArray(preview.triggerModes)
+    && preview.triggerModes.length === 2
+    && preview.triggerModes[0] === "manual"
+    && preview.triggerModes[1] === "scheduled"
+    && Boolean(preview.target)
+    && preview.target?.kind === "tmux-session"
+    && typeof preview.target.sessionName === "string"
+    && Array.isArray(preview.requiredPermissions)
+    && preview.requiredPermissions.length === 0
+    && preview.readWriteBehavior === "read-only"
+    && preview.approvalMode === "not-required"
+    && typeof preview.timeoutMs === "number"
+    && Number.isFinite(preview.timeoutMs)
+    && typeof preview.verification === "string"
+    && preview.mutatesSession === false;
 }
 
 function isAutomationMonitorStatus(value: unknown): value is AutomationMonitorStatus {
@@ -3355,6 +3584,23 @@ function createDefaultAutomationMonitorSnapshot(): AutomationMonitorSnapshot {
       reason: "Open skfiy to resume interval checks."
     },
     monitors: []
+  };
+}
+
+function createDefaultAutomationMonitorDefinitionPreview(): AutomationMonitorDefinitionPreview {
+  return {
+    adapter: "tmux-supervision",
+    triggerModes: ["manual", "scheduled"],
+    target: {
+      kind: "tmux-session",
+      sessionName: ""
+    },
+    requiredPermissions: [],
+    readWriteBehavior: "read-only",
+    approvalMode: "not-required",
+    timeoutMs: 30_000,
+    verification: "tmux session, window, pane, and bounded recent pane-output observation",
+    mutatesSession: false
   };
 }
 
@@ -3594,6 +3840,158 @@ function createDefaultPersonalMemoryDashboardSnapshot(): PersonalMemoryDashboard
     journal: [],
     sessionCount: 0,
     settings: createDefaultPersonalMemorySettings()
+  };
+}
+
+function isProfileMemoryScopeValue(value: unknown): value is ProfileMemoryScope {
+  return value === "isolated" || value === "shared";
+}
+
+function isProfileAppPolicyValue(value: unknown): value is "allow" | "ask" | "deny" {
+  return value === "allow" || value === "ask" || value === "deny";
+}
+
+function isProfileSummary(value: unknown): value is ProfileSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const summary = value as Partial<ProfileSummary>;
+  return typeof summary.id === "string"
+    && typeof summary.name === "string"
+    && typeof summary.createdAt === "string"
+    && typeof summary.updatedAt === "string"
+    && isProfileMemoryScopeValue(summary.memoryScope)
+    && isProfileWorkflowDefaults(summary.workflowDefaults)
+    && typeof summary.isDefault === "boolean"
+    && typeof summary.isActive === "boolean";
+}
+
+function isProfileWorkflowDefaults(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const defaults = value as Record<string, unknown>;
+  return (defaults.defaultManualMode === "active" || defaults.defaultManualMode === "quiet")
+    && typeof defaults.postTurnLearningEnabled === "boolean"
+    && typeof defaults.writeApprovalEnabled === "boolean";
+}
+
+function isPolicyBroadening(value: unknown): value is PolicyBroadening {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const broadening = value as Partial<PolicyBroadening>;
+  return broadening.kind === "app-policy"
+    && typeof broadening.target === "string"
+    && (broadening.targetName === undefined || typeof broadening.targetName === "string")
+    && isProfileAppPolicyValue(broadening.from)
+    && isProfileAppPolicyValue(broadening.to);
+}
+
+function isProfileRuntimeSnapshot(value: unknown): value is ProfileRuntimeSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const snapshot = value as Partial<ProfileRuntimeSnapshot>;
+  return snapshot.schemaVersion === 1
+    && (snapshot.activeProfileId === null || typeof snapshot.activeProfileId === "string")
+    && (snapshot.activeProfile === null || isProfileSummary(snapshot.activeProfile))
+    && Array.isArray(snapshot.profiles)
+    && snapshot.profiles.every(isProfileSummary)
+    && (snapshot.memoryBaseDirScope === "shared" || snapshot.memoryBaseDirScope === "isolated");
+}
+
+function isProfileSwitchResult(value: unknown): value is ProfileSwitchResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const result = value as Partial<ProfileSwitchResult>;
+  if (result.status === "switched") {
+    return isProfileSummary(result.profile)
+      && (result.previousProfileId === null || typeof result.previousProfileId === "string");
+  }
+  if (result.status === "confirmation-required") {
+    return typeof result.profileId === "string"
+      && Array.isArray(result.broadenings)
+      && result.broadenings.every(isPolicyBroadening);
+  }
+  if (result.status === "not-found") {
+    return typeof result.profileId === "string";
+  }
+  if (result.status === "blocked") {
+    return typeof result.profileId === "string" && typeof result.reason === "string";
+  }
+  return false;
+}
+
+function isProfileExportBundle(value: unknown): value is ProfileExportBundle {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const bundle = value as Partial<ProfileExportBundle>;
+  if (bundle.schemaVersion !== 1 || typeof bundle.exportedAt !== "string") {
+    return false;
+  }
+  if (!bundle.profile || typeof bundle.profile !== "object" || Array.isArray(bundle.profile)) {
+    return false;
+  }
+
+  const profile = bundle.profile as unknown as Record<string, unknown>;
+  if (
+    typeof profile.id !== "string"
+    || typeof profile.name !== "string"
+    || typeof profile.createdAt !== "string"
+    || typeof profile.updatedAt !== "string"
+    || !isProfileMemoryScopeValue(profile.memoryScope)
+  ) {
+    return false;
+  }
+
+  if (bundle.memory !== undefined) {
+    if (!bundle.memory || typeof bundle.memory !== "object" || Array.isArray(bundle.memory)) {
+      return false;
+    }
+    const memory = bundle.memory as Record<string, unknown>;
+    if (
+      !Array.isArray(memory.userEntries)
+      || !memory.userEntries.every((entry) => typeof entry === "string")
+      || !Array.isArray(memory.agentEntries)
+      || !memory.agentEntries.every((entry) => typeof entry === "string")
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function createDefaultProfileRuntimeSnapshot(): ProfileRuntimeSnapshot {
+  const defaultSummary: ProfileSummary = {
+    id: "default",
+    name: "Default",
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    memoryScope: "shared",
+    workflowDefaults: {
+      defaultManualMode: "active",
+      postTurnLearningEnabled: true,
+      writeApprovalEnabled: false
+    },
+    isDefault: true,
+    isActive: true
+  };
+  return {
+    schemaVersion: 1,
+    activeProfileId: "default",
+    activeProfile: defaultSummary,
+    profiles: [defaultSummary],
+    memoryBaseDirScope: "shared"
   };
 }
 

@@ -5,6 +5,8 @@ import type {
   AppPolicySettings,
   AssistantAgentMode,
   AssistantAgentSettingsResponse,
+  AutomationMonitorRuntime,
+  AutomationMonitorSnapshot,
   DesktopApi,
   PlannerProviderSettings,
   TaskEvent
@@ -36,6 +38,56 @@ const LOCAL_LUOXIAOHEI_SKIN = {
     review: { row: 0, frames: 1, frameMs: 135 }
   }
 } satisfies PetAtlasManifest;
+
+function createAutomationPanelMonitor(
+  overrides: Partial<AutomationMonitorRuntime> = {}
+): AutomationMonitorRuntime {
+  return {
+    id: "tmux-session:money-run-goal",
+    kind: "tmux-session",
+    label: "money-run goal",
+    enabled: true,
+    intervalMs: 600_000,
+    timeoutMs: 30_000,
+    triggerMode: "scheduled",
+    sessionName: "money-run-goal",
+    preview: {
+      adapter: "tmux-supervision",
+      triggerModes: ["manual", "scheduled"],
+      target: { kind: "tmux-session", sessionName: "money-run-goal" },
+      requiredPermissions: [],
+      readWriteBehavior: "read-only",
+      approvalMode: "not-required",
+      timeoutMs: 30_000,
+      verification: "tmux session, window, pane, and bounded recent pane-output observation",
+      mutatesSession: false
+    },
+    status: "idle",
+    checkCount: 0,
+    ...overrides
+  };
+}
+
+function createAutomationPanelSnapshot(
+  monitors: AutomationMonitorRuntime[] = []
+): AutomationMonitorSnapshot {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date(0).toISOString(),
+    activeCount: monitors.filter((monitor) => monitor.enabled).length,
+    attentionCount: 0,
+    schedulerInactiveCount: 0,
+    scheduler: {
+      state: "inactive",
+      scope: "app-process",
+      owner: "skfiy",
+      activeTimerCount: 0,
+      mutatesSession: false,
+      reason: "Open skfiy to resume interval checks."
+    },
+    monitors
+  };
+}
 
 function createAssistantAgentFixture(mode: AssistantAgentMode): AssistantAgentSettingsResponse {
   return {
@@ -235,6 +287,71 @@ beforeEach(() => {
         reason: "Open skfiy to resume interval checks."
       },
       monitors: []
+    }),
+    duplicateAutomationMonitor: vi
+      .fn<DesktopApi["duplicateAutomationMonitor"]>()
+      .mockResolvedValue({
+        schemaVersion: 1,
+        generatedAt: new Date(0).toISOString(),
+        activeCount: 0,
+        attentionCount: 0,
+        schedulerInactiveCount: 0,
+        scheduler: {
+          state: "inactive",
+          scope: "app-process",
+          owner: "skfiy",
+          activeTimerCount: 0,
+          mutatesSession: false,
+          reason: "Open skfiy to resume interval checks."
+        },
+        monitors: []
+      }),
+    setAutomationMonitorEnabled: vi
+      .fn<DesktopApi["setAutomationMonitorEnabled"]>()
+      .mockResolvedValue({
+        schemaVersion: 1,
+        generatedAt: new Date(0).toISOString(),
+        activeCount: 0,
+        attentionCount: 0,
+        schedulerInactiveCount: 0,
+        scheduler: {
+          state: "inactive",
+          scope: "app-process",
+          owner: "skfiy",
+          activeTimerCount: 0,
+          mutatesSession: false,
+          reason: "Open skfiy to resume interval checks."
+        },
+        monitors: []
+      }),
+    deleteAutomationMonitor: vi
+      .fn<DesktopApi["deleteAutomationMonitor"]>()
+      .mockResolvedValue({
+        schemaVersion: 1,
+        generatedAt: new Date(0).toISOString(),
+        activeCount: 0,
+        attentionCount: 0,
+        schedulerInactiveCount: 0,
+        scheduler: {
+          state: "inactive",
+          scope: "app-process",
+          owner: "skfiy",
+          activeTimerCount: 0,
+          mutatesSession: false,
+          reason: "Open skfiy to resume interval checks."
+        },
+        monitors: []
+      }),
+    previewTmuxAutomation: vi.fn<DesktopApi["previewTmuxAutomation"]>().mockResolvedValue({
+      adapter: "tmux-supervision",
+      triggerModes: ["manual", "scheduled"],
+      target: { kind: "tmux-session", sessionName: "money-run-goal" },
+      requiredPermissions: [],
+      readWriteBehavior: "read-only",
+      approvalMode: "not-required",
+      timeoutMs: 30_000,
+      verification: "tmux session, window, pane, and bounded recent pane-output observation",
+      mutatesSession: false
     }),
     getRuntimeStatus: vi.fn<DesktopApi["getRuntimeStatus"]>().mockResolvedValue({
       stopTurnHotkey: {
@@ -482,7 +599,92 @@ beforeEach(() => {
       discoveryState: "not-probed",
       generatedAt: new Date(0).toISOString()
     }),
-    onBrowserContextChanged: vi.fn(() => vi.fn())
+    onBrowserContextChanged: vi.fn(() => vi.fn()),
+    getProfiles: vi.fn<DesktopApi["getProfiles"]>().mockResolvedValue({
+      schemaVersion: 1,
+      activeProfileId: "default",
+      activeProfile: {
+        id: "default",
+        name: "Default",
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        memoryScope: "shared",
+        workflowDefaults: {
+          defaultManualMode: "active",
+          postTurnLearningEnabled: true,
+          writeApprovalEnabled: false
+        },
+        isDefault: true,
+        isActive: true
+      },
+      profiles: [
+        {
+          id: "default",
+          name: "Default",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          memoryScope: "shared",
+          workflowDefaults: {
+            defaultManualMode: "active",
+            postTurnLearningEnabled: true,
+            writeApprovalEnabled: false
+          },
+          isDefault: true,
+          isActive: true
+        }
+      ],
+      memoryBaseDirScope: "shared"
+    }),
+    switchProfile: vi.fn<DesktopApi["switchProfile"]>().mockResolvedValue({
+      status: "switched",
+      profile: {
+        id: "default",
+        name: "Default",
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        memoryScope: "shared",
+        workflowDefaults: {
+          defaultManualMode: "active",
+          postTurnLearningEnabled: true,
+          writeApprovalEnabled: false
+        },
+        isDefault: true,
+        isActive: true
+      },
+      previousProfileId: null
+    }),
+    createProfile: vi.fn<DesktopApi["createProfile"]>().mockResolvedValue({
+      schemaVersion: 1,
+      activeProfileId: "default",
+      activeProfile: null,
+      profiles: [],
+      memoryBaseDirScope: "shared"
+    }),
+    updateProfile: vi.fn<DesktopApi["updateProfile"]>().mockResolvedValue({
+      schemaVersion: 1,
+      activeProfileId: "default",
+      activeProfile: null,
+      profiles: [],
+      memoryBaseDirScope: "shared"
+    }),
+    deleteProfile: vi.fn<DesktopApi["deleteProfile"]>().mockResolvedValue({
+      schemaVersion: 1,
+      activeProfileId: "default",
+      activeProfile: null,
+      profiles: [],
+      memoryBaseDirScope: "shared"
+    }),
+    exportProfile: vi.fn<DesktopApi["exportProfile"]>().mockRejectedValue(
+      new Error("Profile export is unavailable in this renderer environment.")
+    ),
+    importProfile: vi.fn<DesktopApi["importProfile"]>().mockResolvedValue({
+      schemaVersion: 1,
+      activeProfileId: "default",
+      activeProfile: null,
+      profiles: [],
+      memoryBaseDirScope: "shared"
+    }),
+    onProfileChanged: vi.fn(() => vi.fn())
   } satisfies DesktopApi;
 });
 
@@ -597,6 +799,138 @@ describe("App", () => {
     fireEvent.click(within(settings).getByText("诊断/高级"));
 
     expect(await within(settings).findByText("Computer Use Planner")).toBeInTheDocument();
+  });
+
+  it("renders the automation control center inside right-click details", async () => {
+    render(<App />);
+
+    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+
+    const settings = await screen.findByLabelText(/skfiy settings/i);
+    expect(within(settings).getByLabelText("自动化监控")).toBeInTheDocument();
+    expect(within(settings).getByText("暂无自动化监控")).toBeInTheDocument();
+  });
+
+  it("creates an automation monitor through the preview confirmation", async () => {
+    const api = window.skfiy as DesktopApi;
+    render(<App />);
+
+    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    const settings = await screen.findByLabelText(/skfiy settings/i);
+
+    fireEvent.click(within(settings).getByRole("button", { name: "新建自动化监控" }));
+    fireEvent.change(within(settings).getByLabelText("tmux 会话名"), {
+      target: { value: "money-run-goal" }
+    });
+    fireEvent.click(within(settings).getByRole("button", { name: "预览安全边界" }));
+
+    await waitFor(() => expect(api.previewTmuxAutomation).toHaveBeenCalledWith({
+      sessionName: "money-run-goal",
+      timeoutMs: 30_000,
+      triggerMode: "scheduled"
+    }));
+    expect(within(settings).getByLabelText("自动化安全边界预览")).toBeInTheDocument();
+
+    fireEvent.click(within(settings).getByRole("button", { name: "保存并启用" }));
+
+    await waitFor(() => expect(api.upsertTmuxMonitor).toHaveBeenCalledTimes(1));
+    const upsertInput = vi.mocked(api.upsertTmuxMonitor).mock.calls[0]?.[0];
+    expect(upsertInput).toMatchObject({
+      sessionName: "money-run-goal",
+      intervalMs: 300_000,
+      timeoutMs: 30_000,
+      triggerMode: "scheduled",
+      enabled: true
+    });
+    expect(upsertInput).not.toHaveProperty("monitorId");
+  });
+
+  it("edits an automation monitor by id without changing its tmux target", async () => {
+    const api = window.skfiy as DesktopApi;
+    api.getAutomationMonitors = vi
+      .fn<DesktopApi["getAutomationMonitors"]>()
+      .mockResolvedValue(createAutomationPanelSnapshot([createAutomationPanelMonitor()]));
+    render(<App />);
+
+    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    const settings = await screen.findByLabelText(/skfiy settings/i);
+    await within(settings).findByText("money-run goal");
+
+    fireEvent.click(within(settings).getByRole("button", { name: "编辑：money-run goal" }));
+    const sessionInput = within(settings).getByLabelText("tmux 会话名") as HTMLInputElement;
+    expect(sessionInput.readOnly).toBe(true);
+
+    fireEvent.change(within(settings).getByLabelText("触发方式"), {
+      target: { value: "manual" }
+    });
+    fireEvent.click(within(settings).getByRole("button", { name: "预览安全边界" }));
+    await waitFor(() => expect(api.previewTmuxAutomation).toHaveBeenCalled());
+
+    fireEvent.click(within(settings).getByRole("button", { name: "保存并启用" }));
+
+    await waitFor(() => expect(api.upsertTmuxMonitor).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.upsertTmuxMonitor).mock.calls[0]?.[0]).toMatchObject({
+      monitorId: "tmux-session:money-run-goal",
+      sessionName: "money-run-goal",
+      triggerMode: "manual",
+      enabled: true
+    });
+  });
+
+  it("pauses, resumes, duplicates, and deletes monitors and applies returned snapshots", async () => {
+    const api = window.skfiy as DesktopApi;
+    const enabledMonitor = createAutomationPanelMonitor({ enabled: true, status: "idle" });
+    const disabledMonitor = createAutomationPanelMonitor({
+      enabled: false,
+      status: "disabled"
+    });
+    const withEnabled = createAutomationPanelSnapshot([enabledMonitor]);
+    const withDisabled = createAutomationPanelSnapshot([disabledMonitor]);
+    api.getAutomationMonitors = vi
+      .fn<DesktopApi["getAutomationMonitors"]>()
+      .mockResolvedValue(withEnabled);
+    api.setAutomationMonitorEnabled = vi
+      .fn<DesktopApi["setAutomationMonitorEnabled"]>()
+      .mockResolvedValueOnce(withDisabled)
+      .mockResolvedValueOnce(withEnabled);
+    api.duplicateAutomationMonitor = vi
+      .fn<DesktopApi["duplicateAutomationMonitor"]>()
+      .mockResolvedValue(createAutomationPanelSnapshot([
+        enabledMonitor,
+        { ...disabledMonitor, id: "tmux-session:money-run-goal:copy", label: "money-run goal copy" }
+      ]));
+    api.deleteAutomationMonitor = vi
+      .fn<DesktopApi["deleteAutomationMonitor"]>()
+      .mockResolvedValue(createAutomationPanelSnapshot());
+    render(<App />);
+
+    fireEvent.contextMenu(screen.getByLabelText(/skfiy codex-style pet/i));
+    const settings = await screen.findByLabelText(/skfiy settings/i);
+    await within(settings).findByText("money-run goal");
+
+    fireEvent.click(within(settings).getByRole("button", { name: "暂停：money-run goal" }));
+    await waitFor(() => expect(api.setAutomationMonitorEnabled)
+      .toHaveBeenCalledWith("tmux-session:money-run-goal", false));
+    expect(await within(settings).findByRole("button", {
+      name: "恢复：money-run goal"
+    })).toBeInTheDocument();
+
+    fireEvent.click(within(settings).getByRole("button", { name: "恢复：money-run goal" }));
+    await waitFor(() => expect(api.setAutomationMonitorEnabled)
+      .toHaveBeenLastCalledWith("tmux-session:money-run-goal", true));
+    expect(await within(settings).findByRole("button", {
+      name: "暂停：money-run goal"
+    })).toBeInTheDocument();
+
+    fireEvent.click(within(settings).getByRole("button", { name: "复制：money-run goal" }));
+    await waitFor(() => expect(api.duplicateAutomationMonitor)
+      .toHaveBeenCalledWith("tmux-session:money-run-goal"));
+    expect(await within(settings).findByText("money-run goal copy")).toBeInTheDocument();
+
+    fireEvent.click(within(settings).getByRole("button", { name: "删除：money-run goal" }));
+    await waitFor(() => expect(api.deleteAutomationMonitor)
+      .toHaveBeenCalledWith("tmux-session:money-run-goal"));
+    expect(await within(settings).findByText("暂无自动化监控")).toBeInTheDocument();
   });
 
   it("shows a user-mode dashboard summary before advanced diagnostics", async () => {

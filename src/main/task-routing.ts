@@ -1,6 +1,8 @@
-import { parseChromePageIntent } from "./orchestrator/chrome-task.js";
-import { parseFinderOrganizationIntent } from "./orchestrator/finder-task.js";
+import type { SupportedAdapterId } from "../shared/adapter-contract.js";
 import { parseTerminalIntent } from "../shared/terminal-intent.js";
+import type { AdapterRegistry } from "./adapter/adapter-registry.js";
+import { createDefaultAdapterRegistry } from "./adapter/create-default-adapter-registry.js";
+import { readMoneyRunSupervisionSessionName } from "./adapter/tmux-supervision-adapter.js";
 
 export const GHOSTTY_BUNDLE_ID = "com.mitchellh.ghostty";
 export const CHROME_BUNDLE_ID = "com.google.Chrome";
@@ -29,8 +31,13 @@ export type CommandRoute =
   | { kind: "denied"; reason: string; targetRoute?: ExecutableCommandRoute }
   | { kind: "blocked"; reason: string; targetRoute?: ExecutableCommandRoute };
 
-export function selectCommandRoute(command: string): CommandRoute {
-  const route = selectBaseCommandRoute(command);
+const defaultAdapterRegistry = createDefaultAdapterRegistry();
+
+export function selectCommandRoute(
+  command: string,
+  registry: AdapterRegistry = defaultAdapterRegistry
+): CommandRoute {
+  const route = selectBaseCommandRoute(command, registry);
 
   if (isRouteLevelDenialRequest(command) && (isExecutableCommandRoute(route) || isDesktopControlRequest(command))) {
     return {
@@ -68,30 +75,10 @@ export function readExecutableRoutePolicyBlockReason(
     : undefined;
 }
 
-function selectBaseCommandRoute(command: string): CommandRoute {
-  const moneyRunSessionName = readMoneyRunSupervisionSessionName(command);
-  if (moneyRunSessionName) {
-    return {
-      kind: "tmux_supervision",
-      sessionName: moneyRunSessionName
-    };
-  }
-
-  const chromeIntent = parseChromePageIntent(command);
-  if (chromeIntent.ok) {
-    return {
-      kind: "chrome",
-      bundleId: CHROME_BUNDLE_ID
-    };
-  }
-
-  const finderIntent = parseFinderOrganizationIntent(command);
-
-  if (finderIntent.ok) {
-    return {
-      kind: "finder",
-      bundleId: FINDER_BUNDLE_ID
-    };
+function selectBaseCommandRoute(command: string, registry: AdapterRegistry): CommandRoute {
+  const adapterId = registry.selectRoute(command);
+  if (adapterId) {
+    return createAdapterRoute(adapterId, command);
   }
 
   if (isGenericVisibleAppControlRequest(command)) {
@@ -109,13 +96,8 @@ function selectBaseCommandRoute(command: string): CommandRoute {
   const terminalIntent = parseTerminalIntent(command);
 
   if (terminalIntent.ok) {
-    if (isExplicitTerminalControlRequest(command)) {
-      return {
-        kind: "ghostty",
-        bundleId: GHOSTTY_BUNDLE_ID
-      };
-    }
-
+    // The ghostty adapter only matches explicit terminal control requests, so
+    // a bare terminal intent without an explicit target falls through here.
     return {
       kind: "needs_clarification",
       reason: "No supported desktop control route matched this request."
@@ -134,6 +116,36 @@ function selectBaseCommandRoute(command: string): CommandRoute {
   }
 
   return createChatRoute();
+}
+
+function createAdapterRoute(
+  adapterId: SupportedAdapterId,
+  command: string
+): CommandRoute {
+  switch (adapterId) {
+    case "ghostty":
+      return {
+        kind: "ghostty",
+        bundleId: GHOSTTY_BUNDLE_ID
+      };
+    case "chrome":
+      return {
+        kind: "chrome",
+        bundleId: CHROME_BUNDLE_ID
+      };
+    case "finder":
+      return {
+        kind: "finder",
+        bundleId: FINDER_BUNDLE_ID
+      };
+    case "tmux_supervision": {
+      const sessionName = readMoneyRunSupervisionSessionName(command) ?? "money-run";
+      return {
+        kind: "tmux_supervision",
+        sessionName
+      };
+    }
+  }
 }
 
 function isExecutableCommandRoute(route: CommandRoute): route is ExecutableCommandRoute {
@@ -198,39 +210,6 @@ function normalizeConversationalPrompt(command: string): string {
     .toLowerCase()
     .replace(/^[\s,，。.!！?？、]+|[\s,，。.!！?？、]+$/g, "")
     .replace(/\s+/g, " ");
-}
-
-function isExplicitTerminalControlRequest(command: string): boolean {
-  const normalized = command.trim().toLowerCase();
-
-  return /\b(ghostty|terminal|shell|term)\b|终端|命令行/u.test(normalized);
-}
-
-function readMoneyRunSupervisionSessionName(command: string): string | undefined {
-  const normalized = command.trim().toLowerCase();
-
-  if (!normalized.includes("money-run")) {
-    return undefined;
-  }
-
-  const mentionsTmuxContext = /\btmux\b|\bsession\b|会话/u.test(normalized);
-  const asksForSupervision = [
-    "监督",
-    "观察",
-    "监控",
-    "看着",
-    "盯着",
-    "supervise",
-    "monitor",
-    "watch",
-    "observe"
-  ].some((phrase) => normalized.includes(phrase));
-
-  if (!mentionsTmuxContext || !asksForSupervision) {
-    return undefined;
-  }
-
-  return command.match(/\b[A-Za-z0-9_.-]*money-run[A-Za-z0-9_.-]*\b/iu)?.[0] ?? "money-run";
 }
 
 function isRouteLevelConfirmationRequest(command: string): boolean {

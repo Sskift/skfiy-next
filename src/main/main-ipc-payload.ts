@@ -13,10 +13,19 @@ export interface VisiblePetRect {
 }
 
 export interface TmuxMonitorInput {
+  monitorId?: string;
   sessionName: string;
   label?: string;
   intervalMs: number;
+  timeoutMs?: number;
+  triggerMode?: "manual" | "scheduled" | "local-state";
   enabled?: boolean;
+}
+
+export interface TmuxAutomationPreviewInput {
+  sessionName: string;
+  timeoutMs?: number;
+  triggerMode?: "manual" | "scheduled" | "local-state";
 }
 
 export interface ConversationRenameRequest {
@@ -38,6 +47,7 @@ export interface TaskApprovalDecisionRequest {
 const MAX_CONVERSATION_ID_LENGTH = 200;
 const MAX_CONVERSATION_TITLE_LENGTH = 120;
 const MAX_TASK_CONTROL_ID_LENGTH = 160;
+const MAX_AUTOMATION_MONITOR_ID_LENGTH = 200;
 
 export type RunCommandRequest =
   | {
@@ -166,14 +176,60 @@ export function readTmuxMonitorInput(input: unknown): TmuxMonitorInput {
     ? record.intervalMs
     : 300_000;
   const label = typeof record.label === "string" ? record.label : undefined;
+  const timeoutMs = typeof record.timeoutMs === "number" && Number.isFinite(record.timeoutMs)
+    ? record.timeoutMs
+    : undefined;
+  const triggerMode = readAutomationMonitorTriggerMode(record.triggerMode);
   const enabled = typeof record.enabled === "boolean" ? record.enabled : undefined;
+  const monitorId = readAutomationMonitorId(record.monitorId);
 
   return {
+    ...(monitorId ? { monitorId } : {}),
     sessionName,
     ...(label ? { label } : {}),
     intervalMs,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(triggerMode === undefined ? {} : { triggerMode }),
     ...(enabled === undefined ? {} : { enabled })
   };
+}
+
+export function readTmuxAutomationPreviewInput(input: unknown): TmuxAutomationPreviewInput {
+  const record = input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {};
+  const sessionName = typeof record.sessionName === "string" ? record.sessionName : "";
+  const timeoutMs = typeof record.timeoutMs === "number" && Number.isFinite(record.timeoutMs)
+    ? record.timeoutMs
+    : undefined;
+  const triggerMode = readAutomationMonitorTriggerMode(record.triggerMode);
+
+  return {
+    sessionName,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(triggerMode === undefined ? {} : { triggerMode })
+  };
+}
+
+export function readAutomationMonitorId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0
+    && normalized.length <= MAX_AUTOMATION_MONITOR_ID_LENGTH
+    && /^tmux-session:[A-Za-z0-9_.:-]+$/u.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function readAutomationMonitorTriggerMode(
+  value: unknown
+): TmuxMonitorInput["triggerMode"] | undefined {
+  return value === "manual" || value === "scheduled" || value === "local-state"
+    ? value
+    : undefined;
 }
 
 export function isEnabledEnvFlag(value: string | undefined): boolean {

@@ -1,6 +1,10 @@
 import type { DesktopApi } from "./app-types";
 import type { BrowserContextSourceSnapshot } from "../shared/browser-context-source.js";
 import {
+  DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
+  createDefaultAutomationMonitorPreview
+} from "./app-automation-state";
+import {
   DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT,
   DEFAULT_PERSONAL_MEMORY_SETTINGS
 } from "./app-memory-state";
@@ -16,29 +20,13 @@ import {
   reduceAssistantAgentSettingsResponse,
   reducePlannerProviderSettings
 } from "./app-settings-state";
+import { DEFAULT_PROFILE_RUNTIME_SNAPSHOT } from "./app-profile-state";
 
 declare global {
   interface Window {
     skfiy?: DesktopApi;
   }
 }
-
-const DEFAULT_AUTOMATION_MONITOR_SNAPSHOT = {
-  schemaVersion: 1 as const,
-  generatedAt: new Date(0).toISOString(),
-  activeCount: 0,
-  attentionCount: 0,
-  schedulerInactiveCount: 0,
-  scheduler: {
-    state: "inactive" as const,
-    scope: "app-process" as const,
-    owner: "skfiy" as const,
-    activeTimerCount: 0,
-    mutatesSession: false as const,
-    reason: "Open skfiy to resume interval checks."
-  },
-  monitors: []
-};
 
 const DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT: BrowserContextSourceSnapshot = {
   schemaVersion: 1,
@@ -106,7 +94,11 @@ export const fallbackDesktopApi: DesktopApi = {
   getTurnReplay: async () => null,
   getAutomationMonitors: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
   upsertTmuxMonitor: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
+  duplicateAutomationMonitor: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
   runAutomationMonitorNow: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
+  setAutomationMonitorEnabled: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
+  deleteAutomationMonitor: async () => DEFAULT_AUTOMATION_MONITOR_SNAPSHOT,
+  previewTmuxAutomation: async () => createDefaultAutomationMonitorPreview(),
   getRuntimeStatus: async () => ({
     stopTurnHotkey: {
       accelerator: "",
@@ -212,7 +204,21 @@ export const fallbackDesktopApi: DesktopApi = {
   pauseBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
   disconnectBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
   clearBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
-  onBrowserContextChanged: () => () => undefined
+  onBrowserContextChanged: () => () => undefined,
+  getProfiles: async () => DEFAULT_PROFILE_RUNTIME_SNAPSHOT,
+  switchProfile: async (input) => ({
+    status: "blocked",
+    profileId: input.profileId,
+    reason: "Profiles are unavailable in this renderer environment."
+  }),
+  createProfile: async () => DEFAULT_PROFILE_RUNTIME_SNAPSHOT,
+  updateProfile: async () => DEFAULT_PROFILE_RUNTIME_SNAPSHOT,
+  deleteProfile: async () => DEFAULT_PROFILE_RUNTIME_SNAPSHOT,
+  exportProfile: async () => {
+    throw new Error("Profile export is unavailable in this renderer environment.");
+  },
+  importProfile: async () => DEFAULT_PROFILE_RUNTIME_SNAPSHOT,
+  onProfileChanged: () => () => undefined
 };
 
 export function getDesktopApi(): DesktopApi {

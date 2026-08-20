@@ -8,6 +8,7 @@ import type { TmuxSupervisionClient } from "./tmux-supervision-client.js";
 
 export type AutomationMonitorKind = "tmux-session";
 export type AutomationSchedulerState = "active" | "inactive";
+export type AutomationMonitorTriggerMode = "manual" | "scheduled" | "local-state";
 export type AutomationMonitorStatus =
   | TmuxSupervisionStatus
   | "idle"
@@ -41,9 +42,27 @@ export interface AutomationMonitorDefinition {
   label: string;
   enabled: boolean;
   intervalMs: number;
+  timeoutMs: number;
+  triggerMode: AutomationMonitorTriggerMode;
   sessionName: string;
+  preview: AutomationMonitorDefinitionPreview;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AutomationMonitorDefinitionPreview {
+  adapter: "tmux-supervision";
+  triggerModes: ["manual", "scheduled"];
+  target: {
+    kind: "tmux-session";
+    sessionName: string;
+  };
+  requiredPermissions: [];
+  readWriteBehavior: "read-only";
+  approvalMode: "not-required";
+  timeoutMs: number;
+  verification: "tmux session, window, pane, and bounded recent pane-output observation";
+  mutatesSession: false;
 }
 
 export interface AutomationMonitorRuntime extends AutomationMonitorDefinition {
@@ -99,13 +118,23 @@ export type AutomationSetInterval = (
 
 export type AutomationClearInterval = (timer: unknown) => void;
 
+export type AutomationSetTimeout = (callback: () => void, timeoutMs: number) => unknown;
+
+export type AutomationClearTimeout = (timer: unknown) => void;
+
 export interface AutomationMonitorManager {
   upsertTmuxSessionMonitor: (input: {
+    monitorId?: string;
     sessionName: string;
     label?: string;
     intervalMs: number;
+    timeoutMs?: number;
+    triggerMode?: AutomationMonitorTriggerMode;
     enabled?: boolean;
   }) => AutomationMonitorDefinition;
+  duplicateMonitor: (id: string) => AutomationMonitorDefinition;
+  setMonitorEnabled: (id: string, enabled: boolean) => AutomationMonitorRuntime;
+  deleteMonitor: (id: string) => boolean;
   start: () => void;
   stop: () => void;
   runMonitorNow: (
@@ -176,16 +205,20 @@ export function createAutomationMonitorStore({
 
 export function createAutomationMonitorManager({
   clearInterval = globalThis.clearInterval as AutomationClearInterval,
+  clearTimeout = globalThis.clearTimeout as AutomationClearTimeout,
   now = () => new Date().toISOString(),
   onRunTerminal = () => undefined,
   setInterval = globalThis.setInterval as unknown as AutomationSetInterval,
+  setTimeout = globalThis.setTimeout as unknown as AutomationSetTimeout,
   store,
   tmuxClient
 }: {
   clearInterval?: AutomationClearInterval;
+  clearTimeout?: AutomationClearTimeout;
   now?: () => string;
   onRunTerminal?: (event: AutomationMonitorNotificationEvent) => void;
   setInterval?: AutomationSetInterval;
+  setTimeout?: AutomationSetTimeout;
   store: AutomationMonitorStore;
   tmuxClient: TmuxSupervisionClient;
 }): AutomationMonitorManager {
@@ -216,7 +249,12 @@ export function createAutomationMonitorManager({
   }
 
   function schedule(definition: AutomationMonitorDefinition) {
-    if (!started || !definition.enabled || timers.has(definition.id)) {
+    if (
+      !started
+      || !definition.enabled
+      || definition.triggerMode !== "scheduled"
+      || timers.has(definition.id)
+    ) {
       return;
     }
 
@@ -254,7 +292,7 @@ export function createAutomationMonitorManager({
     const checkedAt = now();
     const previousLastResult = readRuntime(definition).lastResult;
     try {
-      const report = await tmuxClient.observeSession(definition.sessionName);
+      const report = await observeSessionWithTimeout(definition);
       updateRuntime(definition, {
         checkCount: readRuntime(definition).checkCount + 1,
         lastCheckedAt: checkedAt,
@@ -279,6 +317,24 @@ export function createAutomationMonitorManager({
       });
       emitRunTerminalNotification(definition, trigger, previousLastResult);
       return readSnapshotRuntime(definition.id);
+    }
+  }
+
+  async function observeSessionWithTimeout(
+    definition: AutomationMonitorDefinition
+  ): Promise<TmuxSupervisionReport> {
+    let timer: unknown;
+    try {
+      return await new Promise<TmuxSupervisionReport>((resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Automation monitor timed out after ${definition.timeoutMs}ms.`));
+        }, definition.timeoutMs);
+        void tmuxClient.observeSession(definition.sessionName).then(resolve, reject);
+      });
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 
@@ -368,28 +424,95 @@ export function createAutomationMonitorManager({
     upsertTmuxSessionMonitor(input) {
       const sessionName = normalizeMonitorSessionName(input.sessionName);
       const nowIso = now();
-      const id = createTmuxMonitorId(sessionName);
-      const previous = definitions.get(id);
+      const requestedId = input.monitorId?.trim();
+      const previous = requestedId
+        ? definitions.get(requestedId)
+        : definitions.get(createTmuxMonitorId(sessionName));
+      if (requestedId && !previous) {
+        throw new Error(`Unknown automation monitor: ${requestedId}`);
+      }
+      if (previous && previous.sessionName !== sessionName) {
+        throw new Error("An existing automation monitor cannot change its tmux session target.");
+      }
+      const id = previous?.id ?? createTmuxMonitorId(sessionName);
+      const timeoutMs = normalizeMonitorTimeoutMs(input.timeoutMs ?? previous?.timeoutMs);
+      const triggerMode = normalizeMonitorTriggerMode(input.triggerMode ?? previous?.triggerMode);
       const definition: AutomationMonitorDefinition = {
         id,
         kind: "tmux-session",
         label: readMonitorLabel(input.label, sessionName),
         enabled: input.enabled ?? previous?.enabled ?? true,
         intervalMs: normalizeMonitorIntervalMs(input.intervalMs),
+        timeoutMs,
+        triggerMode,
         sessionName,
+        preview: createTmuxAutomationMonitorPreview(sessionName, timeoutMs),
         createdAt: previous?.createdAt ?? nowIso,
         updatedAt: nowIso
       };
 
       definitions.set(id, definition);
       runtimes.set(id, {
-        ...createInitialRuntime(definition),
-        ...(runtimes.get(id) ?? {})
+        ...(runtimes.get(id) ?? createInitialRuntime(definition)),
+        ...definition,
+        ...(!definition.enabled ? { status: "disabled" as const, nextCheckAt: undefined } : {})
       });
       persist();
       unschedule(id);
       schedule(definition);
       return definition;
+    },
+    duplicateMonitor(id) {
+      const source = definitions.get(id);
+      if (!source) {
+        throw new Error(`Unknown automation monitor: ${id}`);
+      }
+
+      const duplicateIdentity = createDuplicateMonitorIdentity(source, definitions);
+      const nowIso = now();
+      const definition: AutomationMonitorDefinition = {
+        ...source,
+        id: duplicateIdentity.id,
+        label: duplicateIdentity.label,
+        enabled: false,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+      definitions.set(definition.id, definition);
+      runtimes.set(definition.id, createInitialRuntime(definition));
+      persist();
+      return definition;
+    },
+    setMonitorEnabled(id, enabled) {
+      const previous = definitions.get(id);
+      if (!previous) {
+        throw new Error(`Unknown automation monitor: ${id}`);
+      }
+
+      const definition: AutomationMonitorDefinition = {
+        ...previous,
+        enabled,
+        updatedAt: now()
+      };
+      definitions.set(id, definition);
+      unschedule(id);
+      updateRuntime(definition, {
+        status: enabled ? "idle" : "disabled",
+        nextCheckAt: undefined
+      });
+      schedule(definition);
+      return readSnapshotRuntime(id);
+    },
+    deleteMonitor(id) {
+      if (!definitions.has(id)) {
+        return false;
+      }
+
+      unschedule(id);
+      definitions.delete(id);
+      runtimes.delete(id);
+      persist();
+      return true;
     },
     start() {
       if (!started) {
@@ -524,6 +647,8 @@ function normalizeAutomationMonitorDefinition(value: unknown): AutomationMonitor
   }
 
   const nowIso = new Date(0).toISOString();
+  const timeoutMs = normalizeMonitorTimeoutMs(record.timeoutMs);
+  const triggerMode = normalizeMonitorTriggerMode(record.triggerMode);
   return {
     id: typeof record.id === "string" && record.id.trim()
       ? record.id.trim()
@@ -532,7 +657,10 @@ function normalizeAutomationMonitorDefinition(value: unknown): AutomationMonitor
     label: readMonitorLabel(typeof record.label === "string" ? record.label : undefined, sessionName),
     enabled: typeof record.enabled === "boolean" ? record.enabled : true,
     intervalMs: normalizeMonitorIntervalMs(record.intervalMs),
+    timeoutMs,
+    triggerMode,
     sessionName,
+    preview: createTmuxAutomationMonitorPreview(sessionName, timeoutMs),
     createdAt: typeof record.createdAt === "string" ? record.createdAt : nowIso,
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso
   };
@@ -640,8 +768,59 @@ function normalizeMonitorIntervalMs(value: unknown): number {
   return Math.max(30_000, intervalMs);
 }
 
+export function normalizeMonitorTimeoutMs(value: unknown): number {
+  const timeoutMs = typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value)
+    : 30_000;
+  return Math.min(300_000, Math.max(1_000, timeoutMs));
+}
+
+function normalizeMonitorTriggerMode(value: unknown): AutomationMonitorTriggerMode {
+  return value === "manual" || value === "scheduled" || value === "local-state"
+    ? value
+    : "scheduled";
+}
+
+export function createTmuxAutomationMonitorPreview(
+  sessionName: string,
+  timeoutMs: number
+): AutomationMonitorDefinitionPreview {
+  return {
+    adapter: "tmux-supervision",
+    triggerModes: ["manual", "scheduled"],
+    target: {
+      kind: "tmux-session",
+      sessionName
+    },
+    requiredPermissions: [],
+    readWriteBehavior: "read-only",
+    approvalMode: "not-required",
+    timeoutMs,
+    verification: "tmux session, window, pane, and bounded recent pane-output observation",
+    mutatesSession: false
+  };
+}
+
 function createTmuxMonitorId(sessionName: string): string {
   return `tmux-session:${sessionName}`;
+}
+
+function createDuplicateMonitorIdentity(
+  source: AutomationMonitorDefinition,
+  definitions: Map<string, AutomationMonitorDefinition>
+): { id: string; label: string } {
+  let copyNumber = 1;
+  while (true) {
+    const suffix = copyNumber === 1 ? ":copy" : `:copy-${copyNumber}`;
+    const id = `${source.id}${suffix}`;
+    if (!definitions.has(id)) {
+      return {
+        id,
+        label: `${source.label} copy${copyNumber === 1 ? "" : ` ${copyNumber}`}`
+      };
+    }
+    copyNumber += 1;
+  }
 }
 
 function addMilliseconds(isoDate: string, intervalMs: number): string {
