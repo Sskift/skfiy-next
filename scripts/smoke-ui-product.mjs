@@ -365,9 +365,15 @@ async function inspectPermissionOnboardingExpression(settleMs) {
     "屏幕录制": "screen-recording",
     "辅助功能": "accessibility"
   };
-  const pet = Array.from(document.querySelectorAll("[aria-label]")).find((element) =>
-    /skfiy codex-style pet/i.test(element.getAttribute("aria-label") ?? "")
-  );
+  const pet = document.querySelector('[data-pet-entry="true"]')
+    || Array.from(document.querySelectorAll("[aria-label]")).find((element) =>
+      /skfiy desktop pet,/i.test(element.getAttribute("aria-label") ?? "")
+    );
+
+  // Run assistant conversation BEFORE pet drag — the drag suppresses the next
+  // click, which would prevent the assistant panel from opening.
+  const assistantConversation = await exerciseAssistantConversation(pet);
+
   const petDrag = await exercisePetDrag(pet);
 
   if (pet) {
@@ -403,7 +409,6 @@ async function inspectPermissionOnboardingExpression(settleMs) {
       target: permissionTargets[row.label] ?? "unknown",
       buttonLabel: row.buttonLabel
     }));
-  const assistantConversation = await exerciseAssistantConversation(pet);
   const stopTurnBehavior = await exerciseStopTurnBehavior();
 
   return {
@@ -419,9 +424,10 @@ async function inspectPermissionOnboardingExpression(settleMs) {
 }
 
 async function inspectSettingsLayoutExpression(settleMs) {
-  const pet = Array.from(document.querySelectorAll("[aria-label]")).find((element) =>
-    /skfiy codex-style pet/i.test(element.getAttribute("aria-label") ?? "")
-  );
+  const pet = document.querySelector('[data-pet-entry="true"]')
+    || Array.from(document.querySelectorAll("[aria-label]")).find((element) =>
+      /skfiy desktop pet,/i.test(element.getAttribute("aria-label") ?? "")
+    );
 
   if (pet) {
     pet.dispatchEvent(new MouseEvent("contextmenu", {
@@ -824,10 +830,24 @@ async function exerciseAssistantConversation(pet) {
       }));
     }
 
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-
-    const textarea = document.querySelector('textarea[aria-label="Ask skfiy"]');
-    const sendButton = document.querySelector('button[aria-label="发送给 skfiy"]');
+    // Poll for the panel to open (up to 3s) — the click after a drag may be
+    // suppressed by the pet drag state, so retry if the first click doesn't open it.
+    let textarea = null;
+    let sendButton = null;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      textarea = document.querySelector('textarea[aria-label="Ask skfiy"]');
+      sendButton = document.querySelector('button[aria-label="发送给 skfiy"]');
+      if (textarea && sendButton) break;
+      // Retry the click on subsequent attempts
+      if (attempt > 0 && !document.querySelector('[aria-label="skfiy assistant input"]')) {
+        pet.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      }
+    }
 
     if (!textarea || !sendButton) {
       return {
