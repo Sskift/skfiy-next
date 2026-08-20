@@ -1101,6 +1101,7 @@ function summarizePageTabsForHeartbeat(value: unknown): Record<string, unknown> 
         ...(readBoundedString(tab.state) ? { state: readBoundedString(tab.state) } : {}),
         ...(readBoolean(tab.eligible) !== undefined ? { eligible: readBoolean(tab.eligible) } : {}),
         ...(readBoundedString(tab.blocker) ? { blocker: readBoundedString(tab.blocker) } : {}),
+        ...(readBoundedString(tab.blockerCategory) ? { blockerCategory: readBoundedString(tab.blockerCategory) } : {}),
         ...(readBoundedString(tab.nextAction) ? { nextAction: readBoundedString(tab.nextAction) } : {})
       };
       return Object.keys(summary).length > 0 ? summary : undefined;

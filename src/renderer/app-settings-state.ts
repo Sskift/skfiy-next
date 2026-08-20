@@ -2,6 +2,7 @@ import type {
   AppPolicy,
   AppPolicySettings,
   AssistantAgentMode,
+  AssistantAgentProviderRuntime,
   AssistantAgentSettings,
   AssistantAgentSettingsResponse,
   PlannerProviderMode,
@@ -15,7 +16,9 @@ export const APP_POLICY_OPTIONS: Array<{ policy: AppPolicy; label: string }> = [
 ];
 
 export const ASSISTANT_AGENT_OPTIONS: Array<{ mode: AssistantAgentMode; label: string; aria: string }> = [
-  { mode: "codex", label: "Codex", aria: "选择 Codex background agent" }
+  { mode: "codex", label: "Codex", aria: "选择 Codex background agent" },
+  { mode: "claude-code", label: "Claude Code", aria: "选择 Claude Code background agent" },
+  { mode: "hermes", label: "Hermes", aria: "选择 Hermes background agent" }
 ];
 
 export const PLANNER_PROVIDER_OPTIONS: Array<{ mode: PlannerProviderMode; label: string; aria: string }> = [
@@ -37,6 +40,10 @@ export const DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE: AssistantAgentSettingsRe
     mode: "codex",
     codexBinary: "codex",
     codexBinarySource: "default",
+    claudeCodeBinary: "claude",
+    claudeCodeBinarySource: "default",
+    hermesBinary: "hermes",
+    hermesBinarySource: "default",
     cwd: "",
     timeoutMs: 45_000
   },
@@ -48,6 +55,26 @@ export const DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE: AssistantAgentSettingsRe
       selected: true,
       configured: true,
       executablePath: "codex",
+      executableSource: "default",
+      readiness: "unavailable"
+    },
+    {
+      provider: "assistant",
+      id: "claude-code",
+      label: "Claude Code",
+      selected: false,
+      configured: true,
+      executablePath: "claude",
+      executableSource: "default",
+      readiness: "unavailable"
+    },
+    {
+      provider: "assistant",
+      id: "hermes",
+      label: "Hermes",
+      selected: false,
+      configured: true,
+      executablePath: "hermes",
       executableSource: "default",
       readiness: "unavailable"
     }
@@ -76,21 +103,60 @@ export function reduceAppPolicySettings(
 
 export function reduceAssistantAgentSettingsResponse(
   response: AssistantAgentSettingsResponse,
-  update: Partial<Pick<AssistantAgentSettings, "mode">>
+  update: {
+    mode?: AssistantAgentMode;
+    providerRuntime?: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>>;
+  }
 ): AssistantAgentSettingsResponse {
   const mode = update.mode ?? response.settings.mode;
+  const providerRuntime = update.providerRuntime
+    ? mergeProviderRuntime(response.settings.providerRuntime, update.providerRuntime)
+    : response.settings.providerRuntime;
 
   return {
     ...response,
     settings: {
       ...response.settings,
-      mode
+      mode,
+      ...(providerRuntime === undefined ? {} : { providerRuntime })
     },
     providers: response.providers.map((provider) => ({
       ...provider,
       selected: provider.id === mode
     }))
   };
+}
+
+function mergeProviderRuntime(
+  current: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>> | undefined,
+  update: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>>
+): Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>> {
+  const merged: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>> = {
+    ...(current ?? {})
+  };
+
+  for (const [mode, runtime] of Object.entries(update) as Array<[
+    AssistantAgentMode,
+    AssistantAgentProviderRuntime | undefined
+  ]>) {
+    if (!runtime) {
+      continue;
+    }
+    const next: AssistantAgentProviderRuntime = { ...(merged[mode] ?? {}) };
+    if (runtime.cwd !== undefined) {
+      next.cwd = runtime.cwd;
+    }
+    if (runtime.timeoutMs !== undefined) {
+      next.timeoutMs = runtime.timeoutMs;
+    }
+    if (Object.keys(next).length > 0) {
+      merged[mode] = next;
+    } else {
+      delete merged[mode];
+    }
+  }
+
+  return merged;
 }
 
 export function reducePlannerProviderSettings(

@@ -55,7 +55,9 @@ describe("app desktop api", () => {
       .resolves.toMatchObject({
         settings: { mode: "codex" },
         providers: [
-          { id: "codex", selected: true }
+          { id: "codex", selected: true },
+          { id: "claude-code", selected: false },
+          { id: "hermes", selected: false }
         ]
       });
     await expect(api.setPlannerProviderSettings({ mode: "disabled" }))

@@ -117,6 +117,43 @@ export function normalizeBrowserPageContext(raw: unknown): BrowserPageContext {
   };
 }
 
+export interface BrowserPageContextSourceOverrides {
+  paused: boolean;
+  disconnected: boolean;
+  clearedForTurn: boolean;
+}
+
+export function applyBrowserPageContextSourceOverrides(
+  context: BrowserPageContext,
+  overrides: BrowserPageContextSourceOverrides
+): BrowserPageContext {
+  if (overrides.disconnected) {
+    return {
+      state: "unavailable",
+      reason: "Browser Context disconnected by user.",
+      nextAction: "Reconnect Browser Context to restore page context."
+    };
+  }
+
+  if (overrides.clearedForTurn) {
+    return {
+      state: "unavailable",
+      reason: "Browser Context cleared for this turn.",
+      nextAction: "Start a new turn to restore Browser Context."
+    };
+  }
+
+  if (overrides.paused) {
+    return {
+      state: "sensitive-paused",
+      reason: "Browser Context is paused.",
+      nextAction: "Resume Browser Context to inject page context."
+    };
+  }
+
+  return context;
+}
+
 export function createBrowserPageContextPromptBlock(context: BrowserPageContext): string {
   const lines = context.state === "ready" || context.state === "partial"
     ? [

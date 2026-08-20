@@ -3,6 +3,8 @@ import type {
   AssistantAgentSettings,
   AssistantAgentTurnResult
 } from "./assistant-agent.js";
+import type { AssistantAgentProviderFallback } from "./assistant-agent-provider-fallback.js";
+import { readAssistantAgentFallback } from "./assistant-agent-provider-fallback.js";
 import {
   readStopTurnHotkeyStatus,
   type StopTurnHotkeyStatus
@@ -14,6 +16,7 @@ export { readAssistantComputerUseToolCall } from "./main-assistant-computer-use-
 export interface AssistantAgentSettingsResponse {
   settings: AssistantAgentSettings;
   providers: AssistantAgentProviderState[];
+  fallback?: AssistantAgentProviderFallback;
 }
 
 export interface RuntimeStatusResponse {
@@ -26,7 +29,8 @@ export function createAssistantAgentSettingsResponse(
 ): AssistantAgentSettingsResponse {
   return {
     settings,
-    providers
+    providers,
+    fallback: readAssistantAgentFallback(settings, providers)
   };
 }
 

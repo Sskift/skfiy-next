@@ -17,6 +17,9 @@ import {
   getReplayOcrLabel,
   getTaskReplayRows,
   getUserDashboardPanelViewModel,
+  readAssistantAgentOfflineBanner,
+  readAssistantAgentProviderDetail,
+  readAssistantAgentProviderRuntime,
   readPetRouteOutcome,
   readSelectedAssistantAgentProvider
 } from "./app-view-model";
@@ -218,6 +221,117 @@ describe("app view model", () => {
       .toBe(fallbackProvider);
     expect(readSelectedAssistantAgentProvider([], "codex", fallbackProvider))
       .toBe(fallbackProvider);
+  });
+
+  it("resolves per-provider runtime overrides with safe global defaults", () => {
+    const settings = {
+      mode: "codex" as const,
+      codexBinary: "codex",
+      codexBinarySource: "default" as const,
+      claudeCodeBinary: "claude",
+      claudeCodeBinarySource: "default" as const,
+      hermesBinary: "hermes",
+      hermesBinarySource: "default" as const,
+      cwd: "/default/cwd",
+      timeoutMs: 45_000,
+      providerRuntime: {
+        codex: { cwd: "/workspace/codex", timeoutMs: 30_000 },
+        hermes: { cwd: "/workspace/hermes" }
+      }
+    };
+
+    expect(readAssistantAgentProviderRuntime(settings, "codex")).toEqual({
+      cwd: "/workspace/codex",
+      timeoutMs: 30_000
+    });
+    expect(readAssistantAgentProviderRuntime(settings, "hermes")).toEqual({
+      cwd: "/workspace/hermes",
+      timeoutMs: 45_000
+    });
+    expect(readAssistantAgentProviderRuntime(settings, "claude-code")).toEqual({
+      cwd: "/default/cwd",
+      timeoutMs: 45_000
+    });
+  });
+
+  it("builds provider detail with per-provider runtime values", () => {
+    const response = {
+      settings: {
+        mode: "codex" as const,
+        codexBinary: "codex",
+        codexBinarySource: "default" as const,
+        claudeCodeBinary: "claude",
+        claudeCodeBinarySource: "default" as const,
+        hermesBinary: "hermes",
+        hermesBinarySource: "default" as const,
+        cwd: "/default/cwd",
+        timeoutMs: 45_000,
+        providerRuntime: {
+          "claude-code": { cwd: "/workspace/claude", timeoutMs: 60_000 }
+        }
+      }
+    };
+
+    const detail = readAssistantAgentProviderDetail(response, {
+      id: "claude-code",
+      label: "Claude Code",
+      executablePath: "claude",
+      readiness: "chat-ready"
+    });
+
+    expect(detail).toContain("Claude Code · chat ready");
+    expect(detail).toContain("binary claude");
+    expect(detail).toContain("cwd /workspace/claude");
+    expect(detail).toContain("timeout 60s");
+  });
+
+  it("builds provider detail with global defaults when no override exists", () => {
+    const response = {
+      settings: {
+        mode: "codex" as const,
+        codexBinary: "codex",
+        codexBinarySource: "default" as const,
+        claudeCodeBinary: "claude",
+        claudeCodeBinarySource: "default" as const,
+        hermesBinary: "hermes",
+        hermesBinarySource: "default" as const,
+        cwd: "/default/cwd",
+        timeoutMs: 45_000
+      }
+    };
+
+    const detail = readAssistantAgentProviderDetail(response, {
+      id: "codex",
+      label: "Codex",
+      readiness: "version-ok"
+    });
+
+    expect(detail).toContain("cwd /default/cwd");
+    expect(detail).toContain("timeout 45s");
+    expect(detail).toContain("binary not configured");
+  });
+
+  it("derives the offline banner from the fallback decision", () => {
+    expect(readAssistantAgentOfflineBanner(undefined)).toBeNull();
+
+    expect(readAssistantAgentOfflineBanner({
+      kind: "offline",
+      requestedMode: "codex",
+      reason: "Codex is unavailable."
+    })).toEqual({
+      title: "Background Agent 离线",
+      detail: "Codex is unavailable."
+    });
+
+    expect(readAssistantAgentOfflineBanner({
+      kind: "fallback",
+      requestedMode: "codex",
+      activeMode: "hermes",
+      reason: "Codex is unavailable; skfiy can fall back to Hermes."
+    })).toEqual({
+      title: "Background Agent 已切换",
+      detail: "Codex is unavailable; skfiy can fall back to Hermes."
+    });
   });
 
   it("derives the app root view model from renderer state", () => {

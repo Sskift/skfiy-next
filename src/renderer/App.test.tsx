@@ -43,6 +43,10 @@ function createAssistantAgentFixture(mode: AssistantAgentMode): AssistantAgentSe
       mode,
       codexBinary: "codex",
       codexBinarySource: "default",
+      claudeCodeBinary: "claude",
+      claudeCodeBinarySource: "default",
+      hermesBinary: "hermes",
+      hermesBinarySource: "default",
       cwd: "/repo",
       timeoutMs: 45_000
     },
@@ -51,12 +55,32 @@ function createAssistantAgentFixture(mode: AssistantAgentMode): AssistantAgentSe
         provider: "assistant",
         id: "codex",
         label: "Codex",
-        selected: true,
+        selected: mode === "codex",
         configured: true,
         executablePath: "codex",
         executableSource: "default",
         resolvedExecutablePath: "/opt/homebrew/bin/codex",
         readiness: "chat-ready"
+      },
+      {
+        provider: "assistant",
+        id: "claude-code",
+        label: "Claude Code",
+        selected: mode === "claude-code",
+        configured: true,
+        executablePath: "claude",
+        executableSource: "default",
+        readiness: "unavailable"
+      },
+      {
+        provider: "assistant",
+        id: "hermes",
+        label: "Hermes",
+        selected: mode === "hermes",
+        configured: true,
+        executablePath: "hermes",
+        executableSource: "default",
+        readiness: "unavailable"
       }
     ]
   };
@@ -148,6 +172,12 @@ beforeEach(() => {
     setAssistantAgentSettings: vi
       .fn<DesktopApi["setAssistantAgentSettings"]>()
       .mockImplementation(async (update) => createAssistantAgentFixture(update.mode ?? "codex")),
+    testAssistantAgentProvider: vi
+      .fn<DesktopApi["testAssistantAgentProvider"]>()
+      .mockImplementation(async (input) => {
+        const fixture = createAssistantAgentFixture(input.mode);
+        return fixture.providers.find((provider) => provider.id === input.mode) ?? fixture.providers[0]!;
+      }),
     getPlannerProviderSettings: vi
       .fn<DesktopApi["getPlannerProviderSettings"]>()
       .mockResolvedValue(plannerProviderSettings),
@@ -295,7 +325,164 @@ beforeEach(() => {
       snapshot: { schemaVersion: 1, lastActiveSessionId: null, sessions: [] }
     }),
     onConversationHistoryChanged: vi.fn(() => vi.fn()),
-    getTaskControl: vi.fn<DesktopApi["getTaskControl"]>().mockResolvedValue(null)
+    getTaskControl: vi.fn<DesktopApi["getTaskControl"]>().mockResolvedValue(null),
+    getPersonalMemory: vi.fn<DesktopApi["getPersonalMemory"]>().mockResolvedValue({
+      schemaVersion: 1,
+      userEntries: [],
+      agentEntries: [],
+      usage: {
+        user: { usedChars: 0, limitChars: 1375, percent: 0 },
+        agent: { usedChars: 0, limitChars: 2200, percent: 0 }
+      },
+      pendingWrites: [],
+      journal: [],
+      sessionCount: 0,
+      settings: {
+        postTurnLearningEnabled: true,
+        writeApprovalEnabled: false
+      }
+    }),
+    setPersonalMemorySettings: vi
+      .fn<DesktopApi["setPersonalMemorySettings"]>()
+      .mockResolvedValue({
+        postTurnLearningEnabled: true,
+        writeApprovalEnabled: false
+      }),
+    forgetPersonalMemory: vi.fn<DesktopApi["forgetPersonalMemory"]>().mockResolvedValue({
+      result: "not-found",
+      snapshot: {
+        schemaVersion: 1,
+        userEntries: [],
+        agentEntries: [],
+        usage: {
+          user: { usedChars: 0, limitChars: 1375, percent: 0 },
+          agent: { usedChars: 0, limitChars: 2200, percent: 0 }
+        },
+        pendingWrites: [],
+        journal: [],
+        sessionCount: 0,
+        settings: {
+          postTurnLearningEnabled: true,
+          writeApprovalEnabled: false
+        }
+      }
+    }),
+    approvePendingMemory: vi.fn<DesktopApi["approvePendingMemory"]>().mockResolvedValue({
+      result: "not-found",
+      snapshot: {
+        schemaVersion: 1,
+        userEntries: [],
+        agentEntries: [],
+        usage: {
+          user: { usedChars: 0, limitChars: 1375, percent: 0 },
+          agent: { usedChars: 0, limitChars: 2200, percent: 0 }
+        },
+        pendingWrites: [],
+        journal: [],
+        sessionCount: 0,
+        settings: {
+          postTurnLearningEnabled: true,
+          writeApprovalEnabled: false
+        }
+      }
+    }),
+    rejectPendingMemory: vi.fn<DesktopApi["rejectPendingMemory"]>().mockResolvedValue({
+      result: "not-found",
+      snapshot: {
+        schemaVersion: 1,
+        userEntries: [],
+        agentEntries: [],
+        usage: {
+          user: { usedChars: 0, limitChars: 1375, percent: 0 },
+          agent: { usedChars: 0, limitChars: 2200, percent: 0 }
+        },
+        pendingWrites: [],
+        journal: [],
+        sessionCount: 0,
+        settings: {
+          postTurnLearningEnabled: true,
+          writeApprovalEnabled: false
+        }
+      }
+    }),
+    onPersonalMemoryChanged: vi.fn(() => vi.fn()),
+    getBrowserContextSource: vi.fn<DesktopApi["getBrowserContextSource"]>().mockResolvedValue({
+      schemaVersion: 1,
+      selectedTab: null,
+      contextState: "not-probed",
+      paused: false,
+      disconnected: false,
+      clearedForTurn: false,
+      blockers: [],
+      eligibleTabCount: 0,
+      discoveryState: "not-probed",
+      generatedAt: new Date(0).toISOString()
+    }),
+    discoverBrowserTabs: vi.fn<DesktopApi["discoverBrowserTabs"]>().mockResolvedValue({
+      result: "passed",
+      tabs: []
+    }),
+    selectBrowserTab: vi.fn<DesktopApi["selectBrowserTab"]>().mockResolvedValue({
+      schemaVersion: 1,
+      selectedTab: null,
+      contextState: "not-probed",
+      paused: false,
+      disconnected: false,
+      clearedForTurn: false,
+      blockers: [],
+      eligibleTabCount: 0,
+      discoveryState: "not-probed",
+      generatedAt: new Date(0).toISOString()
+    }),
+    refreshBrowserContext: vi.fn<DesktopApi["refreshBrowserContext"]>().mockResolvedValue({
+      schemaVersion: 1,
+      selectedTab: null,
+      contextState: "not-probed",
+      paused: false,
+      disconnected: false,
+      clearedForTurn: false,
+      blockers: [],
+      eligibleTabCount: 0,
+      discoveryState: "not-probed",
+      generatedAt: new Date(0).toISOString()
+    }),
+    pauseBrowserContext: vi.fn<DesktopApi["pauseBrowserContext"]>().mockResolvedValue({
+      schemaVersion: 1,
+      selectedTab: null,
+      contextState: "not-probed",
+      paused: true,
+      disconnected: false,
+      clearedForTurn: false,
+      blockers: [],
+      eligibleTabCount: 0,
+      discoveryState: "not-probed",
+      generatedAt: new Date(0).toISOString()
+    }),
+    disconnectBrowserContext: vi.fn<DesktopApi["disconnectBrowserContext"]>().mockResolvedValue({
+      schemaVersion: 1,
+      selectedTab: null,
+      contextState: "not-probed",
+      paused: false,
+      disconnected: true,
+      clearedForTurn: false,
+      blockers: [],
+      eligibleTabCount: 0,
+      discoveryState: "not-probed",
+      generatedAt: new Date(0).toISOString()
+    }),
+    clearBrowserContext: vi.fn<DesktopApi["clearBrowserContext"]>().mockResolvedValue({
+      schemaVersion: 1,
+      selectedTab: null,
+      contextState: "not-probed",
+      paused: false,
+      disconnected: false,
+      clearedForTurn: true,
+      blockers: [],
+      eligibleTabCount: 0,
+      discoveryState: "not-probed",
+      generatedAt: new Date(0).toISOString()
+    }),
+    onBrowserContextChanged: vi.fn(() => vi.fn())
   } satisfies DesktopApi;
 });
 

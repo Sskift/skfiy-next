@@ -44,8 +44,9 @@ type PermissionSettingsTarget =
   | "automation-finder";
 type StartupWarningId = "tmux-launch" | "dev-server" | "unbundled-electron";
 type AppPolicy = "allow" | "ask" | "deny";
-type AssistantAgentMode = "codex";
+type AssistantAgentMode = "codex" | "claude-code" | "hermes";
 type AssistantAgentProviderId = AssistantAgentMode;
+type AssistantAgentProviderLabel = "Codex" | "Claude Code" | "Hermes";
 type AssistantAgentProviderReadiness =
   | "chat-ready"
   | "version-ok"
@@ -55,6 +56,22 @@ type AssistantAgentProviderReadiness =
   | "unconfigured"
   | "unavailable";
 type AssistantAgentExecutableSource = "default" | "env";
+type AssistantAgentProviderRuntime = {
+  cwd?: string;
+  timeoutMs?: number;
+};
+type AssistantAgentProviderFallback =
+  | {
+      kind: "fallback";
+      requestedMode: AssistantAgentMode;
+      activeMode: AssistantAgentMode;
+      reason: string;
+    }
+  | {
+      kind: "offline";
+      requestedMode: AssistantAgentMode;
+      reason: string;
+    };
 type FirstRunReadinessStepId =
   | "background-agent"
   | "screen-recording"
@@ -358,14 +375,19 @@ interface AssistantAgentSettings {
   mode: AssistantAgentMode;
   codexBinary: string;
   codexBinarySource: "default" | "env";
+  claudeCodeBinary: string;
+  claudeCodeBinarySource: "default" | "env";
+  hermesBinary: string;
+  hermesBinarySource: "default" | "env";
   cwd: string;
   timeoutMs: number;
+  providerRuntime?: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>>;
 }
 
 interface AssistantAgentProviderState {
   provider: "assistant";
   id: AssistantAgentProviderId;
-  label: "Codex";
+  label: AssistantAgentProviderLabel;
   selected: boolean;
   configured: boolean;
   executablePath?: string;
@@ -373,12 +395,14 @@ interface AssistantAgentProviderState {
   resolvedExecutablePath?: string;
   readiness: AssistantAgentProviderReadiness;
   readinessDetail?: string;
+  version?: string;
   lastError?: string;
 }
 
 interface AssistantAgentSettingsResponse {
   settings: AssistantAgentSettings;
   providers: AssistantAgentProviderState[];
+  fallback?: AssistantAgentProviderFallback;
 }
 
 interface FirstRunReadinessStep {
@@ -403,6 +427,74 @@ interface PlannerProviderSettings {
   externalProviderLabel: string;
   externalEndpoint?: string;
   externalApiKeyConfigured: boolean;
+}
+
+interface PersonalMemorySettings {
+  postTurnLearningEnabled: boolean;
+  writeApprovalEnabled: boolean;
+}
+
+interface PersonalMemoryUsageBucket {
+  usedChars: number;
+  limitChars: number;
+  percent: number;
+}
+
+interface PendingPersonalMemoryWrite {
+  id: string;
+  createdAt: string;
+  source: string;
+  action: "add" | "replace" | "remove";
+  target: "user" | "agent";
+  content: string;
+  previousContent?: string;
+}
+
+interface PersonalMemoryJournalEntry {
+  id: string;
+  createdAt: string;
+  source: string;
+  stage: "durable" | "pending";
+  turnId: string;
+  providerLabel: string;
+  userInput: string;
+  action: "add" | "replace" | "remove";
+  target: "user" | "agent";
+  content: string;
+  previousContent?: string;
+}
+
+interface PersonalMemoryDashboardSnapshot {
+  schemaVersion: 1;
+  userEntries: string[];
+  agentEntries: string[];
+  usage: {
+    user: PersonalMemoryUsageBucket;
+    agent: PersonalMemoryUsageBucket;
+  };
+  pendingWrites: PendingPersonalMemoryWrite[];
+  journal: PersonalMemoryJournalEntry[];
+  sessionCount: number;
+  latestUpdatedAt?: string;
+  settings: PersonalMemorySettings;
+}
+
+interface PersonalMemoryForgetResult {
+  result: "forgotten" | "not-found";
+  snapshot: PersonalMemoryDashboardSnapshot;
+}
+
+interface PersonalMemoryPendingApprovalResult {
+  result: "approved" | "not-found";
+  applied?: number;
+  ignored?: number;
+  blocked?: number;
+  snapshot: PersonalMemoryDashboardSnapshot;
+}
+
+interface PersonalMemoryPendingRejectResult {
+  result: "rejected" | "not-found";
+  snapshot: PersonalMemoryDashboardSnapshot;
 }
 
 interface TurnTranscript {
@@ -560,6 +652,74 @@ interface RuntimeStatus {
   };
 }
 
+type BrowserContextBlockerCategory =
+  | "internal-page"
+  | "file-page"
+  | "host-policy"
+  | "site-access"
+  | "content-script"
+  | "screenshot"
+  | "unsupported-scheme";
+
+interface BrowserContextBlocker {
+  category: BrowserContextBlockerCategory;
+  label: string;
+  detail?: string;
+  nextAction?: string;
+}
+
+interface BrowserContextTabSummary {
+  tabId: number;
+  windowId?: number;
+  active?: boolean;
+  title?: string;
+  url?: string;
+  host?: string;
+  scheme?: string;
+  eligible: boolean;
+  blocker?: string;
+  blockerCategory?: BrowserContextBlockerCategory;
+  nextAction?: string;
+}
+
+interface BrowserContextTabDiscoveryResult {
+  result: "passed" | "blocked";
+  tabs: BrowserContextTabSummary[];
+  reason?: string;
+  observedAt?: string;
+}
+
+interface BrowserContextSelectedTab {
+  tabId: number;
+  title?: string;
+  host?: string;
+  url?: string;
+  scheme?: string;
+  active?: boolean;
+  observedAt?: string;
+  freshnessSeconds?: number;
+  blocker?: string;
+  blockerCategory?: BrowserContextBlockerCategory;
+  nextAction?: string;
+}
+
+type BrowserContextDiscoveryState = "passed" | "blocked" | "not-probed";
+
+interface BrowserContextSourceSnapshot {
+  schemaVersion: 1;
+  selectedTab: BrowserContextSelectedTab | null;
+  contextState: string;
+  paused: boolean;
+  disconnected: boolean;
+  clearedForTurn: boolean;
+  blockers: BrowserContextBlocker[];
+  eligibleTabCount: number;
+  discoveryState: BrowserContextDiscoveryState;
+  discoveryReason?: string;
+  discoveryObservedAt?: string;
+  generatedAt: string;
+}
+
 type AutomationMonitorStatus =
   | "observing"
   | "needs_attention"
@@ -671,8 +831,14 @@ interface DesktopApi {
   setAppPolicy: (update: { bundleId: string; policy: AppPolicy }) => Promise<AppPolicySettings>;
   getAssistantAgentSettings: () => Promise<AssistantAgentSettingsResponse>;
   setAssistantAgentSettings: (
-    update: Partial<Pick<AssistantAgentSettings, "mode">>
+    update: {
+      mode?: AssistantAgentMode;
+      providerRuntime?: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>>;
+    }
   ) => Promise<AssistantAgentSettingsResponse>;
+  testAssistantAgentProvider: (
+    input: { mode: AssistantAgentMode }
+  ) => Promise<AssistantAgentProviderState>;
   getFirstRunReadiness: () => Promise<FirstRunReadinessSnapshot>;
   testBackgroundAgent: () => Promise<FirstRunReadinessSnapshot>;
   testFinderAutomation: () => Promise<FirstRunReadinessSnapshot>;
@@ -714,6 +880,28 @@ interface DesktopApi {
   onTaskEvent: (callback: (event: TaskEvent) => void) => () => void;
   onConversationHistoryChanged: (
     callback: (snapshot: ConversationHistorySnapshot) => void
+  ) => () => void;
+  getPersonalMemory: () => Promise<PersonalMemoryDashboardSnapshot>;
+  setPersonalMemorySettings: (
+    update: { postTurnLearningEnabled?: boolean; writeApprovalEnabled?: boolean }
+  ) => Promise<PersonalMemorySettings>;
+  forgetPersonalMemory: (
+    input: { target: "user" | "agent"; content: string }
+  ) => Promise<PersonalMemoryForgetResult>;
+  approvePendingMemory: (pendingId: string) => Promise<PersonalMemoryPendingApprovalResult>;
+  rejectPendingMemory: (pendingId: string) => Promise<PersonalMemoryPendingRejectResult>;
+  onPersonalMemoryChanged: (
+    callback: (snapshot: PersonalMemoryDashboardSnapshot) => void
+  ) => () => void;
+  getBrowserContextSource: () => Promise<BrowserContextSourceSnapshot>;
+  discoverBrowserTabs: () => Promise<BrowserContextTabDiscoveryResult>;
+  selectBrowserTab: (input: { tabId: number }) => Promise<BrowserContextSourceSnapshot>;
+  refreshBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  pauseBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  disconnectBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  clearBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  onBrowserContextChanged: (
+    callback: (snapshot: BrowserContextSourceSnapshot) => void
   ) => () => void;
 }
 
@@ -1024,12 +1212,35 @@ const api: DesktopApi = {
       update && typeof update === "object" && "mode" in update
         ? update.mode
         : undefined;
+    const providerRuntime =
+      update && typeof update === "object" && "providerRuntime" in update
+        ? update.providerRuntime
+        : undefined;
     const payload = await ipcRenderer.invoke("skfiy:set-assistant-agent-settings", {
-      mode: isAssistantAgentMode(mode) ? mode : undefined
+      mode: isAssistantAgentMode(mode) ? mode : undefined,
+      providerRuntime: isAssistantAgentProviderRuntimeUpdate(providerRuntime)
+        ? providerRuntime
+        : undefined
     });
     return isAssistantAgentSettingsResponse(payload)
       ? payload
       : createDefaultAssistantAgentSettingsResponse();
+  },
+  async testAssistantAgentProvider(input) {
+    const mode =
+      input && typeof input === "object" && "mode" in input
+        ? input.mode
+        : undefined;
+    if (!isAssistantAgentMode(mode)) {
+      throw new Error("Assistant agent provider test requires a valid mode.");
+    }
+    const payload = await ipcRenderer.invoke("skfiy:test-assistant-agent-provider", {
+      mode
+    });
+    if (isAssistantAgentProviderState(payload)) {
+      return payload;
+    }
+    throw new Error("Assistant agent provider test returned an invalid payload.");
   },
   async getFirstRunReadiness() {
     const payload = await ipcRenderer.invoke("skfiy:get-first-run-readiness");
@@ -1237,11 +1448,262 @@ const api: DesktopApi = {
 
     ipcRenderer.on("skfiy:conversation-history-changed", listener);
     return () => ipcRenderer.removeListener("skfiy:conversation-history-changed", listener);
+  },
+  async getPersonalMemory() {
+    const payload = await ipcRenderer.invoke("skfiy:get-personal-memory");
+    return isPersonalMemoryDashboardSnapshot(payload)
+      ? payload
+      : createDefaultPersonalMemoryDashboardSnapshot();
+  },
+  async setPersonalMemorySettings(update) {
+    const payload = await ipcRenderer.invoke("skfiy:set-personal-memory-settings", {
+      postTurnLearningEnabled: typeof update?.postTurnLearningEnabled === "boolean"
+        ? update.postTurnLearningEnabled
+        : undefined,
+      writeApprovalEnabled: typeof update?.writeApprovalEnabled === "boolean"
+        ? update.writeApprovalEnabled
+        : undefined
+    });
+    return isPersonalMemorySettings(payload)
+      ? payload
+      : createDefaultPersonalMemorySettings();
+  },
+  async forgetPersonalMemory(input) {
+    const payload = await ipcRenderer.invoke("skfiy:forget-personal-memory", {
+      target: input.target === "user" || input.target === "agent" ? input.target : undefined,
+      content: typeof input.content === "string" ? input.content : undefined
+    });
+    return isPersonalMemoryForgetResult(payload)
+      ? payload
+      : {
+        result: "not-found",
+        snapshot: createDefaultPersonalMemoryDashboardSnapshot()
+      };
+  },
+  async approvePendingMemory(pendingId) {
+    const payload = await ipcRenderer.invoke("skfiy:approve-pending-memory", {
+      pendingId: typeof pendingId === "string" ? pendingId : undefined
+    });
+    return isPersonalMemoryPendingApprovalResult(payload)
+      ? payload
+      : {
+        result: "not-found",
+        snapshot: createDefaultPersonalMemoryDashboardSnapshot()
+      };
+  },
+  async rejectPendingMemory(pendingId) {
+    const payload = await ipcRenderer.invoke("skfiy:reject-pending-memory", {
+      pendingId: typeof pendingId === "string" ? pendingId : undefined
+    });
+    return isPersonalMemoryPendingRejectResult(payload)
+      ? payload
+      : {
+        result: "not-found",
+        snapshot: createDefaultPersonalMemoryDashboardSnapshot()
+      };
+  },
+  onPersonalMemoryChanged(callback) {
+    const listener = (_event: IpcRendererEvent, payload: unknown) => {
+      if (isPersonalMemoryDashboardSnapshot(payload)) {
+        callback(payload);
+      }
+    };
+
+    ipcRenderer.on("skfiy:personal-memory-changed", listener);
+    return () => ipcRenderer.removeListener("skfiy:personal-memory-changed", listener);
+  },
+  async getBrowserContextSource() {
+    const payload = await ipcRenderer.invoke("skfiy:get-browser-context-source");
+    return isBrowserContextSourceSnapshot(payload)
+      ? payload
+      : createUnknownBrowserContextSourceSnapshot();
+  },
+  async discoverBrowserTabs() {
+    const payload = await ipcRenderer.invoke("skfiy:discover-browser-tabs");
+    return isBrowserContextTabDiscoveryResult(payload)
+      ? payload
+      : { result: "blocked" as const, reason: "Tab discovery is unavailable.", tabs: [] };
+  },
+  async selectBrowserTab(input) {
+    const payload = await ipcRenderer.invoke("skfiy:select-browser-tab", {
+      tabId: typeof input?.tabId === "number" ? input.tabId : undefined
+    });
+    return isBrowserContextSourceSnapshot(payload)
+      ? payload
+      : createUnknownBrowserContextSourceSnapshot();
+  },
+  async refreshBrowserContext() {
+    const payload = await ipcRenderer.invoke("skfiy:refresh-browser-context");
+    return isBrowserContextSourceSnapshot(payload)
+      ? payload
+      : createUnknownBrowserContextSourceSnapshot();
+  },
+  async pauseBrowserContext() {
+    const payload = await ipcRenderer.invoke("skfiy:pause-browser-context");
+    return isBrowserContextSourceSnapshot(payload)
+      ? payload
+      : createUnknownBrowserContextSourceSnapshot();
+  },
+  async disconnectBrowserContext() {
+    const payload = await ipcRenderer.invoke("skfiy:disconnect-browser-context");
+    return isBrowserContextSourceSnapshot(payload)
+      ? payload
+      : createUnknownBrowserContextSourceSnapshot();
+  },
+  async clearBrowserContext() {
+    const payload = await ipcRenderer.invoke("skfiy:clear-browser-context");
+    return isBrowserContextSourceSnapshot(payload)
+      ? payload
+      : createUnknownBrowserContextSourceSnapshot();
+  },
+  onBrowserContextChanged(callback) {
+    const listener = (_event: IpcRendererEvent, payload: unknown) => {
+      if (isBrowserContextSourceSnapshot(payload)) {
+        callback(payload);
+      }
+    };
+
+    ipcRenderer.on("skfiy:browser-context-changed", listener);
+    return () => ipcRenderer.removeListener("skfiy:browser-context-changed", listener);
   }
 };
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+const browserContextBlockerCategories = new Set<BrowserContextBlockerCategory>([
+  "internal-page",
+  "file-page",
+  "host-policy",
+  "site-access",
+  "content-script",
+  "screenshot",
+  "unsupported-scheme"
+]);
+
+function createUnknownBrowserContextSourceSnapshot(): BrowserContextSourceSnapshot {
+  return {
+    schemaVersion: 1,
+    selectedTab: null,
+    contextState: "missing",
+    paused: false,
+    disconnected: false,
+    clearedForTurn: false,
+    blockers: [],
+    eligibleTabCount: 0,
+    discoveryState: "not-probed",
+    generatedAt: new Date(0).toISOString()
+  };
+}
+
+function isBrowserContextBlocker(value: unknown): value is BrowserContextBlocker {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.category === "string"
+    && browserContextBlockerCategories.has(record.category as BrowserContextBlockerCategory)
+    && typeof record.label === "string"
+    && (record.detail === undefined || typeof record.detail === "string")
+    && (record.nextAction === undefined || typeof record.nextAction === "string");
+}
+
+function isBrowserContextTabSummary(value: unknown): value is BrowserContextTabSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.tabId === "number"
+    && Number.isInteger(record.tabId)
+    && typeof record.eligible === "boolean"
+    && (record.windowId === undefined || typeof record.windowId === "number")
+    && (record.active === undefined || typeof record.active === "boolean")
+    && (record.title === undefined || typeof record.title === "string")
+    && (record.url === undefined || typeof record.url === "string")
+    && (record.host === undefined || typeof record.host === "string")
+    && (record.scheme === undefined || typeof record.scheme === "string")
+    && (record.blocker === undefined || typeof record.blocker === "string")
+    && (record.blockerCategory === undefined
+      || (typeof record.blockerCategory === "string"
+        && browserContextBlockerCategories.has(record.blockerCategory as BrowserContextBlockerCategory)))
+    && (record.nextAction === undefined || typeof record.nextAction === "string");
+}
+
+function isBrowserContextTabDiscoveryResult(
+  value: unknown
+): value is BrowserContextTabDiscoveryResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (record.result === "passed" || record.result === "blocked")
+    && Array.isArray(record.tabs)
+    && record.tabs.every(isBrowserContextTabSummary)
+    && (record.reason === undefined || typeof record.reason === "string")
+    && (record.observedAt === undefined || typeof record.observedAt === "string");
+}
+
+function isBrowserContextSourceSnapshot(
+  value: unknown
+): value is BrowserContextSourceSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1
+    || typeof record.contextState !== "string"
+    || typeof record.paused !== "boolean"
+    || typeof record.disconnected !== "boolean"
+    || typeof record.clearedForTurn !== "boolean"
+    || typeof record.eligibleTabCount !== "number"
+    || typeof record.generatedAt !== "string"
+    || !Array.isArray(record.blockers)
+    || !record.blockers.every(isBrowserContextBlocker)
+  ) {
+    return false;
+  }
+
+  if (
+    record.discoveryState !== "passed"
+    && record.discoveryState !== "blocked"
+    && record.discoveryState !== "not-probed"
+  ) {
+    return false;
+  }
+
+  if (record.selectedTab === null) {
+    return true;
+  }
+
+  return isBrowserContextSelectedTab(record.selectedTab);
+}
+
+function isBrowserContextSelectedTab(value: unknown): value is BrowserContextSelectedTab {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.tabId === "number"
+    && Number.isInteger(record.tabId)
+    && (record.title === undefined || typeof record.title === "string")
+    && (record.host === undefined || typeof record.host === "string")
+    && (record.url === undefined || typeof record.url === "string")
+    && (record.scheme === undefined || typeof record.scheme === "string")
+    && (record.active === undefined || typeof record.active === "boolean")
+    && (record.observedAt === undefined || typeof record.observedAt === "string")
+    && (record.freshnessSeconds === undefined || typeof record.freshnessSeconds === "number")
+    && (record.blocker === undefined || typeof record.blocker === "string")
+    && (record.blockerCategory === undefined
+      || (typeof record.blockerCategory === "string"
+        && browserContextBlockerCategories.has(record.blockerCategory as BrowserContextBlockerCategory)))
+    && (record.nextAction === undefined || typeof record.nextAction === "string");
 }
 
 function isPositiveNumber(value: unknown): value is number {
@@ -1330,7 +1792,11 @@ function isAssistantAgentSettingsResponse(value: unknown): value is AssistantAge
   const response = value as Partial<AssistantAgentSettingsResponse>;
   return isAssistantAgentSettings(response.settings)
     && Array.isArray(response.providers)
-    && response.providers.every(isAssistantAgentProviderState);
+    && response.providers.every(isAssistantAgentProviderState)
+    && (
+      response.fallback === undefined
+      || isAssistantAgentProviderFallback(response.fallback)
+    );
 }
 
 function isAssistantAgentSettings(value: unknown): value is AssistantAgentSettings {
@@ -1343,11 +1809,65 @@ function isAssistantAgentSettings(value: unknown): value is AssistantAgentSettin
     isAssistantAgentMode(settings.mode)
     && typeof settings.codexBinary === "string"
     && isAssistantAgentCliBinarySource(settings.codexBinarySource)
+    && typeof settings.claudeCodeBinary === "string"
+    && isAssistantAgentCliBinarySource(settings.claudeCodeBinarySource)
+    && typeof settings.hermesBinary === "string"
+    && isAssistantAgentCliBinarySource(settings.hermesBinarySource)
     && typeof settings.cwd === "string"
     && typeof settings.timeoutMs === "number"
     && Number.isFinite(settings.timeoutMs)
     && settings.timeoutMs > 0
+    && (
+      settings.providerRuntime === undefined
+      || isAssistantAgentProviderRuntimeUpdate(settings.providerRuntime)
+    )
   );
+}
+
+function isAssistantAgentProviderRuntimeUpdate(
+  value: unknown
+): value is Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.entries(value as Record<string, unknown>).every(([mode, runtime]) => {
+    if (!isAssistantAgentMode(mode) || !runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+      return false;
+    }
+    const candidate = runtime as Record<string, unknown>;
+    return (
+      (candidate.cwd === undefined || typeof candidate.cwd === "string")
+      && (
+        candidate.timeoutMs === undefined
+        || (
+          typeof candidate.timeoutMs === "number"
+          && Number.isFinite(candidate.timeoutMs)
+          && candidate.timeoutMs > 0
+        )
+      )
+    );
+  });
+}
+
+function isAssistantAgentProviderFallback(
+  value: unknown
+): value is AssistantAgentProviderFallback {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const fallback = value as Partial<AssistantAgentProviderFallback>;
+  if (fallback.kind === "fallback") {
+    return isAssistantAgentMode(fallback.requestedMode)
+      && isAssistantAgentMode(fallback.activeMode)
+      && typeof fallback.reason === "string";
+  }
+  if (fallback.kind === "offline") {
+    return isAssistantAgentMode(fallback.requestedMode)
+      && typeof fallback.reason === "string";
+  }
+  return false;
 }
 
 function isAssistantAgentProviderState(value: unknown): value is AssistantAgentProviderState {
@@ -1359,7 +1879,7 @@ function isAssistantAgentProviderState(value: unknown): value is AssistantAgentP
   return (
     state.provider === "assistant"
     && isAssistantAgentMode(state.id)
-    && (state.label === "Codex")
+    && isAssistantAgentProviderLabel(state.label)
     && typeof state.selected === "boolean"
     && typeof state.configured === "boolean"
     && (
@@ -1377,14 +1897,22 @@ function isAssistantAgentProviderState(value: unknown): value is AssistantAgentP
       || typeof state.readinessDetail === "string"
     )
     && (
+      state.version === undefined
+      || typeof state.version === "string"
+    )
+    && (
       state.lastError === undefined
       || typeof state.lastError === "string"
     )
   );
 }
 
+function isAssistantAgentProviderLabel(value: unknown): value is AssistantAgentProviderLabel {
+  return value === "Codex" || value === "Claude Code" || value === "Hermes";
+}
+
 function isAssistantAgentMode(value: unknown): value is AssistantAgentMode {
-  return value === "codex";
+  return value === "codex" || value === "claude-code" || value === "hermes";
 }
 
 function isAssistantAgentCliBinarySource(value: unknown): value is "default" | "env" {
@@ -2835,6 +3363,10 @@ function createDefaultAssistantAgentSettingsResponse(): AssistantAgentSettingsRe
     mode: "codex",
     codexBinary: "codex",
     codexBinarySource: "default",
+    claudeCodeBinary: "claude",
+    claudeCodeBinarySource: "default",
+    hermesBinary: "hermes",
+    hermesBinarySource: "default",
     cwd: "",
     timeoutMs: 45_000
   };
@@ -2849,6 +3381,26 @@ function createDefaultAssistantAgentSettingsResponse(): AssistantAgentSettingsRe
         selected: true,
         configured: true,
         executablePath: "codex",
+        executableSource: "default",
+        readiness: "unavailable"
+      },
+      {
+        provider: "assistant",
+        id: "claude-code",
+        label: "Claude Code",
+        selected: false,
+        configured: true,
+        executablePath: "claude",
+        executableSource: "default",
+        readiness: "unavailable"
+      },
+      {
+        provider: "assistant",
+        id: "hermes",
+        label: "Hermes",
+        selected: false,
+        configured: true,
+        executablePath: "hermes",
         executableSource: "default",
         readiness: "unavailable"
       }
@@ -2883,6 +3435,165 @@ function createUnknownFirstRunReadinessStep(
     state: "unknown",
     reason: "Readiness status could not be read.",
     nextAction: "Refresh first-run readiness."
+  };
+}
+
+function isPersonalMemorySettings(value: unknown): value is PersonalMemorySettings {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const settings = value as Partial<PersonalMemorySettings>;
+  return typeof settings.postTurnLearningEnabled === "boolean"
+    && typeof settings.writeApprovalEnabled === "boolean";
+}
+
+function isPersonalMemoryUsageBucket(value: unknown): value is PersonalMemoryUsageBucket {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const bucket = value as Partial<PersonalMemoryUsageBucket>;
+  return typeof bucket.usedChars === "number"
+    && Number.isFinite(bucket.usedChars)
+    && typeof bucket.limitChars === "number"
+    && Number.isFinite(bucket.limitChars)
+    && typeof bucket.percent === "number"
+    && Number.isFinite(bucket.percent);
+}
+
+function isPendingPersonalMemoryWrite(value: unknown): value is PendingPersonalMemoryWrite {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const write = value as Partial<PendingPersonalMemoryWrite>;
+  return typeof write.id === "string"
+    && typeof write.createdAt === "string"
+    && typeof write.source === "string"
+    && isPersonalMemoryAction(write.action)
+    && isPersonalMemoryTarget(write.target)
+    && typeof write.content === "string"
+    && (write.previousContent === undefined || typeof write.previousContent === "string");
+}
+
+function isPersonalMemoryJournalEntry(value: unknown): value is PersonalMemoryJournalEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const entry = value as Partial<PersonalMemoryJournalEntry>;
+  return typeof entry.id === "string"
+    && typeof entry.createdAt === "string"
+    && typeof entry.source === "string"
+    && (entry.stage === "durable" || entry.stage === "pending")
+    && typeof entry.turnId === "string"
+    && typeof entry.providerLabel === "string"
+    && typeof entry.userInput === "string"
+    && isPersonalMemoryAction(entry.action)
+    && isPersonalMemoryTarget(entry.target)
+    && typeof entry.content === "string"
+    && (entry.previousContent === undefined || typeof entry.previousContent === "string");
+}
+
+function isPersonalMemoryAction(value: unknown): value is "add" | "replace" | "remove" {
+  return value === "add" || value === "replace" || value === "remove";
+}
+
+function isPersonalMemoryTarget(value: unknown): value is "user" | "agent" {
+  return value === "user" || value === "agent";
+}
+
+function isPersonalMemoryDashboardSnapshot(
+  value: unknown
+): value is PersonalMemoryDashboardSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const snapshot = value as Partial<PersonalMemoryDashboardSnapshot>;
+  return snapshot.schemaVersion === 1
+    && Array.isArray(snapshot.userEntries)
+    && snapshot.userEntries.every((entry) => typeof entry === "string")
+    && Array.isArray(snapshot.agentEntries)
+    && snapshot.agentEntries.every((entry) => typeof entry === "string")
+    && Boolean(snapshot.usage)
+    && isPersonalMemoryUsageBucket(snapshot.usage?.user)
+    && isPersonalMemoryUsageBucket(snapshot.usage?.agent)
+    && Array.isArray(snapshot.pendingWrites)
+    && snapshot.pendingWrites.every(isPendingPersonalMemoryWrite)
+    && Array.isArray(snapshot.journal)
+    && snapshot.journal.every(isPersonalMemoryJournalEntry)
+    && typeof snapshot.sessionCount === "number"
+    && Number.isFinite(snapshot.sessionCount)
+    && (snapshot.latestUpdatedAt === undefined
+      || typeof snapshot.latestUpdatedAt === "string")
+    && isPersonalMemorySettings(snapshot.settings);
+}
+
+function isPersonalMemoryForgetResult(value: unknown): value is PersonalMemoryForgetResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<PersonalMemoryForgetResult>;
+  return (result.result === "forgotten" || result.result === "not-found")
+    && isPersonalMemoryDashboardSnapshot(result.snapshot);
+}
+
+function isPersonalMemoryPendingApprovalResult(
+  value: unknown
+): value is PersonalMemoryPendingApprovalResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<PersonalMemoryPendingApprovalResult>;
+  if (result.result === "not-found") {
+    return isPersonalMemoryDashboardSnapshot(result.snapshot);
+  }
+  if (result.result !== "approved") {
+    return false;
+  }
+
+  return typeof result.applied === "number"
+    && typeof result.ignored === "number"
+    && typeof result.blocked === "number"
+    && isPersonalMemoryDashboardSnapshot(result.snapshot);
+}
+
+function isPersonalMemoryPendingRejectResult(
+  value: unknown
+): value is PersonalMemoryPendingRejectResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<PersonalMemoryPendingRejectResult>;
+  return (result.result === "rejected" || result.result === "not-found")
+    && isPersonalMemoryDashboardSnapshot(result.snapshot);
+}
+
+function createDefaultPersonalMemorySettings(): PersonalMemorySettings {
+  return {
+    postTurnLearningEnabled: true,
+    writeApprovalEnabled: false
+  };
+}
+
+function createDefaultPersonalMemoryDashboardSnapshot(): PersonalMemoryDashboardSnapshot {
+  return {
+    schemaVersion: 1,
+    userEntries: [],
+    agentEntries: [],
+    usage: {
+      user: { usedChars: 0, limitChars: 1375, percent: 0 },
+      agent: { usedChars: 0, limitChars: 2200, percent: 0 }
+    },
+    pendingWrites: [],
+    journal: [],
+    sessionCount: 0,
+    settings: createDefaultPersonalMemorySettings()
   };
 }
 

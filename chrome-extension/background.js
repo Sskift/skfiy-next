@@ -619,6 +619,30 @@ function createTabNextAction(blocker) {
   }
 }
 
+export function mapTabBlockerCategory(blocker) {
+  switch (blocker) {
+    case "internal_chrome_page":
+    case "chrome_extension_page":
+      return "internal-page";
+    case "file_url_not_supported":
+      return "file-page";
+    case "blocked_by_host_policy":
+      return "host-policy";
+    case "blocked_by_chrome_host_permission":
+    case "chrome_host_permission_missing":
+      return "site-access";
+    case "chrome_capture_permission_missing":
+      return "screenshot";
+    case "unsupported_url_scheme":
+      return "unsupported-scheme";
+    default:
+      if (typeof blocker === "string" && blocker.startsWith("content_script")) {
+        return "content-script";
+      }
+      return null;
+  }
+}
+
 function redactTabUrl(url) {
   if (typeof url !== "string" || url.length === 0) {
     return "";
@@ -662,14 +686,18 @@ async function summarizeDiscoverableTab(tab, policy) {
     host,
     scheme
   };
-  const blocked = (blocker, details = {}) => ({
-    ...base,
-    state: "blocked",
-    eligible: false,
-    blocker,
-    nextAction: createTabNextAction(blocker),
-    ...details
-  });
+  const blocked = (blocker, details = {}) => {
+    const blockerCategory = mapTabBlockerCategory(blocker);
+    return {
+      ...base,
+      state: "blocked",
+      eligible: false,
+      blocker,
+      ...(blockerCategory ? { blockerCategory } : {}),
+      nextAction: createTabNextAction(blocker),
+      ...details
+    };
+  };
 
   if (!parsedUrl) {
     return blocked("unsupported_url_scheme");

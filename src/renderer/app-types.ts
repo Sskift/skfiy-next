@@ -18,6 +18,25 @@ import type {
   TaskControlRecoveryRequest,
   TaskControlSnapshot
 } from "../shared/task-control.js";
+import type {
+  BrowserContextBlocker,
+  BrowserContextBlockerCategory,
+  BrowserContextDiscoveryState,
+  BrowserContextSelectedTab,
+  BrowserContextSourceSnapshot,
+  BrowserContextTabDiscoveryResult,
+  BrowserContextTabSummary
+} from "../shared/browser-context-source.js";
+
+export type {
+  BrowserContextBlocker,
+  BrowserContextBlockerCategory,
+  BrowserContextDiscoveryState,
+  BrowserContextSelectedTab,
+  BrowserContextSourceSnapshot,
+  BrowserContextTabDiscoveryResult,
+  BrowserContextTabSummary
+};
 
 export type {
   ConversationHistorySnapshot,
@@ -59,7 +78,8 @@ export type PermissionSettingsTarget =
   | "accessibility";
 export type StartupWarningId = "tmux-launch" | "dev-server" | "unbundled-electron";
 export type AppPolicy = "allow" | "ask" | "deny";
-export type AssistantAgentMode = "codex";
+export type AssistantAgentMode = "codex" | "claude-code" | "hermes";
+export type AssistantAgentProviderLabel = "Codex" | "Claude Code" | "Hermes";
 export type AssistantAgentProviderReadiness =
   | "chat-ready"
   | "version-ok"
@@ -68,6 +88,22 @@ export type AssistantAgentProviderReadiness =
   | "auth-or-permission-blocked"
   | "unconfigured"
   | "unavailable";
+export type AssistantAgentProviderRuntime = {
+  cwd?: string;
+  timeoutMs?: number;
+};
+export type AssistantAgentProviderFallback =
+  | {
+      kind: "fallback";
+      requestedMode: AssistantAgentMode;
+      activeMode: AssistantAgentMode;
+      reason: string;
+    }
+  | {
+      kind: "offline";
+      requestedMode: AssistantAgentMode;
+      reason: string;
+    };
 export type PlannerProviderMode = "local-deterministic" | "external-cua" | "disabled";
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type TurnTranscriptOutcome =
@@ -95,14 +131,19 @@ export interface AssistantAgentSettings {
   mode: AssistantAgentMode;
   codexBinary: string;
   codexBinarySource: "default" | "env";
+  claudeCodeBinary: string;
+  claudeCodeBinarySource: "default" | "env";
+  hermesBinary: string;
+  hermesBinarySource: "default" | "env";
   cwd: string;
   timeoutMs: number;
+  providerRuntime?: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>>;
 }
 
 export interface AssistantAgentProviderState {
   provider: "assistant";
   id: AssistantAgentMode;
-  label: "Codex";
+  label: AssistantAgentProviderLabel;
   selected: boolean;
   configured: boolean;
   executablePath?: string;
@@ -117,6 +158,7 @@ export interface AssistantAgentProviderState {
 export interface AssistantAgentSettingsResponse {
   settings: AssistantAgentSettings;
   providers: AssistantAgentProviderState[];
+  fallback?: AssistantAgentProviderFallback;
 }
 
 export interface PlannerProviderSettings {
@@ -420,6 +462,74 @@ export interface ObserveAppReplayRecord {
   }>;
 }
 
+export interface PersonalMemorySettings {
+  postTurnLearningEnabled: boolean;
+  writeApprovalEnabled: boolean;
+}
+
+export interface PersonalMemoryUsageBucket {
+  usedChars: number;
+  limitChars: number;
+  percent: number;
+}
+
+export interface PendingPersonalMemoryWrite {
+  id: string;
+  createdAt: string;
+  source: string;
+  action: "add" | "replace" | "remove";
+  target: "user" | "agent";
+  content: string;
+  previousContent?: string;
+}
+
+export interface PersonalMemoryJournalEntry {
+  id: string;
+  createdAt: string;
+  source: string;
+  stage: "durable" | "pending";
+  turnId: string;
+  providerLabel: string;
+  userInput: string;
+  action: "add" | "replace" | "remove";
+  target: "user" | "agent";
+  content: string;
+  previousContent?: string;
+}
+
+export interface PersonalMemoryDashboardSnapshot {
+  schemaVersion: 1;
+  userEntries: string[];
+  agentEntries: string[];
+  usage: {
+    user: PersonalMemoryUsageBucket;
+    agent: PersonalMemoryUsageBucket;
+  };
+  pendingWrites: PendingPersonalMemoryWrite[];
+  journal: PersonalMemoryJournalEntry[];
+  sessionCount: number;
+  latestUpdatedAt?: string;
+  settings: PersonalMemorySettings;
+}
+
+export interface PersonalMemoryForgetResult {
+  result: "forgotten" | "not-found";
+  snapshot: PersonalMemoryDashboardSnapshot;
+}
+
+export interface PersonalMemoryPendingApprovalResult {
+  result: "approved" | "not-found";
+  applied?: number;
+  ignored?: number;
+  blocked?: number;
+  snapshot: PersonalMemoryDashboardSnapshot;
+}
+
+export interface PersonalMemoryPendingRejectResult {
+  result: "rejected" | "not-found";
+  snapshot: PersonalMemoryDashboardSnapshot;
+}
+
 export interface DesktopApi {
   runCommand: (command: string, options: { mode: ManualMode }) => Promise<void>;
   approveTask: (input: TaskApprovalDecisionInput) => Promise<void>;
@@ -441,8 +551,14 @@ export interface DesktopApi {
   setAppPolicy: (update: { bundleId: string; policy: AppPolicy }) => Promise<AppPolicySettings>;
   getAssistantAgentSettings: () => Promise<AssistantAgentSettingsResponse>;
   setAssistantAgentSettings: (
-    update: Partial<Pick<AssistantAgentSettings, "mode">>
+    update: {
+      mode?: AssistantAgentMode;
+      providerRuntime?: Partial<Record<AssistantAgentMode, AssistantAgentProviderRuntime>>;
+    }
   ) => Promise<AssistantAgentSettingsResponse>;
+  testAssistantAgentProvider: (
+    input: { mode: AssistantAgentMode }
+  ) => Promise<AssistantAgentProviderState>;
   getFirstRunReadiness: () => Promise<FirstRunReadinessSnapshot>;
   testBackgroundAgent: () => Promise<FirstRunReadinessSnapshot>;
   testFinderAutomation: () => Promise<FirstRunReadinessSnapshot>;
@@ -478,6 +594,28 @@ export interface DesktopApi {
   onTaskEvent: (callback: (event: TaskEvent) => void) => () => void;
   onConversationHistoryChanged: (
     callback: (snapshot: ConversationHistorySnapshot) => void
+  ) => () => void;
+  getPersonalMemory: () => Promise<PersonalMemoryDashboardSnapshot>;
+  setPersonalMemorySettings: (
+    update: { postTurnLearningEnabled?: boolean; writeApprovalEnabled?: boolean }
+  ) => Promise<PersonalMemorySettings>;
+  forgetPersonalMemory: (
+    input: { target: "user" | "agent"; content: string }
+  ) => Promise<PersonalMemoryForgetResult>;
+  approvePendingMemory: (pendingId: string) => Promise<PersonalMemoryPendingApprovalResult>;
+  rejectPendingMemory: (pendingId: string) => Promise<PersonalMemoryPendingRejectResult>;
+  onPersonalMemoryChanged: (
+    callback: (snapshot: PersonalMemoryDashboardSnapshot) => void
+  ) => () => void;
+  getBrowserContextSource: () => Promise<BrowserContextSourceSnapshot>;
+  discoverBrowserTabs: () => Promise<BrowserContextTabDiscoveryResult>;
+  selectBrowserTab: (input: { tabId: number }) => Promise<BrowserContextSourceSnapshot>;
+  refreshBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  pauseBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  disconnectBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  clearBrowserContext: () => Promise<BrowserContextSourceSnapshot>;
+  onBrowserContextChanged: (
+    callback: (snapshot: BrowserContextSourceSnapshot) => void
   ) => () => void;
 }
 

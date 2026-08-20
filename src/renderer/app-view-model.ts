@@ -14,7 +14,13 @@ import type {
   TaskControlSnapshot,
   TaskControlStatus
 } from "../shared/task-control.js";
-import type { AssistantAgentProviderReadiness } from "./app-types";
+import type {
+  AssistantAgentMode,
+  AssistantAgentProviderFallback,
+  AssistantAgentProviderReadiness,
+  AssistantAgentProviderRuntime,
+  AssistantAgentSettings
+} from "./app-types";
 
 export type PermissionKey = "screenRecording" | "accessibility";
 export type PermissionState = "granted" | "denied" | "not-determined" | "unknown";
@@ -222,9 +228,21 @@ export function readAssistantAgentReadinessLabel(
   return "unavailable";
 }
 
+export function readAssistantAgentProviderRuntime(
+  settings: AssistantAgentSettings,
+  mode: AssistantAgentMode
+): { cwd: string; timeoutMs: number } {
+  const override: AssistantAgentProviderRuntime | undefined = settings.providerRuntime?.[mode];
+  return {
+    cwd: override?.cwd ?? settings.cwd,
+    timeoutMs: override?.timeoutMs ?? settings.timeoutMs
+  };
+}
+
 export function readAssistantAgentProviderDetail(
-  response: { settings: { cwd: string; timeoutMs: number } },
+  response: { settings: AssistantAgentSettings },
   provider: {
+    id: AssistantAgentMode;
     label: string;
     executablePath?: string;
     readiness: AssistantAgentProviderReadiness;
@@ -232,13 +250,32 @@ export function readAssistantAgentProviderDetail(
   }
 ): string {
   const executable = provider.executablePath ?? "not configured";
+  const runtime = readAssistantAgentProviderRuntime(response.settings, provider.id);
   return [
     `${provider.label} · ${readAssistantAgentReadinessLabel(provider.readiness)}`,
     ...(provider.readinessDetail ? [provider.readinessDetail] : []),
     `binary ${executable}`,
-    `cwd ${response.settings.cwd || "default"}`,
-    `timeout ${Math.round(response.settings.timeoutMs / 1000)}s`
+    `cwd ${runtime.cwd || "default"}`,
+    `timeout ${Math.round(runtime.timeoutMs / 1000)}s`
   ].join(" · ");
+}
+
+export function readAssistantAgentOfflineBanner(
+  fallback: AssistantAgentProviderFallback | undefined
+): { title: string; detail: string } | null {
+  if (!fallback) {
+    return null;
+  }
+  if (fallback.kind === "offline") {
+    return {
+      title: "Background Agent 离线",
+      detail: fallback.reason
+    };
+  }
+  return {
+    title: "Background Agent 已切换",
+    detail: fallback.reason
+  };
 }
 
 export function getAssistantInputPanelViewModel({

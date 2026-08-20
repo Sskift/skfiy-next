@@ -1,4 +1,9 @@
 import type { DesktopApi } from "./app-types";
+import type { BrowserContextSourceSnapshot } from "../shared/browser-context-source.js";
+import {
+  DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT,
+  DEFAULT_PERSONAL_MEMORY_SETTINGS
+} from "./app-memory-state";
 import {
   UNKNOWN_DESKTOP_SESSION_DIAGNOSTICS,
   UNKNOWN_PERMISSIONS
@@ -33,6 +38,19 @@ const DEFAULT_AUTOMATION_MONITOR_SNAPSHOT = {
     reason: "Open skfiy to resume interval checks."
   },
   monitors: []
+};
+
+const DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT: BrowserContextSourceSnapshot = {
+  schemaVersion: 1,
+  selectedTab: null,
+  contextState: "missing",
+  paused: false,
+  disconnected: false,
+  clearedForTurn: false,
+  blockers: [],
+  eligibleTabCount: 0,
+  discoveryState: "not-probed",
+  generatedAt: new Date(0).toISOString()
 };
 
 export const fallbackDesktopApi: DesktopApi = {
@@ -73,6 +91,15 @@ export const fallbackDesktopApi: DesktopApi = {
   getAssistantAgentSettings: async () => DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE,
   setAssistantAgentSettings: async (update) =>
     reduceAssistantAgentSettingsResponse(DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE, update),
+  testAssistantAgentProvider: async (input) => {
+    const provider = DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE.providers.find(
+      (candidate) => candidate.id === input.mode
+    );
+    if (provider) {
+      return provider;
+    }
+    throw new Error("Unknown assistant agent provider mode.");
+  },
   getPlannerProviderSettings: async () => DEFAULT_PLANNER_PROVIDER_SETTINGS,
   setPlannerProviderSettings: async (update) =>
     reducePlannerProviderSettings(DEFAULT_PLANNER_PROVIDER_SETTINGS, update),
@@ -158,7 +185,34 @@ export const fallbackDesktopApi: DesktopApi = {
     snapshot: { schemaVersion: 1, lastActiveSessionId: null, sessions: [] }
   }),
   onConversationHistoryChanged: () => () => undefined,
-  getTaskControl: async () => null
+  getTaskControl: async () => null,
+  getPersonalMemory: async () => DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT,
+  setPersonalMemorySettings: async () => DEFAULT_PERSONAL_MEMORY_SETTINGS,
+  forgetPersonalMemory: async () => ({
+    result: "not-found",
+    snapshot: DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT
+  }),
+  approvePendingMemory: async () => ({
+    result: "not-found",
+    snapshot: DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT
+  }),
+  rejectPendingMemory: async () => ({
+    result: "not-found",
+    snapshot: DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT
+  }),
+  onPersonalMemoryChanged: () => () => undefined,
+  getBrowserContextSource: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
+  discoverBrowserTabs: async () => ({
+    result: "blocked" as const,
+    reason: "Browser Context is unavailable in this renderer environment.",
+    tabs: []
+  }),
+  selectBrowserTab: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
+  refreshBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
+  pauseBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
+  disconnectBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
+  clearBrowserContext: async () => DEFAULT_BROWSER_CONTEXT_SOURCE_SNAPSHOT,
+  onBrowserContextChanged: () => () => undefined
 };
 
 export function getDesktopApi(): DesktopApi {

@@ -31,6 +31,7 @@ import {
 } from "./app-policy-settings.js";
 import {
   AssistantAgentTurnRuntimeError,
+  isAssistantAgentMode,
   readAssistantAgentProviderStates,
   runAssistantAgentTurn,
   type AssistantAgentTurnResult
@@ -39,10 +40,26 @@ import {
   createAssistantAgentSettingsStore,
   readInitialAssistantAgentSettingsFromConfig
 } from "./assistant-agent-settings.js";
+import { testAssistantAgentProvider } from "./assistant-agent-provider-test.js";
 import {
   createPersonalMemoryStore,
   createSkfiyApplicationSupportPath
 } from "./personal-memory.js";
+import { createPersonalMemoryJournalStore } from "./personal-memory-journal.js";
+import { createPendingPersonalMemoryStore } from "./personal-memory-pending.js";
+import {
+  createPersonalMemorySettingsStore,
+  readPersonalMemorySettingsUpdate
+} from "./personal-memory-settings.js";
+import {
+  approvePendingPersonalMemoryWrite,
+  forgetPersonalMemoryEntry,
+  readPersonalMemoryDashboardSnapshot,
+  readPersonalMemoryForgetRequest,
+  readPendingMemoryActionRequest,
+  rejectPendingPersonalMemoryWrite
+} from "./personal-memory-dashboard.js";
+import { recordCompletedAssistantTurnForPersonalization } from "./personalization-learning-loop.js";
 import { createPersonalSkillSettingsStore } from "./personal-skills.js";
 import {
   createSessionMemoryStore,
@@ -61,7 +78,6 @@ import {
 } from "../shared/conversation-history.js";
 import type { FirstRunProviderReadiness } from "../shared/first-run-readiness.js";
 import type { BrowserPageContext } from "./browser-page-context.js";
-import { readLatestBrowserPageContext } from "./main-browser-context-reader.js";
 import {
   createAssistantComputerUseExecutor,
   type AssistantComputerUseToolIdentity,
@@ -72,6 +88,9 @@ import { createChromeTurnHostGrantStore } from "./chrome-turn-host-grant.js";
 import { createChromeCdpClient } from "./chrome-cdp-client.js";
 import { readChromeCdpEndpoint } from "./chrome-cdp-settings.js";
 import { readChromeExtensionConnectionStatus } from "./chrome-native-host.js";
+import { createBrowserContextSourceStore } from "./browser-context-source-store.js";
+import { createBrowserContextSourceActions } from "./browser-context-source-actions.js";
+import { registerBrowserContextSourceIpc } from "./browser-context-source-wiring.js";
 import { createTmuxSupervisionClient } from "./tmux-supervision-client.js";
 import {
   createPlannerProviderSettingsStore,
@@ -254,6 +273,17 @@ const plannerProviderSettingsStore = createPlannerProviderSettingsStore(
 const assistantAgentSettingsStore = createAssistantAgentSettingsStore(
   readInitialAssistantAgentSettingsFromConfig(process.env, { cwd: process.cwd() })
 );
+const browserContextSourceStore = createBrowserContextSourceStore();
+const browserContextSourceActions = createBrowserContextSourceActions({
+  store: browserContextSourceStore,
+  homeDir: os.homedir(),
+  readConnectionStatus: readChromeExtensionConnectionStatus,
+  emitChange: (snapshot) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("skfiy:browser-context-changed", snapshot);
+    }
+  }
+});
 const firstRunReadinessController = createFirstRunReadinessController({
   readProviderReadiness: async () => readSelectedProviderReadiness(
     await readAssistantAgentSettingsResponse({ store: assistantAgentSettingsStore })
@@ -285,6 +315,16 @@ const personalSkillSettingsStore = createPersonalSkillSettingsStore({
 const sessionMemoryStore = createSessionMemoryStore({
   baseDir: skfiyAppSupportDir
 });
+const personalMemoryJournalStore = createPersonalMemoryJournalStore({
+  baseDir: skfiyAppSupportDir
+});
+const pendingPersonalMemoryStore = createPendingPersonalMemoryStore({
+  baseDir: skfiyAppSupportDir
+});
+const personalMemorySettingsStore = createPersonalMemorySettingsStore({
+  baseDir: skfiyAppSupportDir
+});
+const PERSONAL_MEMORY_REVIEW_TIMEOUT_MS = 15_000;
 type ConversationSessionStore = ReturnType<typeof createConversationSessionStore>;
 let conversationSessionStore: ConversationSessionStore | null = null;
 let conversationSessionStorageError: unknown;
@@ -424,6 +464,18 @@ function emitConversationHistoryChanged(
   }
 
   window.webContents.send("skfiy:conversation-history-changed", snapshot);
+}
+
+function emitPersonalMemoryChanged(): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+
+  window.webContents.send(
+    "skfiy:personal-memory-changed",
+    readPersonalMemoryDashboardSnapshot({ baseDir: skfiyAppSupportDir })
+  );
 }
 
 function recordConversationTaskEvent(event: TaskEvent): boolean {
@@ -767,10 +819,7 @@ async function createAssistantAgentTaskTurn(
 
   const browserPageContext = isRetry
     ? undefined
-    : await readLatestBrowserPageContext({
-        homeDir: os.homedir(),
-        readConnectionStatus: readChromeExtensionConnectionStatus
-      });
+    : await browserContextSourceActions.readTurnContext();
   const personalMemory = personalMemoryStore.read();
   const personalSkillSettings = personalSkillSettingsStore.read();
   const recallableRecords = conversationSessionStore?.readRecallableRecords()
@@ -801,6 +850,9 @@ async function createAssistantAgentTaskTurn(
       recalledSessions,
       signal
     });
+    if (turn.status === "completed") {
+      schedulePersonalMemoryPostTurnReview(input, turn, browserPageContext);
+    }
     return turn;
   } catch (error) {
     if (error instanceof AssistantAgentTurnRuntimeError) {
@@ -809,6 +861,42 @@ async function createAssistantAgentTaskTurn(
 
     throw error;
   }
+}
+
+function schedulePersonalMemoryPostTurnReview(
+  userInput: string,
+  turn: AssistantAgentTurnResult,
+  browserPageContext: BrowserPageContext | undefined
+): void {
+  const settings = personalMemorySettingsStore.read();
+  if (!settings.postTurnLearningEnabled) {
+    return;
+  }
+
+  const assistantSettings = assistantAgentSettingsStore.get();
+  void recordCompletedAssistantTurnForPersonalization({
+    userInput,
+    turn,
+    browserPageContext: browserPageContext ?? { state: "unavailable" },
+    memoryStore: personalMemoryStore,
+    memoryJournalStore: personalMemoryJournalStore,
+    pendingMemoryStore: pendingPersonalMemoryStore,
+    sessionMemoryStore,
+    memoryWriteApprovalEnabled: settings.writeApprovalEnabled,
+    runReviewTurn: (reviewPrompt, { personalMemory }) => runAssistantAgentTurn(reviewPrompt, {
+      settings: {
+        ...assistantSettings,
+        timeoutMs: Math.min(assistantSettings.timeoutMs, PERSONAL_MEMORY_REVIEW_TIMEOUT_MS)
+      },
+      personalMemory
+    })
+  })
+    .then(() => {
+      emitPersonalMemoryChanged();
+    })
+    .catch(() => {
+      // Personalization is best-effort and must not interrupt the visible reply.
+    });
 }
 
 function emitAssistantToolPlanTaskEvent(
@@ -2102,6 +2190,69 @@ ipcMain.handle("skfiy:set-assistant-agent-settings", async (_event, update: unkn
   });
 });
 
+ipcMain.handle("skfiy:get-personal-memory", () => {
+  return readPersonalMemoryDashboardSnapshot({ baseDir: skfiyAppSupportDir });
+});
+
+ipcMain.handle("skfiy:set-personal-memory-settings", (_event, update: unknown) => {
+  const settings = personalMemorySettingsStore.update(readPersonalMemorySettingsUpdate(update));
+  emitPersonalMemoryChanged();
+  return settings;
+});
+
+ipcMain.handle("skfiy:forget-personal-memory", (_event, input: unknown) => {
+  const request = readPersonalMemoryForgetRequest(input);
+  if (!request) {
+    throw new Error("Personal memory forget requires target user or agent and exact content.");
+  }
+
+  const result = forgetPersonalMemoryEntry({ baseDir: skfiyAppSupportDir, ...request });
+  emitPersonalMemoryChanged();
+  return result;
+});
+
+ipcMain.handle("skfiy:approve-pending-memory", (_event, input: unknown) => {
+  const request = readPendingMemoryActionRequest(input);
+  if (!request) {
+    throw new Error("Personal memory pending action requires a pendingId.");
+  }
+
+  const result = approvePendingPersonalMemoryWrite({
+    baseDir: skfiyAppSupportDir,
+    pendingId: request.pendingId
+  });
+  emitPersonalMemoryChanged();
+  return result;
+});
+
+ipcMain.handle("skfiy:reject-pending-memory", (_event, input: unknown) => {
+  const request = readPendingMemoryActionRequest(input);
+  if (!request) {
+    throw new Error("Personal memory pending action requires a pendingId.");
+  }
+
+  const result = rejectPendingPersonalMemoryWrite({
+    baseDir: skfiyAppSupportDir,
+    pendingId: request.pendingId
+  });
+  emitPersonalMemoryChanged();
+  return result;
+});
+
+ipcMain.handle("skfiy:test-assistant-agent-provider", async (_event, input: unknown) => {
+  const mode = input && typeof input === "object" && "mode" in input
+    ? (input as { mode?: unknown }).mode
+    : undefined;
+  if (!isAssistantAgentMode(mode)) {
+    throw new Error("Assistant agent provider test requires a valid mode.");
+  }
+  const result = await testAssistantAgentProvider({
+    settings: assistantAgentSettingsStore.get(),
+    mode
+  });
+  return result.state;
+});
+
 ipcMain.handle("skfiy:get-first-run-readiness", () => {
   return firstRunReadinessController.read();
 });
@@ -2317,6 +2468,11 @@ ipcMain.handle("skfiy:get-runtime-status", () => {
 
 ipcMain.handle("skfiy:get-pet-skin", async () => {
   return readDefaultLocalOriginPetSkin({ homeDir: os.homedir() });
+});
+
+registerBrowserContextSourceIpc({
+  ipcMain,
+  actions: browserContextSourceActions
 });
 
 app.whenReady().then(async () => {

@@ -26,7 +26,6 @@ import {
 } from "./pet-atlas";
 import {
   getAppShellViewModel,
-  readAssistantAgentProviderDetail,
   readAssistantAgentReadinessLabel,
   readExternalCuaStatusLabel
 } from "./app-view-model";
@@ -95,16 +94,26 @@ import {
 } from "./app-pet-drag-state";
 import {
   APP_POLICY_OPTIONS,
-  ASSISTANT_AGENT_OPTIONS,
   DEFAULT_APP_POLICY_SETTINGS,
   DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE,
   DEFAULT_PLANNER_PROVIDER_SETTINGS,
   PLANNER_PROVIDER_OPTIONS
 } from "./app-settings-state";
+import {
+  DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT,
+  createPersonalMemoryFeedback,
+  type PersonalMemoryFeedback
+} from "./app-memory-state";
+import { MemoryControlCenterPanel } from "./app-memory-components";
+import { ProviderDiscoveryPanel } from "./provider-discovery-panel";
+import { useBrowserContextSource } from "./app-browser-context-state";
+import { BrowserContextPanel } from "./app-browser-context-panel";
 import type {
   AppPolicy,
   AppPolicySettings,
   AssistantAgentMode,
+  AssistantAgentProviderRuntime,
+  AssistantAgentProviderState,
   AssistantAgentSettingsResponse,
   ConversationHistorySnapshot,
   ConversationRetryResult,
@@ -112,6 +121,7 @@ import type {
   ObserveAppReplayRecord,
   PermissionSettingsTarget,
   PermissionSummary,
+  PersonalMemoryDashboardSnapshot,
   PlannerProviderMode,
   PlannerProviderSettings,
   StartupWarning,
@@ -453,6 +463,12 @@ export default function App() {
     useState<AssistantAgentSettingsResponse>(DEFAULT_ASSISTANT_AGENT_SETTINGS_RESPONSE);
   const [plannerProviderSettings, setPlannerProviderSettings] =
     useState<PlannerProviderSettings>(DEFAULT_PLANNER_PROVIDER_SETTINGS);
+  const [personalMemory, setPersonalMemory] = useState<PersonalMemoryDashboardSnapshot>(
+    DEFAULT_PERSONAL_MEMORY_DASHBOARD_SNAPSHOT
+  );
+  const [personalMemoryFeedback, setPersonalMemoryFeedback] =
+    useState<PersonalMemoryFeedback | null>(null);
+  const [personalMemoryActionPending, setPersonalMemoryActionPending] = useState(false);
   const [turnReplay, setTurnReplay] = useState<TurnReplay | null>(null);
   const [task, setTask] = useState<TaskView>(() => createInitialTaskView());
   const [taskControl, setTaskControl] = useState<TaskControlSnapshot | null>(null);
@@ -467,6 +483,7 @@ export default function App() {
   const [taskRecoveryFeedback, setTaskRecoveryFeedback] = useState("");
   const [taskStopPending, setTaskStopPending] = useState(false);
   const [replayRecords, setReplayRecords] = useState<ObserveAppReplayRecord[]>([]);
+  const browserContextSource = useBrowserContextSource(api);
   const assistantInputRef = useRef<HTMLTextAreaElement | null>(null);
   const petDragRef = useRef<PetDragState | null>(null);
   const pendingAssistantPromptRef = useRef<string | null>(null);
@@ -530,6 +547,105 @@ export default function App() {
       return null;
     }
   }, [api, applyConversationHistorySnapshot]);
+
+  const applyPersonalMemorySnapshot = useCallback(
+    (snapshot: PersonalMemoryDashboardSnapshot) => {
+      setPersonalMemory(snapshot);
+    },
+    []
+  );
+
+  const refreshPersonalMemory = useCallback(async () => {
+    try {
+      const snapshot = await api.getPersonalMemory();
+      applyPersonalMemorySnapshot(snapshot);
+    } catch {
+      setPersonalMemoryFeedback(createPersonalMemoryFeedback("danger", "记忆状态不可用。"));
+    }
+  }, [api, applyPersonalMemorySnapshot]);
+
+  useEffect(() => {
+    const unsubscribe = api.onPersonalMemoryChanged(applyPersonalMemorySnapshot);
+    void refreshPersonalMemory();
+    return unsubscribe;
+  }, [api, applyPersonalMemorySnapshot, refreshPersonalMemory]);
+
+  const updatePersonalMemorySettings = useCallback(
+    async (update: { postTurnLearningEnabled?: boolean; writeApprovalEnabled?: boolean }) => {
+      setPersonalMemoryActionPending(true);
+      try {
+        const settings = await api.setPersonalMemorySettings(update);
+        setPersonalMemory((current) => ({ ...current, settings }));
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback("success", "记忆设置已更新。"));
+      } catch {
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback("danger", "记忆设置更新失败。"));
+      } finally {
+        setPersonalMemoryActionPending(false);
+      }
+    },
+    [api]
+  );
+
+  const forgetPersonalMemoryEntry = useCallback(
+    async (target: "user" | "agent", content: string) => {
+      setPersonalMemoryActionPending(true);
+      try {
+        const result = await api.forgetPersonalMemory({ target, content });
+        applyPersonalMemorySnapshot(result.snapshot);
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback(
+          result.result === "forgotten" ? "success" : "danger",
+          result.result === "forgotten" ? "已忘记该条记忆。" : "未找到匹配的记忆条目。"
+        ));
+      } catch {
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback("danger", "忘记记忆失败。"));
+      } finally {
+        setPersonalMemoryActionPending(false);
+      }
+    },
+    [api, applyPersonalMemorySnapshot]
+  );
+
+  const approvePendingMemory = useCallback(
+    async (pendingId: string) => {
+      setPersonalMemoryActionPending(true);
+      try {
+        const result = await api.approvePendingMemory(pendingId);
+        applyPersonalMemorySnapshot(result.snapshot);
+        if (result.result === "approved") {
+          setPersonalMemoryFeedback(createPersonalMemoryFeedback(
+            "success",
+            `已批准 ${result.applied ?? 0} 条记忆写入。`
+          ));
+        } else {
+          setPersonalMemoryFeedback(createPersonalMemoryFeedback("danger", "未找到该条待审批写入。"));
+        }
+      } catch {
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback("danger", "批准记忆写入失败。"));
+      } finally {
+        setPersonalMemoryActionPending(false);
+      }
+    },
+    [api, applyPersonalMemorySnapshot]
+  );
+
+  const rejectPendingMemory = useCallback(
+    async (pendingId: string) => {
+      setPersonalMemoryActionPending(true);
+      try {
+        const result = await api.rejectPendingMemory(pendingId);
+        applyPersonalMemorySnapshot(result.snapshot);
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback(
+          result.result === "rejected" ? "success" : "danger",
+          result.result === "rejected" ? "已拒绝该条记忆写入。" : "未找到该条待审批写入。"
+        ));
+      } catch {
+        setPersonalMemoryFeedback(createPersonalMemoryFeedback("danger", "拒绝记忆写入失败。"));
+      } finally {
+        setPersonalMemoryActionPending(false);
+      }
+    },
+    [api, applyPersonalMemorySnapshot]
+  );
 
   useEffect(() => {
     conversationHistoryAvailableRef.current = conversationHistoryAvailable;
@@ -1326,6 +1442,49 @@ export default function App() {
     }
   }
 
+  const [testingAssistantAgentProvider, setTestingAssistantAgentProvider] =
+    useState<AssistantAgentMode | null>(null);
+
+  async function testAssistantAgentProviderHandler(mode: AssistantAgentMode) {
+    setTestingAssistantAgentProvider(mode);
+    try {
+      const state = await api.testAssistantAgentProvider({ mode });
+      setAssistantAgentSettings((current) => ({
+        ...current,
+        providers: current.providers.map((provider) =>
+          provider.id === mode ? { ...state, selected: provider.id === current.settings.mode } : provider
+        )
+      }));
+      return state;
+    } catch {
+      setTask((current) => preserveActiveTaskView(
+        current,
+        createTaskStatusView("failed", "Background Agent 安全测试失败，请重试.")
+      ));
+      throw new Error("Assistant agent provider test failed.");
+    } finally {
+      setTestingAssistantAgentProvider(null);
+    }
+  }
+
+  async function updateAssistantAgentProviderRuntime(
+    mode: AssistantAgentMode,
+    runtime: AssistantAgentProviderRuntime
+  ) {
+    try {
+      setAssistantAgentSettings(
+        await api.setAssistantAgentSettings({
+          providerRuntime: { [mode]: runtime }
+        })
+      );
+    } catch {
+      setTask((current) => preserveActiveTaskView(
+        current,
+        createTaskActionFailureView("set-assistant-agent")
+      ));
+    }
+  }
+
   async function testBackgroundAgentReadiness() {
     setFirstRunActionStepId("background-agent");
     try {
@@ -1750,6 +1909,7 @@ export default function App() {
                   正在检查首次运行就绪状态
                 </div>
               )}
+              <BrowserContextPanel state={browserContextSource} />
               <div className="settings-layout">
                 <div className="settings-section-heading">
                   <strong>日常设置</strong>
@@ -1761,26 +1921,16 @@ export default function App() {
                       <strong>Background Agent</strong>
                       <span>{selectedAssistantAgentProvider.label}</span>
                     </div>
-                    <div className="provider-switch" role="group" aria-label="Background Agent provider">
-                      {ASSISTANT_AGENT_OPTIONS.map((option) => (
-                        <button
-                          type="button"
-                          key={option.mode}
-                          aria-label={option.aria}
-                          aria-pressed={assistantAgentSettings.settings.mode === option.mode}
-                          onClick={() => void selectAssistantAgentMode(option.mode)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="provider-status-card" aria-label="Background Agent 状态">
-                      <strong>{readAssistantAgentReadinessLabel(selectedAssistantAgentProvider.readiness)}</strong>
-                      <p>{readAssistantAgentProviderDetail(assistantAgentSettings, selectedAssistantAgentProvider)}</p>
-                      {selectedAssistantAgentProvider.lastError ? (
-                        <p>{selectedAssistantAgentProvider.lastError}</p>
-                      ) : null}
-                    </div>
+                    <ProviderDiscoveryPanel
+                      response={assistantAgentSettings}
+                      onSelectMode={(mode) => void selectAssistantAgentMode(mode)}
+                      onTestProvider={testAssistantAgentProviderHandler}
+                      onUpdateProviderRuntime={(mode, runtime) =>
+                        void updateAssistantAgentProviderRuntime(mode, runtime)
+                      }
+                      onSelectFallbackProvider={(mode) => void selectAssistantAgentMode(mode)}
+                      testingProvider={testingAssistantAgentProvider}
+                    />
                   </div>
                   <div className="app-policy-panel" aria-label="Computer Use 设置">
                     <div className="app-policy-heading">
@@ -1887,6 +2037,16 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                <MemoryControlCenterPanel
+                  actionPending={personalMemoryActionPending}
+                  feedback={personalMemoryFeedback}
+                  onApprove={(pendingId) => void approvePendingMemory(pendingId)}
+                  onForget={(target, content) => void forgetPersonalMemoryEntry(target, content)}
+                  onReject={(pendingId) => void rejectPendingMemory(pendingId)}
+                  onRefresh={() => void refreshPersonalMemory()}
+                  onUpdateSettings={(update) => void updatePersonalMemorySettings(update)}
+                  snapshot={personalMemory}
+                />
               </div>
             </>
           ) : permissionOnboardingOpen ? (

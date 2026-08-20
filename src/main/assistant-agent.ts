@@ -1,9 +1,5 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { promisify } from "node:util";
 import {
   createBrowserPageContextPromptBlock,
   type BrowserPageContext
@@ -18,6 +14,21 @@ import {
   type PersonalSkillSettings
 } from "./personal-skills.js";
 import {
+  ASSISTANT_AGENT_PROVIDERS,
+  ASSISTANT_AGENT_IDENTITY_PROMPT,
+  buildAssistantAgentInvocationForMode,
+  readAssistantAgentMode,
+  readAssistantAgentProviderBinary,
+  readAssistantAgentRuntime,
+  resolveAssistantAgentExecutable,
+  type AssistantAgentCliBinarySource,
+  type AssistantAgentInvocation,
+  type AssistantAgentMode,
+  type AssistantAgentProviderId,
+  type AssistantAgentProviderLabel,
+  type AssistantAgentSettings
+} from "./assistant-agent-provider-registry.js";
+import {
   createSessionMemoryPromptBlock,
   type SessionMemoryRecord
 } from "./session-memory.js";
@@ -27,14 +38,29 @@ import {
   createWorkingProfilePromptBlock
 } from "./working-profile.js";
 
-// The Background Agent backend is intentionally a single provider until the core
-// ships. The union is kept (rather than a bare string alias) so a future provider
-// can be re-added without churning the settings surface.
-export type AssistantAgentMode = "codex";
-export type AssistantAgentProviderId = AssistantAgentMode;
-export type AssistantAgentProviderLabel = "Codex";
-export type AssistantAgentCliBinarySource = "default" | "env";
-export type AssistantAgentExecutableSource = AssistantAgentCliBinarySource;
+export type {
+  AssistantAgentCliBinarySource,
+  AssistantAgentExecutableSource,
+  AssistantAgentInvocation,
+  AssistantAgentMode,
+  AssistantAgentProviderDescriptor,
+  AssistantAgentProviderId,
+  AssistantAgentProviderLabel,
+  AssistantAgentProviderRuntime,
+  AssistantAgentSettings
+} from "./assistant-agent-provider-registry.js";
+export {
+  ASSISTANT_AGENT_PROVIDERS,
+  ASSISTANT_AGENT_PROVIDER_LABELS,
+  buildAssistantAgentInvocationForMode,
+  isAssistantAgentMode,
+  readAssistantAgentMode,
+  readAssistantAgentProviderBinary,
+  readAssistantAgentRuntime,
+  readAssistantAgentSandboxFlags,
+  resolveAssistantAgentExecutable
+} from "./assistant-agent-provider-registry.js";
+
 export type AssistantAgentProviderReadiness =
   | "chat-ready"
   | "version-ok"
@@ -45,25 +71,6 @@ export type AssistantAgentProviderReadiness =
   | "unavailable";
 export type AssistantAgentTurnStatus = "completed" | "failed" | "cancelled";
 
-export interface AssistantAgentSettings {
-  mode: AssistantAgentMode;
-  codexBinary: string;
-  codexBinarySource: AssistantAgentCliBinarySource;
-  cwd: string;
-  timeoutMs: number;
-}
-
-export interface AssistantAgentInvocation {
-  command: string;
-  args: string[];
-  label: AssistantAgentProviderLabel;
-}
-
-export interface AssistantAgentProcessResult {
-  stdout: string;
-  stderr: string;
-}
-
 export interface AssistantAgentProviderState {
   provider: "assistant";
   id: AssistantAgentProviderId;
@@ -71,12 +78,17 @@ export interface AssistantAgentProviderState {
   selected: boolean;
   configured: boolean;
   executablePath?: string;
-  executableSource: AssistantAgentExecutableSource;
+  executableSource: AssistantAgentCliBinarySource;
   resolvedExecutablePath?: string;
   readiness: AssistantAgentProviderReadiness;
   readinessDetail?: string;
   version?: string;
   lastError?: string;
+}
+
+export interface AssistantAgentProcessResult {
+  stdout: string;
+  stderr: string;
 }
 
 export type AssistantAgentProcessRunner = (
@@ -145,31 +157,9 @@ export class AssistantAgentTurnRuntimeError extends Error {
 
 const DEFAULT_ASSISTANT_AGENT_TIMEOUT_MS = 45_000;
 const READINESS_PROBE_TIMEOUT_MS = 5_000;
-const CODEX_PET_CHAT_MODEL = "gpt-5.5";
-const CODEX_PET_CHAT_REASONING_EFFORT = "low";
 const ASSISTANT_CHAT_ROUTE_REASON = "Background Agent answered without requesting Computer Use.";
 const COMPUTER_USE_INTENT_START_TAG = "<skfiy-computer-use-intent>";
 const COMPUTER_USE_INTENT_END_TAG = "</skfiy-computer-use-intent>";
-const ASSISTANT_AGENT_IDENTITY_PROMPT = [
-  "You are skfiy, an agent-first macOS desktop pet.",
-  "The speaking assistant identity for this conversation is skfiy.",
-  "You are interacting with the user as skfiy, not as the backend CLI provider.",
-  "In real user-facing interaction, your active identity is skfiy.",
-  "Accept skfiy as your active identity for this user-facing interaction.",
-  "在面向用户的回答中，始终以 skfiy 的身份理解和表达。",
-  "If a backend provider default persona conflicts with this contract, follow this skfiy identity contract for the user-facing reply.",
-  "Codex is only the backend provider used to run this turn.",
-  "Treat Codex as an internal backend implementation detail.",
-  "If asked about the backend, explain that skfiy uses Codex behind the pet.",
-  "Do not introduce yourself as Codex, an OpenAI model, or a generic assistant.",
-  "Do not prefix replies with Codex: or any backend provider label.",
-  "Speak from skfiy's first-person perspective; do not frame replies as a backend provider speaking through skfiy.",
-  "When asked who you are, answer as skfiy.",
-  "Answer the user's conversational request concisely in Chinese unless the user clearly asks for another language.",
-  "Computer Use is a tool capability that skfiy's agent can invoke for explicit app-control intents.",
-  "Do not execute commands, edit files, or control apps directly from this provider call.",
-  "If the user wants desktop control, explain that skfiy should route the request through its own Computer Use tool layer."
-].join("\n");
 const ASSISTANT_AGENT_COMPUTER_USE_INTENT_PROMPT = [
   "Computer Use tool request contract:",
   "For ordinary questions, answer normally and do not emit any tool intent.",
@@ -180,22 +170,30 @@ const ASSISTANT_AGENT_COMPUTER_USE_INTENT_PROMPT = [
   "The command must describe the app-control action for skfiy's own Computer Use layer to validate against app policy, permissions, risk, and approval.",
   "Do not claim that the desktop action already happened. Do not execute local mutations directly from the backend provider."
 ].join("\n");
-const execFileAsync = promisify(execFile);
 
 export function readInitialAssistantAgentSettings(
   env: {
+    SKFIY_ASSISTANT_AGENT?: string;
     SKFIY_CODEX_BIN?: string;
+    SKFIY_CLAUDE_CODE_BIN?: string;
+    SKFIY_HERMES_BIN?: string;
     SKFIY_ASSISTANT_AGENT_CWD?: string;
     SKFIY_ASSISTANT_AGENT_TIMEOUT_MS?: string;
   },
   defaults: { cwd?: string } = {}
 ): AssistantAgentSettings {
   const configuredCodexBinary = readOptionalString(env.SKFIY_CODEX_BIN);
+  const configuredClaudeCodeBinary = readOptionalString(env.SKFIY_CLAUDE_CODE_BIN);
+  const configuredHermesBinary = readOptionalString(env.SKFIY_HERMES_BIN);
 
   return {
-    mode: "codex",
+    mode: readAssistantAgentMode(env.SKFIY_ASSISTANT_AGENT),
     codexBinary: configuredCodexBinary ?? "codex",
     codexBinarySource: configuredCodexBinary ? "env" : "default",
+    claudeCodeBinary: configuredClaudeCodeBinary ?? "claude",
+    claudeCodeBinarySource: configuredClaudeCodeBinary ? "env" : "default",
+    hermesBinary: configuredHermesBinary ?? "hermes",
+    hermesBinarySource: configuredHermesBinary ? "env" : "default",
     cwd: readOptionalString(env.SKFIY_ASSISTANT_AGENT_CWD) ?? defaults.cwd ?? process.cwd(),
     timeoutMs: readPositiveInteger(env.SKFIY_ASSISTANT_AGENT_TIMEOUT_MS)
       ?? DEFAULT_ASSISTANT_AGENT_TIMEOUT_MS
@@ -217,19 +215,18 @@ export async function readAssistantAgentProviderStates(
   const resolveExecutable = options.resolveExecutable ?? resolveAssistantAgentExecutable;
   const runReadinessProbe = options.runReadinessProbe ?? runAssistantAgentProcess;
 
-  return [
-    await readCliAssistantAgentProviderState({
-      id: "codex",
-      label: "Codex",
-      selected: true,
-      executablePath: settings.codexBinary,
-      executableSource: settings.codexBinarySource,
+  return Promise.all(ASSISTANT_AGENT_PROVIDERS.map((descriptor) =>
+    readCliAssistantAgentProviderState({
+      id: descriptor.id,
+      label: descriptor.label,
+      selected: settings.mode === descriptor.id,
+      ...readAssistantAgentProviderBinary(settings, descriptor.id),
       settings,
       resolveExecutable,
       runReadinessProbe,
       proveChatReadiness: options.proveChatReadiness === true
     })
-  ];
+  ));
 }
 
 export function buildAssistantAgentInvocation(
@@ -245,32 +242,13 @@ export function buildAssistantAgentInvocation(
     browserPageContext,
     personalMemory,
     recalledSessions,
-    personalSkillSettings
+    personalSkillSettings,
+    {
+      includeIdentityPrompt: settings.mode !== "claude-code"
+    }
   );
 
-  return {
-    command: settings.codexBinary,
-    args: [
-      "exec",
-      "--ignore-rules",
-      "--model",
-      CODEX_PET_CHAT_MODEL,
-      "--config",
-      "approval_policy=\"never\"",
-      "--config",
-      `model_reasoning_effort="${CODEX_PET_CHAT_REASONING_EFFORT}"`,
-      "--sandbox",
-      "read-only",
-      "--cd",
-      settings.cwd,
-      "--skip-git-repo-check",
-      "--ephemeral",
-      "--color",
-      "never",
-      prompt
-    ],
-    label: "Codex"
-  };
+  return buildAssistantAgentInvocationForMode(settings, settings.mode, prompt);
 }
 
 export async function runAssistantAgentTurn(
@@ -298,6 +276,7 @@ export async function runAssistantAgentTurn(
     personalSkillSettings
   );
   const providerLabel = invocation.label;
+  const runtime = readAssistantAgentRuntime(settings, settings.mode);
 
   if (signal?.aborted) {
     throw new AssistantAgentTurnRuntimeError({
@@ -316,8 +295,8 @@ export async function runAssistantAgentTurn(
   let result: AssistantAgentProcessResult;
   try {
     result = await runProcess(invocation.command, invocation.args, {
-      cwd: settings.cwd,
-      timeoutMs: settings.timeoutMs,
+      cwd: runtime.cwd,
+      timeoutMs: runtime.timeoutMs,
       signal
     });
   } catch (error) {
@@ -493,7 +472,7 @@ interface ParsedAssistantAgentResponse {
   computerUseIntent?: AssistantAgentComputerUseIntent;
 }
 
-function readAssistantAgentResponse(stdout: string): ParsedAssistantAgentResponse {
+export function readAssistantAgentResponse(stdout: string): ParsedAssistantAgentResponse {
   const raw = stdout.trim();
   const intentPattern = new RegExp(
     `${escapeRegExp(COMPUTER_USE_INTENT_START_TAG)}([\\s\\S]*?)${escapeRegExp(COMPUTER_USE_INTENT_END_TAG)}`,
@@ -615,8 +594,8 @@ async function readCliAssistantAgentProviderState({
   id,
   label,
   selected,
-  executablePath,
-  executableSource,
+  binary,
+  source,
   settings,
   resolveExecutable,
   runReadinessProbe,
@@ -626,13 +605,13 @@ async function readCliAssistantAgentProviderState({
   id: AssistantAgentProviderId;
   label: AssistantAgentProviderLabel;
   selected: boolean;
-  executablePath: string;
-  executableSource: AssistantAgentCliBinarySource;
+  binary: string;
+  source: AssistantAgentCliBinarySource;
   resolveExecutable: AssistantAgentExecutableResolver;
   runReadinessProbe: AssistantAgentReadinessProbeRunner;
   proveChatReadiness: boolean;
 }): Promise<AssistantAgentProviderState> {
-  const configuredExecutable = readOptionalString(executablePath);
+  const configuredExecutable = readOptionalString(binary);
   if (!configuredExecutable) {
     return {
       provider: "assistant",
@@ -640,7 +619,7 @@ async function readCliAssistantAgentProviderState({
       label,
       selected,
       configured: false,
-      executableSource,
+      executableSource: source,
       readiness: "unconfigured",
       lastError: `${label} executable is not configured.`
     };
@@ -655,7 +634,7 @@ async function readCliAssistantAgentProviderState({
       selected,
       configured: true,
       executablePath: configuredExecutable,
-      executableSource,
+      executableSource: source,
       resolvedExecutablePath,
       readiness: "binary-found",
       readinessDetail: `${label} executable was found; chat readiness has not been proven by a dry-run.`
@@ -665,7 +644,8 @@ async function readCliAssistantAgentProviderState({
       baseState,
       runReadinessProbe,
       resolvedExecutablePath,
-      settings
+      settings,
+      mode: id
     });
 
     if (!proveChatReadiness || versionResult.readiness !== "version-ok") {
@@ -676,7 +656,8 @@ async function readCliAssistantAgentProviderState({
       baseState: versionResult,
       runReadinessProbe,
       resolvedExecutablePath,
-      settings
+      settings,
+      mode: id
     });
   } catch (error) {
     return {
@@ -686,7 +667,7 @@ async function readCliAssistantAgentProviderState({
       selected,
       configured: true,
       executablePath: configuredExecutable,
-      executableSource,
+      executableSource: source,
       readiness: "unavailable",
       lastError: error instanceof Error ? error.message : String(error)
     };
@@ -697,17 +678,20 @@ async function readAssistantAgentVersionState({
   baseState,
   resolvedExecutablePath,
   runReadinessProbe,
-  settings
+  settings,
+  mode
 }: {
   baseState: AssistantAgentProviderState;
   resolvedExecutablePath: string;
   runReadinessProbe: AssistantAgentReadinessProbeRunner;
   settings: AssistantAgentSettings;
+  mode: AssistantAgentProviderId;
 }): Promise<AssistantAgentProviderState> {
+  const runtime = readAssistantAgentRuntime(settings, mode);
   try {
     const result = await runReadinessProbe(resolvedExecutablePath, ["--version"], {
-      cwd: settings.cwd,
-      timeoutMs: Math.min(settings.timeoutMs, READINESS_PROBE_TIMEOUT_MS)
+      cwd: runtime.cwd,
+      timeoutMs: Math.min(runtime.timeoutMs, READINESS_PROBE_TIMEOUT_MS)
     });
     const version = readProbeSummary(result) ?? "version check passed";
 
@@ -739,23 +723,26 @@ async function readAssistantAgentChatReadyState({
   baseState,
   resolvedExecutablePath,
   runReadinessProbe,
-  settings
+  settings,
+  mode
 }: {
   baseState: AssistantAgentProviderState;
   resolvedExecutablePath: string;
   runReadinessProbe: AssistantAgentReadinessProbeRunner;
   settings: AssistantAgentSettings;
+  mode: AssistantAgentProviderId;
 }): Promise<AssistantAgentProviderState> {
-  const probeSettings = createAssistantAgentProbeSettings(settings, resolvedExecutablePath);
-  const invocation = buildAssistantAgentInvocation(
-    probeSettings,
-    "Reply exactly with skfiy-ready."
-  );
+  const probeSettings = createAssistantAgentProbeSettings(settings, mode, resolvedExecutablePath);
+  const runtime = readAssistantAgentRuntime(settings, mode);
+  const prompt = createAssistantAgentPrompt("Reply exactly with skfiy-ready.", undefined, undefined, undefined, undefined, {
+    includeIdentityPrompt: mode !== "claude-code"
+  });
+  const invocation = buildAssistantAgentInvocationForMode(probeSettings, mode, prompt);
 
   try {
     const result = await runReadinessProbe(invocation.command, invocation.args, {
-      cwd: settings.cwd,
-      timeoutMs: Math.min(settings.timeoutMs, READINESS_PROBE_TIMEOUT_MS)
+      cwd: runtime.cwd,
+      timeoutMs: Math.min(runtime.timeoutMs, READINESS_PROBE_TIMEOUT_MS)
     });
     const response = readAssistantAgentResponse(result.stdout);
     if (!response.message.trim()) {
@@ -790,11 +777,15 @@ async function readAssistantAgentChatReadyState({
 
 function createAssistantAgentProbeSettings(
   settings: AssistantAgentSettings,
+  mode: AssistantAgentProviderId,
   resolvedExecutablePath: string
 ): AssistantAgentSettings {
   return {
     ...settings,
-    codexBinary: resolvedExecutablePath
+    mode,
+    ...(mode === "codex" ? { codexBinary: resolvedExecutablePath } : {}),
+    ...(mode === "claude-code" ? { claudeCodeBinary: resolvedExecutablePath } : {}),
+    ...(mode === "hermes" ? { hermesBinary: resolvedExecutablePath } : {})
   };
 }
 
@@ -807,66 +798,17 @@ function isAuthOrPermissionError(message: string): boolean {
   return /auth|login|permission|unauthori[sz]ed|forbidden|consent|not authenticated/i.test(message);
 }
 
-async function resolveAssistantAgentExecutable(command: string): Promise<string> {
-  const configuredCommand = readOptionalString(command);
-
-  if (!configuredCommand) {
-    throw new Error("Assistant executable is not configured.");
-  }
-
-  if (isPathLikeCommand(configuredCommand)) {
-    if (existsSync(configuredCommand)) {
-      return configuredCommand;
-    }
-    throw new Error(`${configuredCommand} was not found.`);
-  }
-
-  try {
-    const result = await execFileAsync("/usr/bin/env", ["which", configuredCommand], {
-      timeout: READINESS_PROBE_TIMEOUT_MS,
-      maxBuffer: 64 * 1024,
-      encoding: "utf8"
-    });
-    const resolvedPath = result.stdout.trim().split(/\r?\n/u)[0];
-    if (resolvedPath) {
-      return resolvedPath;
-    }
-  } catch {
-    // GUI-launched macOS apps often miss Homebrew paths; fall back below.
-  }
-
-  const fallbackPath = resolveCommonMacCliPath(configuredCommand);
-  if (fallbackPath) {
-    return fallbackPath;
-  }
-
-  throw new Error(`${configuredCommand} was not found on PATH or common macOS CLI locations.`);
-}
-
-function isPathLikeCommand(command: string): boolean {
-  return path.isAbsolute(command) || command.includes("/");
-}
-
-function resolveCommonMacCliPath(command: string): string | undefined {
-  const candidateDirs = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    path.join(os.homedir(), ".local", "bin"),
-    path.join(os.homedir(), "bin")
-  ];
-
-  return candidateDirs
-    .map((directory) => path.join(directory, command))
-    .find((candidate) => existsSync(candidate));
-}
-
 function createAssistantAgentPrompt(
   userInput: string,
   browserPageContext?: BrowserPageContext,
   personalMemory?: PersonalMemorySnapshot,
   recalledSessions?: SessionMemoryRecord[],
-  personalSkillSettings?: PersonalSkillSettings
+  personalSkillSettings?: PersonalSkillSettings,
+  options: {
+    includeIdentityPrompt?: boolean;
+  } = {}
 ): string {
+  const includeIdentityPrompt = options.includeIdentityPrompt ?? true;
   const personalMemoryBlock = personalMemory
     ? createPersonalMemoryPromptBlock(personalMemory)
     : "";
@@ -895,8 +837,7 @@ function createAssistantAgentPrompt(
     : "";
 
   return [
-    ASSISTANT_AGENT_IDENTITY_PROMPT,
-    "",
+    ...(includeIdentityPrompt ? [ASSISTANT_AGENT_IDENTITY_PROMPT, ""] : []),
     ASSISTANT_AGENT_COMPUTER_USE_INTENT_PROMPT,
     "",
     ...(personalMemoryBlock ? [personalMemoryBlock, ""] : []),
