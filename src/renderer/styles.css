@@ -1,5 +1,42 @@
 :root {
-  color: #eef7ff;
+  /* Color palette */
+  --color-text: #eef7ff;
+  --color-text-dim: rgba(238, 247, 255, 0.7);
+  --color-text-faint: rgba(238, 247, 255, 0.4);
+  --color-bg: #061224;
+  --color-bg-elevated: rgba(6, 18, 36, 0.92);
+  --color-bg-hover: rgba(238, 247, 255, 0.06);
+  --color-bg-active: rgba(238, 247, 255, 0.1);
+  --color-border: rgba(238, 247, 255, 0.12);
+  --color-border-strong: rgba(238, 247, 255, 0.25);
+  --color-accent: #8ee8ff;
+  --color-accent-dim: rgba(142, 232, 255, 0.3);
+  --color-success: #8de6b0;
+  --color-success-dim: rgba(141, 230, 176, 0.15);
+  --color-warning: #ffd67a;
+  --color-warning-dim: rgba(255, 214, 122, 0.15);
+  --color-error: #ffaba6;
+  --color-error-dim: rgba(255, 171, 166, 0.15);
+  --color-white: #ffffff;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+
+  /* Border radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 320ms ease;
+
+  color: var(--color-text);
   background: transparent;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -44,8 +81,27 @@ button {
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid #8ee8ff;
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+.skfiy-pet:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+/* Panel focus visibility */
+.dashboard-panel:focus-within,
+.settings-layout:focus-within,
+.first-run-readiness:focus-within,
+.browser-context-panel:focus-within,
+.memory-control-center:focus-within,
+.automation-control-center:focus-within,
+.automation-run-panel:focus-within,
+.profile-panel:focus-within,
+.pet-skin-panel:focus-within {
+  border-color: var(--color-accent-dim);
 }
 
 .pet-stage {
@@ -172,6 +228,18 @@ textarea:focus-visible {
     0 14px 32px rgba(0, 0, 0, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(18px);
+  animation: bubble-enter var(--transition-slow) ease;
+}
+
+@keyframes bubble-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .assistant-bubble.settings-bubble {
@@ -182,6 +250,45 @@ textarea:focus-visible {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(142, 232, 255, 0.34) transparent;
+}
+
+.assistant-bubble.settings-bubble::-webkit-scrollbar,
+.assistant-thread::-webkit-scrollbar,
+.dashboard-panel::-webkit-scrollbar,
+.settings-layout::-webkit-scrollbar,
+.first-run-readiness::-webkit-scrollbar,
+.browser-context-panel::-webkit-scrollbar,
+.memory-control-center::-webkit-scrollbar,
+.automation-control-center::-webkit-scrollbar,
+.automation-run-panel::-webkit-scrollbar,
+.profile-panel::-webkit-scrollbar,
+.pet-skin-panel::-webkit-scrollbar {
+  width: 5px;
+}
+
+.assistant-bubble.settings-bubble::-webkit-scrollbar-thumb,
+.assistant-thread::-webkit-scrollbar-thumb,
+.dashboard-panel::-webkit-scrollbar-thumb,
+.settings-layout::-webkit-scrollbar-thumb,
+.first-run-readiness::-webkit-scrollbar-thumb,
+.browser-context-panel::-webkit-scrollbar-thumb,
+.memory-control-center::-webkit-scrollbar-thumb,
+.automation-control-center::-webkit-scrollbar-thumb,
+.automation-run-panel::-webkit-scrollbar-thumb,
+.profile-panel::-webkit-scrollbar-thumb,
+.pet-skin-panel::-webkit-scrollbar-thumb {
+  background: rgba(142, 232, 255, 0.25);
+  border-radius: 3px;
+}
+
+.assistant-bubble.settings-bubble::-webkit-scrollbar-thumb:hover,
+.assistant-thread::-webkit-scrollbar-thumb:hover {
+  background: rgba(142, 232, 255, 0.4);
+}
+
+.assistant-bubble.settings-bubble::-webkit-scrollbar-track,
+.assistant-thread::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .assistant-input-panel {
@@ -2737,4 +2844,97 @@ textarea:focus-visible {
 .profile-confirmation-actions button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ─── Transitions ─── */
+
+.assistant-bubble,
+.dashboard-panel,
+.first-run-readiness,
+.settings-layout,
+.browser-context-panel,
+.memory-control-center,
+.automation-control-center,
+.automation-run-panel,
+.profile-panel,
+.pet-skin-panel,
+.provider-discovery-panel {
+  transition:
+    opacity var(--transition-normal),
+    transform var(--transition-normal);
+}
+
+.skfiy-pet {
+  will-change: transform;
+}
+
+.pet-sprite-frame {
+  will-change: background-position, transform;
+}
+
+.status-orb {
+  transition: opacity var(--transition-fast);
+}
+
+/* ─── Responsive: small windows ─── */
+
+@media (max-height: 500px) {
+  .assistant-bubble {
+    max-height: calc(100vh - 120px);
+  }
+
+  .assistant-thread {
+    max-height: 120px;
+  }
+
+  .dashboard-panel,
+  .settings-layout,
+  .first-run-readiness,
+  .browser-context-panel,
+  .memory-control-center,
+  .automation-control-center,
+  .automation-run-panel,
+  .profile-panel,
+  .pet-skin-panel {
+    max-height: calc(100vh - 160px);
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .pet-stage {
+    font-size: 11px;
+  }
+
+  .assistant-bubble {
+    max-width: calc(100vw - 16px);
+  }
+
+  .assistant-input-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* ─── Reduced motion ─── */
+
+@media (prefers-reduced-motion: reduce) {
+  .skfiy-pet,
+  .pet-sprite-frame {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .assistant-bubble,
+  .dashboard-panel,
+  .settings-layout,
+  .first-run-readiness,
+  .browser-context-panel,
+  .memory-control-center,
+  .automation-control-center,
+  .automation-run-panel,
+  .profile-panel,
+  .pet-skin-panel,
+  .provider-discovery-panel {
+    transition: none;
+  }
 }
