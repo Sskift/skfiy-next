@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>skfiy web fixture</title>
+<style>
+  body { font: 14px -apple-system, sans-serif; margin: 16px; }
+  section { margin: 8px 0; }
+  #scroller { height: 90px; width: 260px; overflow: auto; border: 1px solid #999; }
+  canvas { border: 1px solid #333; }
+  #editor { border: 1px solid #999; padding: 4px; width: 260px; }
+</style>
+</head>
+<body>
+<h1>skfiy web fixture</h1>
+<p id="status">status: ready</p>
+<section>
+  <a href="#linked" id="link" onclick="log('link clicked', event)">Go link</a>
+  <button id="btn" onclick="log('button clicked', event)">Press me</button>
+  <label><input type="checkbox" id="agree" onchange="log('checkbox ' + this.checked, event)"> Agree</label>
+  <label>Fruit <select id="fruit" onchange="log('select ' + this.value, event)">
+    <option>apple</option><option>banana</option><option>cherry</option>
+  </select></label>
+</section>
+<section>
+  <label>Name <input id="name" oninput="log('input ' + this.value, event)"></label>
+  <label>Notes <textarea id="notes" rows="2" oninput="log('textarea ' + this.value, event)"></textarea></label>
+</section>
+<section>
+  <form id="search" onsubmit="log('submitted ' + document.getElementById('query').value, event); return false;">
+    <input id="query" aria-label="Query"> <button type="submit">Search</button>
+  </form>
+</section>
+<section>
+  <div id="editor" contenteditable="true" role="textbox" aria-label="Editor" oninput="log('editor ' + this.textContent, event)">edit me</div>
+</section>
+<section>
+  <div id="scroller" role="region" aria-label="Scroller" tabindex="0"></div>
+</section>
+<section>
+  <canvas id="canvas" width="300" height="120" aria-label="Canvas"></canvas>
+</section>
+<script>
+  function log(message, event) {
+    const trusted = event && event.isTrusted === false ? ' untrusted' : '';
+    document.getElementById('status').textContent = 'status: ' + message + trusted;
+  }
+  const scroller = document.getElementById('scroller');
+  for (let i = 1; i <= 40; i++) {
+    const line = document.createElement('div');
+    line.textContent = 'row ' + i;
+    scroller.appendChild(line);
+  }
+  scroller.addEventListener('scroll', (e) => log('scroll ' + Math.round(scroller.scrollTop), e));
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#4a8'; ctx.fillRect(0, 0, 150, 120);
+  ctx.fillStyle = '#e84'; ctx.fillRect(150, 0, 150, 120);
+  canvas.addEventListener('click', (e) => log('canvas ' + (e.offsetX < 150 ? 'green' : 'orange'), e));
+  document.addEventListener('keydown', (e) => {
+    if (e.target === document.body) {
+      log('key ' + (e.metaKey ? 'cmd+' : '') + (e.ctrlKey ? 'ctrl+' : '') + e.key, e);
+    }
+  });
+</script>
+</body>
+</html>
