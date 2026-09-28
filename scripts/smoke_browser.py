@@ -6,14 +6,21 @@ Needs a Chromium browser with the extension loaded and the fixture served at
 FIXTURE_URL (see `make smoke-browser`). Asserts that the tab the user is
 looking at never changes and the browser never comes to the front.
 
-    python3 scripts/smoke_browser.py [path/to/skfiy]
+With --user-browser it runs against your own browser: only in its own
+background tab, without the debugger (which shows an infobar) and without
+touching the tab you are looking at.
+
+    python3 scripts/smoke_browser.py [path/to/skfiy] [--user-browser]
 """
 import json
 import re
 import subprocess
 import sys
 
-BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
+USER_BROWSER = "--user-browser" in sys.argv
+ARGS = [arg for arg in sys.argv[1:] if arg != "--user-browser"]
+BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
+BROWSER_APP = "Google Chrome" if USER_BROWSER else "Chrome for Testing"
 FIXTURE_URL = "http://127.0.0.1:8765/web.html"
 CAME_TO_FRONT = False
 
@@ -32,7 +39,7 @@ class Client:
         self.proc.stdin.flush()
         result = json.loads(self.proc.stdout.readline())["result"]
         text = result["content"][0]["text"]
-        if "Chrome for Testing" not in before and "Chrome for Testing" in frontmost():
+        if not is_browser(before) and is_browser(frontmost()):
             CAME_TO_FRONT = True
         if result["isError"]:
             raise RuntimeError(f"{tool}: {text}")
@@ -69,6 +76,11 @@ def case(name, run, expect):
     print(f"  {'✔' if ok else '✘'} {name}: {observed}")
 
 
+def is_browser(front):
+    # "Google Chrome" must not match "Google Chrome for Testing" and vice versa.
+    return re.search(re.escape(BROWSER_APP) + (r'"' if USER_BROWSER else ""), front) is not None
+
+
 def frontmost():
     asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
     return subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True).stdout
@@ -77,7 +89,8 @@ def frontmost():
 def main():
     client = Client()
     before = client.call("browser_tabs")
-    print(before)
+    if not USER_BROWSER:
+        print(before)  # the user's own tab titles stay private
     shown_before = front_tabs(before)
 
     opened = client.call("browser_open", url=FIXTURE_URL)
@@ -89,7 +102,8 @@ def main():
 
     case("click link", lambda: act("browser_click", index=index(tree, r'link "Go link"')), r"^link clicked")
     case("click button", lambda: act("browser_click", index=index(tree, r'button "Press me"')), r"^button clicked")
-    case("trusted click refused on a background tab", lambda: act("browser_click", index=index(tree, r'button "Press me"'), trusted=True), r"only reach the tab shown")
+    if not USER_BROWSER:
+        case("trusted click refused on a background tab", lambda: act("browser_click", index=index(tree, r'button "Press me"'), trusted=True), r"only reach the tab shown")
     case("click checkbox", lambda: act("browser_click", index=index(tree, r'checkbox "Agree"')), r"^checkbox true$")
     case("select option", lambda: act("browser_select", index=index(tree, r'select "Fruit"'), option="cherry"), r"^select cherry")
     name = index(tree, r'text "Name"')
@@ -109,20 +123,21 @@ def main():
         text = client.call("browser_type", tab_id=tab, index=name, text=" ok", trusted=True)
         return re.search(r'text "Name"[^\n]*', text).group(0)
 
-    case("trusted typing (debugger)", trusted_typing, r'value="fresh ok"')
+    if not USER_BROWSER:
+        case("trusted typing (debugger)", trusted_typing, r'value="fresh ok"')
 
-    # Trusted clicks and keys need a visible tab. This is the test browser, so
-    # its own front tab (showing the same fixture) may be used for them.
-    shown = int(front_tabs(before)[0])
-    shown_tree = client.call("browser_state", tab_id=shown, screenshot=False)
+        # Trusted clicks and keys need a visible tab. This is the test browser, so
+        # its own front tab (showing the same fixture) may be used for them.
+        shown = int(front_tabs(before)[0])
+        shown_tree = client.call("browser_state", tab_id=shown, screenshot=False)
 
-    def on_shown(tool, **arguments):
-        return status(client.call(tool, tab_id=shown, **arguments))
+        def on_shown(tool, **arguments):
+            return status(client.call(tool, tab_id=shown, **arguments))
 
-    case("trusted click on a visible tab", lambda: on_shown("browser_click", index=index(shown_tree, r'button "Press me"'), trusted=True), r"^button clicked$")
-    shown_name = index(shown_tree, r'text "Name"')
-    on_shown("browser_type", index=shown_name, text="abc", clear=True)
-    case("trusted key on a visible tab", lambda: on_shown("browser_press_key", index=shown_name, key="BackSpace", trusted=True), r"^input ab$")
+        case("trusted click on a visible tab", lambda: on_shown("browser_click", index=index(shown_tree, r'button "Press me"'), trusted=True), r"^button clicked$")
+        shown_name = index(shown_tree, r'text "Name"')
+        on_shown("browser_type", index=shown_name, text="abc", clear=True)
+        case("trusted key on a visible tab", lambda: on_shown("browser_press_key", index=shown_name, key="BackSpace", trusted=True), r"^input ab$")
     case("reload", lambda: act("browser_navigate", action="reload"), r"^ready$")
 
     after = client.call("browser_tabs")

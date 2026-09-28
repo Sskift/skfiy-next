@@ -113,6 +113,7 @@ make test           # 单元测试（swift-testing）
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
 make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变
+python3 scripts/smoke_browser.py ~/.local/bin/skfiy --user-browser   # 同上，但跑在你自己的 Chrome 里：只用自己开的后台标签页，不用调试接口（需先起测试页服务，见 scripts/test_browser.sh）
 python3 scripts/smoke_chromium.py .build/debug/skfiy Safari   # 同一套网页测试跑在 Safari 上（先在后台打开测试页）
 python3 scripts/app_coverage.py     # 只读探测：对正在运行的应用各取一次状态，只报数量和耗时，不输出内容
 python3 eval/run_eval.py            # 真实任务：交给无头 `claude -p`（只开放 skfiy 工具）完成，独立检查结果，并监视前台与最顶层窗口
@@ -126,6 +127,7 @@ skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存�
 - 单元测试 52/52；TextEdit 12/12；插件 19/19（Chrome for Testing 154）。
 - 应用工具操作网页：Chrome for Testing 与 Safari 26.6 都是 10/10。其中画布像素点击的通过标准是工具明确说明做不到；"点空白处失焦"需要 `SKFIY_BRIEF_FOCUS=1`，默认跳过。
 - 只读覆盖（`scripts/app_coverage.py`）：11 个正在运行的应用都能取到状态，每次 0.1–0.5 秒；微信、网易云音乐、Clash Verge 不公开辅助功能，工具会明确提示。
+- 插件在日常使用的 Chrome 里（`--user-browser`）：15/15，你正在看的标签页没变，Chrome 没到过前台。
 - 真实任务（`eval/run_eval.py`，claude-sonnet-5，只开放 skfiy 工具）：8 项中 7 项完成，8 项全程在后台。失败的一项是 Finder 改名时模型输入新名字后没按回车确认；同一任务前两次都通过。
 - 监视器每 0.25 秒采样前台应用和最顶层窗口。除了应用自己激活自己、随即被交还的情况（见上文「兜底」），没有出现过抢占。
 
