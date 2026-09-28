@@ -16,6 +16,8 @@ enum SkyLight {
     typealias PostEventRecord = @convention(c) (UnsafeRawPointer, UnsafePointer<UInt8>) -> Int32
     typealias ProcessForPID = @convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32
     typealias AXGetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+    typealias FrontProcess = @convention(c) (UnsafeMutableRawPointer) -> Int32
+    typealias ProcessPID = @convention(c) (UnsafeRawPointer, UnsafeMutablePointer<pid_t>) -> Int32
 
     private static let loaded: Bool = {
         dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY) != nil
@@ -33,6 +35,20 @@ enum SkyLight {
     static let postEventRecord = symbol("SLPSPostEventRecordTo", as: PostEventRecord.self)
     static let processForPID = symbol("GetProcessForPID", as: ProcessForPID.self)
     static let axGetWindow = symbol("_AXUIElementGetWindow", as: AXGetWindow.self)
+    static let frontProcess = symbol("_SLPSGetFrontProcess", as: FrontProcess.self)
+    static let processPID = symbol("GetProcessPID", as: ProcessPID.self)
+
+    /// The front app straight from the window server. Unlike the accessibility
+    /// query it does not wait behind an accessibility call in flight.
+    static func frontProcessID() -> pid_t? {
+        guard let frontProcess, let processPID else { return nil }
+        var psn = [UInt32](repeating: 0, count: 2)
+        var pid: pid_t = 0
+        let found = psn.withUnsafeMutableBytes { raw -> Bool in
+            frontProcess(raw.baseAddress!) == 0 && processPID(raw.baseAddress!, &pid) == 0
+        }
+        return found && pid > 0 ? pid : nil
+    }
 }
 
 /// Input delivered straight to one process: nothing is activated, raised, or
@@ -326,4 +342,59 @@ func windowID(of pid: pid_t, at point: CGPoint) -> CGWindowID? {
         return CGWindowID(number)
     }
     return nil
+}
+
+/// Watches the front app on its own thread while a tool runs, so an app that
+/// activates itself inside a blocking accessibility call is sent back at once
+/// rather than when the call returns.
+final class FrontGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = true
+    private var handBacks = 0
+    private let target: pid_t
+    private let userApp: pid_t
+    private let started = Date()
+
+    init(target: pid_t, userApp: pid_t) {
+        self.target = target
+        self.userApp = userApp
+        Thread.detachNewThread { [self] in
+            while isActive {
+                poll()
+                usleep(20_000)
+            }
+        }
+    }
+
+    /// Stops watching; true if the front had to be handed back.
+    @discardableResult
+    func stop() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        active = false
+        return handBacks > 0
+    }
+
+    private var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+
+    private func poll() {
+        let front = SkyLight.frontProcessID() ?? frontmostProcessID()
+        guard front == target else { return }
+        // Input since the tool started means the user switched apps themselves.
+        let kinds: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .mouseMoved, .scrollWheel]
+        let idle = kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+        guard idle >= Date().timeIntervalSince(started),
+              let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }
+        lock.lock()
+        let allowed = active && handBacks < 3  // never fight an app that keeps activating
+        if allowed { handBacks += 1 }
+        lock.unlock()
+        guard allowed else { return }
+        _ = try? AXUIElementCreateApplication(userApp).set(kAXFrontmostAttribute, kCFBooleanTrue)
+        app.activate(options: [])
+    }
 }

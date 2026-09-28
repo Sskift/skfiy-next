@@ -57,15 +57,15 @@ public final class ComputerUse {
         do {
             switch name {
             case "list_apps": return listApps()
-            case "get_app_state": return try await getAppState(args)
-            case "click": return try await click(args)
-            case "perform_secondary_action": return try await performSecondaryAction(args)
-            case "set_value": return try await setValue(args)
-            case "select_text": return try await selectText(args)
-            case "scroll": return try await scroll(args)
-            case "drag": return try await drag(args)
-            case "press_key": return try await pressKey(args)
-            case "type_text": return try await typeText(args)
+            case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
+            case "click": return try await keepingFront(args) { try await self.click(args) }
+            case "perform_secondary_action": return try await keepingFront(args) { try await self.performSecondaryAction(args) }
+            case "set_value": return try await keepingFront(args) { try await self.setValue(args) }
+            case "select_text": return try await keepingFront(args) { try await self.selectText(args) }
+            case "scroll": return try await keepingFront(args) { try await self.scroll(args) }
+            case "drag": return try await keepingFront(args) { try await self.drag(args) }
+            case "press_key": return try await keepingFront(args) { try await self.pressKey(args) }
+            case "type_text": return try await keepingFront(args) { try await self.typeText(args) }
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
             }
@@ -76,6 +76,33 @@ public final class ComputerUse {
         } catch {
             return ToolResult(text: "\(error)", isError: true)
         }
+    }
+
+    /// Some apps bring themselves to the front in response to an action
+    /// (Finder does for Go to Folder…). While a tool runs, and briefly after,
+    /// the front goes straight back to the user's app if the target took it
+    /// while the user was not touching anything.
+    private func keepingFront(_ args: Arguments, _ body: () async throws -> ToolResult) async throws -> ToolResult {
+        // An app that is not running yet is launched in the background by
+        // get_app_state, which hands the front back itself.
+        guard let before = frontmostProcessID(), let query = args.string("app"),
+              case .running(let app)? = try? directory.resolve(query), app.processIdentifier != before else {
+            return try await body()
+        }
+        let guardian = FrontGuard(target: app.processIdentifier, userApp: before)
+        var result: ToolResult
+        do {
+            result = try await body()
+            await Input.pause(0.15)
+        } catch {
+            guardian.stop()
+            throw error
+        }
+        if guardian.stop() {
+            let user = NSRunningApplication(processIdentifier: before)?.localizedName ?? "your app"
+            result.text += "\n\(app.localizedName ?? "The app") brought itself to the front during this action; skfiy handed the front straight back to \(user). Prefer another way to do this if there is one."
+        }
+        return result
     }
 
     // MARK: - list_apps
@@ -134,6 +161,10 @@ public final class ComputerUse {
 
     func getAppState(_ args: Arguments) async throws -> ToolResult {
         try requireAccessibility()
+        // While locked, accessibility answers for the lock screen, not the app.
+        guard !isScreenLocked() else {
+            throw ToolError("The screen is locked, so app windows cannot be read. Try again after it is unlocked.")
+        }
         let app = try await runningApp(try args.requiredString("app"), launch: true)
         let pid = app.processIdentifier
         let appElement = AXUIElementCreateApplication(pid)
@@ -218,6 +249,7 @@ public final class ComputerUse {
             + (frontmostProcessID() == pid ? ", frontmost" : ", in background")]
 
         // Focused window first: it is what the task is about and survives truncation.
+        var opaqueWindow = false
         let focusedElement = asElement(values[kAXFocusedUIElementAttribute])
         if let focusedWindow, var node = builder.build(focusedWindow, clip: clip) {
             let focusedRef = focusedElement.flatMap { focused in
@@ -225,6 +257,9 @@ public final class ComputerUse {
             }
             markFocus(&node, focusedRef: focusedRef)
             renderer.render(node, clip: clip)
+            if contentElementCount(node) == 0 {
+                opaqueWindow = true
+            }
         } else if windows.isEmpty {
             renderer.appendLine("(no windows)")
         }
@@ -285,6 +320,9 @@ public final class ComputerUse {
         }
         if let focusedElement, let index = elements.firstIndex(where: { CFEqual($0, focusedElement) }) {
             header.append("Keyboard focus: [\(index)]")
+        }
+        if opaqueWindow {
+            header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Work from the screenshot with x/y clicks, the menu bar, and keyboard shortcuts.")
         }
         return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow)
     }
@@ -532,8 +570,8 @@ public final class ComputerUse {
             }
         }
         await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: isChromium(app))
-        if isChromium(app) && isInWebContentAt(pid: pid, point: point) {
-            return "sent a background mouse click, but Chromium ignores pointer input to web content in background windows — use an element_index, the browser_* tools, or set SKFIY_BRIEF_FOCUS=1"
+        if isInWebContentAt(pid: pid, point: point) {
+            return "sent a background mouse click, but browsers (Chromium, WebKit) ignore pointer input to web content in background windows — use an element_index, the browser_* tools, or set SKFIY_BRIEF_FOCUS=1"
         }
         return "sent a background mouse click; if the screenshot shows no change, this view ignores background clicks — use an element_index or the keyboard"
     }
@@ -589,7 +627,20 @@ public final class ComputerUse {
         default:
             newValue = text as CFString
         }
+        let webText = Self.textRoles.contains(role) && isInWebContent(element)
+        if webText {
+            // WebKit applies AXValue to the selection of whatever field has
+            // focus, so move focus to the target first and make sure it took.
+            _ = try? element.set(kAXFocusedAttribute, kCFBooleanTrue)
+            await Input.pause(0.05)
+            guard element.bool(kAXFocusedAttribute) == true else {
+                throw ToolError("Could not focus [\(index)] \(describe(element)) to set its value; nothing was changed. Click it and use type_text instead.")
+            }
+        }
         try element.set(kAXValueAttribute, newValue)
+        if webText, let now = element.string(kAXValueAttribute), now != text {
+            return try await afterAction(app, "Tried to set the value of [\(index)] \(describe(element)), but it now reads \(quote(now, limit: 60)); the page may have reformatted or rejected it.")
+        }
         return try await afterAction(app, "Set the value of [\(index)] \(describe(element)).")
     }
 

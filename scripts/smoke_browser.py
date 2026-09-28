@@ -15,6 +15,7 @@ import sys
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 FIXTURE_URL = "http://127.0.0.1:8765/web.html"
+CAME_TO_FRONT = False
 
 
 class Client:
@@ -23,12 +24,16 @@ class Client:
         self.next_id = 0
 
     def call(self, tool, **arguments):
+        global CAME_TO_FRONT
+        before = frontmost()
         self.next_id += 1
         request = {"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
         self.proc.stdin.write(json.dumps(request) + "\n")
         self.proc.stdin.flush()
         result = json.loads(self.proc.stdout.readline())["result"]
         text = result["content"][0]["text"]
+        if "Chrome for Testing" not in before and "Chrome for Testing" in frontmost():
+            CAME_TO_FRONT = True
         if result["isError"]:
             raise RuntimeError(f"{tool}: {text}")
         return text
@@ -124,7 +129,7 @@ def main():
     shown_after = front_tabs(after)
     case("user's visible tabs unchanged", lambda: f"{shown_before} -> {shown_after}", r".*" if shown_before == shown_after else r"^$")
     client.call("browser_close_tab", tab_id=tab)
-    case("browser never came to the front", frontmost, r"^(?!.*Chrom).*")
+    case("browser never came to the front", lambda: "never" if not CAME_TO_FRONT else "came to the front", r"^never$")
 
     print(f"{sum(results)}/{len(results)} browser checks passed")
     client.proc.stdin.close()

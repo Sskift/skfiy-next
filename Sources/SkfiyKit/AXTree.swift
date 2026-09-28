@@ -407,6 +407,27 @@ final class AXTreeBuilder {
     }
 }
 
+/// Elements in a window besides its frame: title-bar buttons (and whatever
+/// hangs off them), the title text and unlabelled containers do not count.
+/// Custom-drawn UIs and embedded web views that publish no accessibility
+/// (CEF, some WKWebView hosts) come out at zero.
+func contentElementCount(_ node: UINode, windowTitle: String? = nil) -> Int {
+    let chrome: Set<String> = ["AXCloseButton", "AXMinimizeButton", "AXZoomButton", "AXFullScreenButton"]
+    let containers: Set<String> = ["AXGroup", "AXUnknown", "AXSplitter", "AXLayoutArea", "AXScrollArea"]
+    let windowTitle = windowTitle ?? node.info.title
+    var count = 0
+    for child in node.children {
+        let info = child.info
+        if chrome.contains(info.subrole ?? "") { continue }
+        count += contentElementCount(child, windowTitle: windowTitle)
+        let labels = [info.title, info.description, info.value].compactMap { $0 }.filter { !$0.isEmpty }
+        if labels.isEmpty && containers.contains(info.role) { continue }
+        if info.role == "AXStaticText" && !labels.isEmpty && labels.allSatisfy({ $0 == windowTitle }) { continue }
+        count += 1
+    }
+    return count
+}
+
 /// Apps such as Finder report AXFocused on many elements at once; only the
 /// app's actual focused element is marked.
 func markFocus(_ node: inout UINode, focusedRef: Int?) {

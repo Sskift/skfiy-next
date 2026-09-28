@@ -23,7 +23,9 @@ rm -rf "$PROFILE"   # a fresh profile, so no stale extension service worker is c
 "$WORK/bin/skfiy" install-browser-bridge --user-data-dir "$PROFILE" >/dev/null
 
 if ! curl -s -o /dev/null http://127.0.0.1:8765/web.html; then
-  (cd "$WORK/web" && nohup python3 -m http.server 8765 --bind 127.0.0.1 >"$WORK/server.log" 2>&1 &)
+  # Fully detached: holding the caller's stdout would keep a pipe open forever.
+  nohup python3 -m http.server 8765 --bind 127.0.0.1 --directory "$WORK/web" </dev/null >"$WORK/server.log" 2>&1 &
+  disown
 fi
 
 APP=$(ls -d "$CACHE"/chrome/*/chrome-mac-arm64/"Google Chrome for Testing.app" 2>/dev/null | tail -1)
@@ -40,15 +42,20 @@ let configuration = NSWorkspace.OpenConfiguration()
 configuration.activates = false
 configuration.addsToRecentItems = false
 configuration.arguments = Array(CommandLine.arguments.dropFirst(2))
-let previous = NSWorkspace.shared.frontmostApplication
+var launched: NSRunningApplication?
 var done = false
-NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: CommandLine.arguments[1]), configuration: configuration) { _, _ in done = true }
+NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: CommandLine.arguments[1]), configuration: configuration) { app, _ in launched = app; done = true }
 while !done { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
-// Chrome may activate itself while starting; give the front back.
-for _ in 0..<30 {
+// Chrome may activate itself while starting. Only then, hand the front back to
+// whatever the user had before it; never override the user's own switches.
+var userApp = NSWorkspace.shared.frontmostApplication
+for _ in 0..<100 {
     RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-    if let previous, NSWorkspace.shared.frontmostApplication?.processIdentifier != previous.processIdentifier {
-        previous.activate(options: [])
+    guard let front = NSWorkspace.shared.frontmostApplication else { continue }
+    if front.processIdentifier == launched?.processIdentifier {
+        if let userApp, userApp.processIdentifier != front.processIdentifier { userApp.activate(options: []) }
+    } else {
+        userApp = front
     }
 }
 SWIFT

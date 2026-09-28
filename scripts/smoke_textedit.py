@@ -15,6 +15,7 @@ import time
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 FRONT = None
+BEFORE_CALL = ""
 APP = "TextEdit"
 
 
@@ -46,6 +47,8 @@ class Client:
         self.proc.stdin.flush()
 
     def call(self, tool, expect_error=False, **arguments):
+        global BEFORE_CALL
+        BEFORE_CALL = frontmost()
         started = time.time()
         result = self.request("tools/call", {"name": tool, "arguments": {"app": APP, **arguments}})
         text = result["content"][0]["text"]
@@ -53,7 +56,7 @@ class Client:
         elapsed = time.time() - started
         status = "error" if result["isError"] else "ok"
         print(f"  {tool}({', '.join(f'{k}={v!r}' for k, v in arguments.items())}) -> {status} in {elapsed:.2f}s, {len(images)} image(s)")
-        if "TextEdit" in frontmost():
+        if "TextEdit" not in BEFORE_CALL and "TextEdit" in frontmost():
             raise AssertionError(f"{tool} brought TextEdit to the front")
         if result["isError"] != expect_error:
             raise AssertionError(f"{tool} returned isError={result['isError']}: {text}")
