@@ -12,6 +12,7 @@ function connect() {
     port = chrome.runtime.connectNative(HOST);
   } catch (error) {
     port = null;
+    showStatus(false);
     setTimeout(connect, 5000);
     return;
   }
@@ -27,9 +28,20 @@ function connect() {
   port.onDisconnect.addListener(() => {
     port = null;
     // The host is missing or restarting; keep trying quietly.
+    showStatus(false);
     setTimeout(connect, 5000);
   });
   port.postMessage({ event: 'hello', browser: browserName(), version: chrome.runtime.getManifest().version });
+  showStatus(true);
+}
+
+// The toolbar icon shows whether the local skfiy host is reachable.
+function showStatus(connected) {
+  chrome.action.setTitle({
+    title: connected ? 'skfiy: connected' : 'skfiy: not connected (run `skfiy install-browser-bridge`)'
+  });
+  chrome.action.setBadgeText({ text: connected ? '' : '!' });
+  chrome.action.setBadgeBackgroundColor({ color: '#6B7280' });
 }
 
 function browserName() {

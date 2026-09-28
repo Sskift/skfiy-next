@@ -12,7 +12,7 @@ skfiy doctor                     # 检查辅助功能 + 屏幕录制权限
 claude mcp add --scope user skfiy -- ~/.local/bin/skfiy mcp
 ```
 
-浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
+浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。以后 `make install` 更新了插件文件，需要在 `chrome://extensions` 的 skfiy 卡片上点一下刷新按钮。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
 
 macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，如 Ghostty / Terminal / iTerm），而不是 skfiy 本身。`skfiy doctor` 会触发系统授权提示；授权后需重启终端与 Claude Code。
 
