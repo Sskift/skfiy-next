@@ -289,7 +289,7 @@ public struct TreeRenderer {
     ]
     /// Actions implied by the role or available to every element.
     static let implicitActions: Set<String> = [
-        "AXPress", "AXShowMenu", "AXScrollToVisible", "AXShowDefaultUI", "AXShowAlternateUI",
+        "AXPress", "AXShowMenu", "AXRaise", "AXScrollToVisible", "AXShowDefaultUI", "AXShowAlternateUI",
         "AXScrollLeftByPage", "AXScrollRightByPage", "AXScrollUpByPage", "AXScrollDownByPage"
     ]
 }

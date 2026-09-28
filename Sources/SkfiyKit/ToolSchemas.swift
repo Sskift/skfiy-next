@@ -54,7 +54,7 @@ enum ToolSchemas {
         ),
         tool(
             "click",
-            "Click an element by index, or pixel coordinates from the latest screenshot of the app. Runs in the background: buttons and links are pressed, text fields are focused with the caret placed, rows are selected, double-click opens and right-click shows the context menu, all through accessibility; anything else gets a mouse event posted to the app without moving the user's cursor. Returns a fresh screenshot.",
+            "Click an element by index, or pixel coordinates from the latest screenshot of the app. Runs in the background: buttons and links are pressed, text fields are focused with the caret placed, rows are selected and double-click opens, all through accessibility; anything else gets a mouse event posted to the app without moving the user's cursor. Menus are never drawn over the user's screen: menu bar items are listed instead of opened, and right-click menus and menu buttons only open in the frontmost app. Returns a fresh screenshot.",
             properties: [
                 "app": app,
                 "element_index": ["type": "string", "description": "Element index to click"],
@@ -68,7 +68,7 @@ enum ToolSchemas {
         ),
         tool(
             "perform_secondary_action",
-            "Invoke an accessibility action exposed by an element, as listed in its actions=[...] (e.g. ShowMenu, Increment, Decrement, Confirm, Cancel, Raise, Pick). Works without bringing the app to the front.",
+            "Invoke an accessibility action exposed by an element, as listed in its actions=[...] (e.g. Increment, Decrement, Confirm, Cancel, Pick). Works without bringing the app to the front; actions that would raise a window or pop a menu over the user's screen are refused.",
             properties: [
                 "app": app,
                 "element_index": elementIndex,
@@ -147,6 +147,15 @@ enum ToolSchemas {
                 "text": ["type": "string", "description": "Literal text to type"]
             ],
             required: ["app", "text"]
+        ),
+        tool(
+            "open_file",
+            "Open a file or folder in an app, in the background, without an Open panel (apps cannot be driven through Open/Save panels while they are in the background). Folders open as a Finder window unless another app is given. Apps and executables are not opened this way; use get_app_state to launch an app. Call get_app_state afterwards to see the document.",
+            properties: [
+                "path": ["type": "string", "description": "Absolute path of the file or folder (~ is expanded)"],
+                "app": ["type": "string", "description": "App to open it with; defaults to the file's default app"]
+            ],
+            required: ["path"]
         )
     ]
 
@@ -238,6 +247,9 @@ enum ToolSchemas {
     Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
     - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.
+    - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder.
+    - Commands that act on the current selection or document (formatting, Save, Undo) only work in the frontmost app; when a task needs one, say so rather than retrying. Terminals and the app hosting you never receive input.
+    - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
     - Everything runs in the background: the user keeps their front app, window order, cursor, clipboard and keyboard focus, and can keep typing. Hidden or minimized apps are not brought forward (no screenshot, but element actions still work).
     - A background mouse click reaches most controls; if a view ignores it (the screenshot shows no change), use an element_index, set_value/select_text, or keyboard shortcuts instead.
     - Web pages in Chrome/Edge/Brave: when the skfiy browser bridge extension is connected, prefer the browser_* tools. They work in background tabs by element index; open your own tab with browser_open instead of taking over the tab the user is looking at.

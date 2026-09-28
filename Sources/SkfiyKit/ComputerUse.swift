@@ -47,7 +47,7 @@ public final class ComputerUse {
 
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
-        "select_text", "scroll", "drag", "press_key", "type_text"
+        "select_text", "scroll", "drag", "press_key", "type_text", "open_file"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -55,6 +55,9 @@ public final class ComputerUse {
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
         do {
+            if Self.inputTools.contains(name) {
+                try refuseProtectedTarget(args)
+            }
             switch name {
             case "list_apps": return listApps()
             case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
@@ -66,6 +69,7 @@ public final class ComputerUse {
             case "drag": return try await keepingFront(args) { try await self.drag(args) }
             case "press_key": return try await keepingFront(args) { try await self.pressKey(args) }
             case "type_text": return try await keepingFront(args) { try await self.typeText(args) }
+            case "open_file": return try await keepingFront(args) { try await self.openFile(args) }
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
             }
@@ -78,18 +82,25 @@ public final class ComputerUse {
         }
     }
 
-    /// Some apps bring themselves to the front in response to an action
-    /// (Finder does for Go to Folder…). While a tool runs, and briefly after,
-    /// the front goes straight back to the user's app if the target took it
-    /// while the user was not touching anything.
+    /// Apps sometimes come forward in response to an action: Finder activates
+    /// itself for Go to Folder…, Open With activates the app it opens, a new
+    /// window can land on top of the user's, and some keys open floating panels
+    /// (space is Quick Look in Finder). While a tool runs the front goes straight
+    /// back to the user's app; afterwards the user's top window is put back on
+    /// top and menus that popped up are closed. Nothing is undone when the user
+    /// clicked or pressed a modifier meanwhile, since that may have been them.
     private func keepingFront(_ args: Arguments, _ body: () async throws -> ToolResult) async throws -> ToolResult {
-        // An app that is not running yet is launched in the background by
-        // get_app_state, which hands the front back itself.
-        guard let before = frontmostProcessID(), let query = args.string("app"),
-              case .running(let app)? = try? directory.resolve(query), app.processIdentifier != before else {
+        guard let before = frontmostProcessID() else {
             return try await body()
         }
-        let guardian = FrontGuard(target: app.processIdentifier, userApp: before)
+        let started = Date()
+        var target: NSRunningApplication?
+        if let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) {
+            target = app
+        }
+        let userTop = topWindow().flatMap { $0.pid == before ? $0.id : nil }
+        let overlaysBefore = Set(target.map { overlayWindows(of: $0.processIdentifier) } ?? [])
+        let guardian = FrontGuard(userApp: before)
         var result: ToolResult
         do {
             result = try await body()
@@ -98,11 +109,135 @@ public final class ComputerUse {
             guardian.stop()
             throw error
         }
-        if guardian.stop() {
-            let user = NSRunningApplication(processIdentifier: before)?.localizedName ?? "your app"
-            result.text += "\n\(app.localizedName ?? "The app") brought itself to the front during this action; skfiy handed the front straight back to \(user). Prefer another way to do this if there is one."
+        let taker = guardian.stop()
+        let user = NSRunningApplication(processIdentifier: before)?.localizedName ?? "your app"
+        var notes: [String] = []
+        if let taker {
+            let name = NSRunningApplication(processIdentifier: taker)?.localizedName ?? "Another app"
+            notes.append("\(name) came to the front during this action; skfiy handed the front straight back to \(user).")
+        }
+        let intruders = Set([target?.processIdentifier, taker].compactMap { $0 }).subtracting([before])
+        if !userMayHaveSwitched(since: started) {
+            if let userTop, let top = topWindow(), top.id != userTop, intruders.contains(top.pid),
+               let window = AXUIElementCreateApplication(before).elements(kAXWindowsAttribute).first(where: { windowID(of: $0) == userTop }) {
+                _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                let name = NSRunningApplication(processIdentifier: top.pid)?.localizedName ?? "The app"
+                notes.append("\(name) put a window over the user's; skfiy put \(user)'s window back on top.")
+            }
+            if let target, target.processIdentifier != before {
+                let popped = overlayWindows(of: target.processIdentifier).filter { !overlaysBefore.contains($0) }
+                if !popped.isEmpty {
+                    let appElement = AXUIElementCreateApplication(target.processIdentifier)
+                    for menu in appElement.elements(kAXChildrenAttribute) where menu.string(kAXRoleAttribute) == kAXMenuRole {
+                        _ = AXUIElementPerformAction(menu, kAXCancelAction as CFString)
+                    }
+                    let still = overlayWindows(of: target.processIdentifier).filter { !overlaysBefore.contains($0) }
+                    notes.append(still.isEmpty
+                        ? "A menu of \(target.localizedName ?? "the app") opened over the user's screen; skfiy closed it."
+                        : "A panel or menu of \(target.localizedName ?? "the app") is now floating over the user's screen (for example Quick Look, opened by space in Finder). Close it (Escape usually works) and avoid actions that open panels.")
+                }
+            }
+        }
+        if !notes.isEmpty {
+            result.text += "\n" + notes.joined(separator: " ") + " Prefer another way to do this if there is one."
         }
         return result
+    }
+
+    /// Tools that send input; get_app_state and scroll only look and move the view.
+    static let inputTools: Set<String> = [
+        "click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key", "type_text", "open_file"
+    ]
+
+    private lazy var hostProcesses = ancestorProcessIDs()
+
+    /// Typing into a terminal runs shell commands, sidestepping the MCP
+    /// client's permission checks, and the app hosting the agent must never
+    /// receive input from it.
+    private func refuseProtectedTarget(_ args: Arguments) throws {
+        guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return }
+        let name = app.localizedName ?? query
+        if hostProcesses.contains(app.processIdentifier) {
+            throw ToolError("\(name) is hosting this agent, so skfiy never sends it input. Reading it with get_app_state still works.")
+        }
+        if isTerminal(bundleID: app.bundleIdentifier), ProcessInfo.processInfo.environment["SKFIY_ALLOW_TERMINALS"] != "1" {
+            throw ToolError("\(name) is a terminal: whatever is typed there runs as shell commands, outside your client's permission checks, so skfiy does not send it input (get_app_state and scroll still work). Use your own shell tool if you have one; the user can allow terminals with SKFIY_ALLOW_TERMINALS=1.")
+        }
+    }
+
+    // MARK: - open_file
+
+    /// Opens a document or folder the way a double-click would, but without
+    /// activating anything, so no Open panel is needed.
+    func openFile(_ args: Arguments) async throws -> ToolResult {
+        let path = (try args.requiredString("path").trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else {
+            throw ToolError("\"path\" must be an absolute path.")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            throw ToolError("Nothing exists at \(path).")
+        }
+        let url = URL(fileURLWithPath: path)
+        if url.pathExtension.lowercased() == "app" {
+            throw ToolError("\(url.lastPathComponent) is an app; launch it with get_app_state instead.")
+        }
+        let appURL: URL
+        if let query = args.string("app"), !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            switch try directory.resolve(query) {
+            case .running(let app):
+                guard let bundle = app.bundleURL else { throw ToolError("\(query) has no app bundle to open files with.") }
+                appURL = bundle
+            case .installed(let bundle, _):
+                appURL = bundle
+            }
+        } else {
+            // A double-click on an executable runs it; only open those in a named app.
+            if !isDirectory.boolValue, FileManager.default.isExecutableFile(atPath: path) {
+                throw ToolError("\(url.lastPathComponent) is executable, so it is not opened with its default app. Name an app (such as TextEdit) to open it for viewing.")
+            }
+            guard let handler = NSWorkspace.shared.urlForApplication(toOpen: url) else {
+                throw ToolError("No app on this Mac opens \(url.lastPathComponent).")
+            }
+            appURL = handler
+        }
+        let bundleID = Bundle(url: appURL)?.bundleIdentifier
+        if isTerminal(bundleID: bundleID)
+            || NSRunningApplication.runningApplications(withBundleIdentifier: bundleID ?? "").contains(where: { hostProcesses.contains($0.processIdentifier) }) {
+            throw ToolError("\(appURL.deletingPathExtension().lastPathComponent) is a terminal or hosts this agent; skfiy does not open files in it.")
+        }
+        if isDirectory.boolValue, bundleID == "com.apple.finder" {
+            return try await openFolderInNewFinderWindow(path)
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.addsToRecentItems = false
+        let app: NSRunningApplication
+        do {
+            app = try await NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration)
+        } catch {
+            throw ToolError("Could not open \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+        await Input.pause(max(settleDelay, 0.8))
+        let name = app.localizedName ?? appURL.deletingPathExtension().lastPathComponent
+        return ToolResult(text: "Opened \(path) in \(name) in the background. Call get_app_state with app \"\(app.bundleIdentifier ?? name)\" to see it.")
+    }
+
+    /// Finder shows a folder opened through Launch Services in one of the
+    /// user's existing windows; a window of its own leaves theirs alone.
+    private func openFolderInNewFinderWindow(_ path: String) async throws -> ToolResult {
+        guard mayAutomate("com.apple.finder") else {
+            throw ToolError("Opening a folder this way would take over one of the user's Finder windows, and skfiy is not allowed to script Finder without a permission prompt. In Finder, use New Finder Window (cmd+n) and then Go to Folder… (cmd+shift+g) instead.")
+        }
+        let escaped = path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        var error: NSDictionary?
+        _ = NSAppleScript(source: "tell application \"Finder\" to make new Finder window to (POSIX file \"\(escaped)\" as alias)")?
+            .executeAndReturnError(&error)
+        if let error {
+            throw ToolError("Finder could not open \(path): \(error[NSAppleScript.errorMessage] as? String ?? "unknown error").")
+        }
+        await Input.pause(settleDelay)
+        return ToolResult(text: "Opened \(path) in a new Finder window in the background. Call get_app_state with app \"Finder\" to see it.")
     }
 
     // MARK: - list_apps
@@ -417,6 +552,8 @@ public final class ComputerUse {
         "AXTab", "AXSegment"
     ]
     static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+    static let menuAlternatives = "Its commands are usually in the menu bar (click a menu bar item to list its items without opening it) or have keyboard shortcuts; to open a file, use open_file."
+    static let backgroundMenuRefusal = "A context menu of a background app would be drawn over the user's screen, so skfiy does not open one. " + menuAlternatives
 
     func click(_ args: Arguments) async throws -> ToolResult {
         let (app, session) = try target(args)
@@ -466,6 +603,14 @@ public final class ComputerUse {
             let current = element.string(kAXValueAttribute).map { " Current value: \(quote($0, limit: 60))." } ?? ""
             let listing = options.isEmpty ? "" : " Options: " + options.map { quote($0.title, limit: 40) }.joined(separator: ", ") + "."
             return ToolResult(text: "\(described) is a pop-up menu; opening it would draw over the user's screen, so it was not opened.\(current)\(listing) Choose an option with set_value(element_index, value: \"<option text>\").")
+        }
+        if frontmostProcessID() != pid {
+            if button == .right || modifiers.contains(.control) && button == .left {
+                throw ToolError(Self.backgroundMenuRefusal)
+            }
+            if let element, button == .left, element.string(kAXRoleAttribute) == "AXMenuButton" {
+                throw ToolError("\(described) opens a menu, and opening it in a background app would draw the menu over the user's screen, so it was not pressed. \(Self.menuAlternatives)")
+            }
         }
         if let element, element.string(kAXRoleAttribute) == "AXMenuItem", element.bool(kAXEnabledAttribute) == false {
             throw ToolError("That menu item is disabled. A background app keeps its menus as they were when it was last in front, so items that act on the current document or selection stay disabled; use the equivalent control in the window or a keyboard shortcut instead.")
@@ -592,6 +737,12 @@ public final class ComputerUse {
         }) else {
             let names = available.map(TreeRenderer.actionDisplayName)
             throw ToolError("Element [\(index)] does not support \"\(requested)\". Available: \(names.isEmpty ? "none" : names.joined(separator: ", ")).")
+        }
+        if action == kAXRaiseAction {
+            throw ToolError("Raising a window would put it over the user's windows, so skfiy does not. Inspect another window with get_app_state(app, window: \"<title>\") instead; element actions work on it without raising it.")
+        }
+        if action == kAXShowMenuAction, frontmostProcessID() != app.processIdentifier {
+            throw ToolError(Self.backgroundMenuRefusal)
         }
         let status = AXUIElementPerformAction(element, action as CFString)
         if status != .success, status != .cannotComplete {
@@ -779,11 +930,6 @@ public final class ComputerUse {
             if let how = try emulateShortcut(chord, pid: pid) {
                 return try await afterAction(app, "Pressed \(key): \(how) (accessibility).")
             }
-            if disabledItem != nil, briefFocusEnabled, frontmostProcessID() != pid,
-               let window = focusedWindowID(of: pid), await waitForUserIdle(),
-               await Input.withBriefFocus(pid: pid, windowID: window, { await Input.press(chord, repeat: count, to: pid) }) {
-                return try await afterAction(app, "Pressed \(key) with a brief in-app focus (your front app kept its place).")
-            }
         }
         // Keys sent to the frontmost app pass through its input method (Pinyin
         // would turn "comma" into "，"); insert such characters directly.
@@ -795,7 +941,7 @@ public final class ComputerUse {
         await Input.press(chord, repeat: count, to: pid)
         var message = "Pressed \(key)" + (count > 1 ? " ×\(count)" : "") + " (sent to the app in the background)."
         if let disabledItem {
-            message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut probably did nothing; use the equivalent button or element action instead (or set SKFIY_BRIEF_FOCUS=1)."
+            message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut did nothing. Commands that act on the current selection or document (formatting, Save, Undo…) only work in the frontmost app, and toolbar buttons for them are ignored in the background too. skfiy does not bring apps forward; if the task needs such a command, say so instead of retrying."
         }
         return try await afterAction(app, message)
     }
