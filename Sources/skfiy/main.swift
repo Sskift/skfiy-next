@@ -68,14 +68,21 @@ case "install-browser-bridge":
             .appendingPathComponent("Library/Application Support/skfiy/browser-extension").path
         let folder = FileManager.default.fileExists(atPath: installed + "/manifest.json")
             ? installed : "the browser-extension folder of the skfiy repository"
-        print("""
+        let connected = BrowserBridge.connectedBrowsers()
+        if connected.isEmpty {
+            print("""
 
-        Now load the extension (id \(BrowserBridge.extensionID)):
-          1. Open chrome://extensions and turn on Developer mode.
-          2. Click "Load unpacked" and choose: \(folder)
-             (in the folder dialog, press cmd+shift+G and paste the path).
-        Re-run this command if you move the skfiy binary.
-        """)
+            Now load the extension (id \(BrowserBridge.extensionID)):
+              1. Open chrome://extensions and turn on Developer mode.
+              2. Click "Load unpacked" and choose: \(folder)
+                 (in the folder dialog, press cmd+shift+G and paste the path).
+            Re-run this command if you move the skfiy binary.
+            """)
+        }
+        // chrome.runtime.reload() did not bring the extension back in testing, so this stays manual.
+        for browser in connected {
+            print("\(browser.name) runs the extension: click the reload button on its skfiy card in chrome://extensions to pick up new files.")
+        }
     } catch {
         fail("Could not register the host: \(error.localizedDescription)")
     }

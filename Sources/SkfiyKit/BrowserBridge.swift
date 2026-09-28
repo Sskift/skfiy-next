@@ -243,7 +243,7 @@ extension BrowserBridge {
     }
 
     /// Live browsers with the extension connected; stale sockets are removed.
-    static func connectedBrowsers() -> [ConnectedBrowser] {
+    public static func connectedBrowsers() -> [ConnectedBrowser] {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: socketDirectory.path)) ?? []
         return files.filter { $0.hasSuffix(".sock") }.compactMap { file in
             let path = socketDirectory.appendingPathComponent(file).path

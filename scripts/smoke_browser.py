@@ -21,6 +21,7 @@ USER_BROWSER = "--user-browser" in sys.argv
 ARGS = [arg for arg in sys.argv[1:] if arg != "--user-browser"]
 BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
 BROWSER_APP = "Google Chrome" if USER_BROWSER else "Chrome for Testing"
+BROWSER_NAME = "Google Chrome" if USER_BROWSER else "Chromium"  # as the extension reports itself
 FIXTURE_URL = "http://127.0.0.1:8765/web.html"
 CAME_TO_FRONT = False
 
@@ -34,6 +35,7 @@ class Client:
         global CAME_TO_FRONT
         before = frontmost()
         self.next_id += 1
+        arguments = {"browser": BROWSER_NAME, **arguments}  # other browsers may be connected too
         request = {"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
         self.proc.stdin.write(json.dumps(request) + "\n")
         self.proc.stdin.flush()
