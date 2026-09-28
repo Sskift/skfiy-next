@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "skfiy browser bridge",
+  "version": "0.2.0",
+  "description": "Lets the local skfiy computer-use server read and operate web pages in background tabs.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0DNEHE65NKYY8+T+AK6Ws9O/mBmCu12a20nLvQsHX6uwDn8hdi908qVv3Gyn2X7JT7654tNZp2Fn7CFPLMJPM0oRdwQ5MCtYGoa+kiGYpYYBUtfmmtBqp7wyimp1KeQbgI564J4DnNLEC/lTK5Rr8s5TASvQHpT6Vs6+4rJ5VxDZ5mKilrBezyh5YjZ8q42XA2Nvn5EgGQLnvIgaguOzpjboGpjuVsNZxshudI+TeM4GBofDOV1Ng/8eH0Yt01lxYTcDeb8Wll7t386uNVHbv5uDvy5A248Fn8oZ2dZt0FcXhMXPyQ2ASdxaXS4THHc9cHGninvLYGStOuGZWidEKQIDAQAB",
+  "permissions": ["nativeMessaging", "tabs", "tabGroups", "scripting", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "minimum_chrome_version": "116"
+}

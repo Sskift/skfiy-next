@@ -1,0 +1,268 @@
+import AppKit
+import ApplicationServices
+import CoreServices
+import Foundation
+
+/// A running or installed app, as `list_apps` and app resolution see it.
+public struct AppRecord: Equatable, Sendable {
+    public var name: String
+    public var bundleID: String?
+    public var path: String?
+    /// Other names the app answers to (bundle name, file name).
+    public var aliases: [String]
+    public var pid: pid_t?
+    public var isFrontmost: Bool
+    public var isHidden: Bool
+    public var lastUsed: Date?
+    public var useCount: Int?
+
+    public init(
+        name: String,
+        bundleID: String? = nil,
+        path: String? = nil,
+        aliases: [String] = [],
+        pid: pid_t? = nil,
+        isFrontmost: Bool = false,
+        isHidden: Bool = false,
+        lastUsed: Date? = nil,
+        useCount: Int? = nil
+    ) {
+        self.name = name
+        self.bundleID = bundleID
+        self.path = path
+        self.aliases = aliases
+        self.pid = pid
+        self.isFrontmost = isFrontmost
+        self.isHidden = isHidden
+        self.lastUsed = lastUsed
+        self.useCount = useCount
+    }
+
+    var names: [String] { [name] + aliases }
+}
+
+public enum AppMatch: Equatable {
+    case one(AppRecord)
+    case none
+    case ambiguous([AppRecord])
+}
+
+/// Resolves "App name, full app path, or unambiguous bundle identifier".
+/// Tiers, strongest first: bundle id, path, exact name, name prefix, name
+/// substring. The first tier with a unique app wins; a tier with several
+/// different apps is ambiguous.
+public func matchApp(_ query: String, in records: [AppRecord]) -> AppMatch {
+    let needle = normalizeAppName(query)
+    guard !needle.isEmpty else { return .none }
+    let standardizedPath = query.hasPrefix("/") || query.hasPrefix("~")
+        ? (query as NSString).expandingTildeInPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        : nil
+
+    let tiers: [(AppRecord) -> Bool] = [
+        { $0.bundleID.map { $0.lowercased() == query.lowercased() } ?? false },
+        { record in
+            guard let standardizedPath, let path = record.path else { return false }
+            return path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == standardizedPath
+        },
+        { $0.names.contains { normalizeAppName($0) == needle } },
+        { $0.names.contains { normalizeAppName($0).hasPrefix(needle) } },
+        { needle.count >= 3 && $0.names.contains { normalizeAppName($0).contains(needle) } }
+    ]
+
+    for tier in tiers {
+        let hits = records.filter(tier)
+        guard !hits.isEmpty else { continue }
+        var distinct: [AppRecord] = []
+        for hit in hits where !distinct.contains(where: { sameApp($0, hit) }) {
+            distinct.append(hit)
+        }
+        if distinct.count == 1 {
+            // Several instances of one app: prefer a running, frontmost one.
+            let best = hits.sorted { lhs, rhs in
+                if (lhs.pid != nil) != (rhs.pid != nil) { return lhs.pid != nil }
+                return lhs.isFrontmost && !rhs.isFrontmost
+            }[0]
+            return .one(best)
+        }
+        return .ambiguous(distinct)
+    }
+    return .none
+}
+
+private func sameApp(_ lhs: AppRecord, _ rhs: AppRecord) -> Bool {
+    if let left = lhs.bundleID, let right = rhs.bundleID {
+        return left == right
+    }
+    if let left = lhs.path, let right = rhs.path {
+        return left == right
+    }
+    return lhs.name == rhs.name
+}
+
+func normalizeAppName(_ name: String) -> String {
+    var value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    if value.lowercased().hasSuffix(".app") {
+        value = String(value.dropLast(4))
+    }
+    return value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+}
+
+/// Live app inventory backed by NSWorkspace, the app folders, and Spotlight.
+@MainActor
+final class AppDirectory {
+    private var installedCache: (date: Date, records: [AppRecord])?
+
+    func runningApps() -> [AppRecord] {
+        let frontmost = frontmostProcessID()
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy != .prohibited && !$0.isTerminated }
+            .map { app in
+                AppRecord(
+                    name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
+                    bundleID: app.bundleIdentifier,
+                    path: app.bundleURL?.path,
+                    aliases: app.bundleURL.map(bundleAliases) ?? [],
+                    pid: app.processIdentifier,
+                    isFrontmost: app.processIdentifier == frontmost,
+                    isHidden: app.isHidden
+                )
+            }
+    }
+
+    func installedApps() -> [AppRecord] {
+        if let cache = installedCache, Date().timeIntervalSince(cache.date) < 120 {
+            return cache.records
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let roots = [
+            "/Applications", "/Applications/Utilities", "/System/Applications",
+            "/System/Applications/Utilities", "/System/Library/CoreServices/Applications",
+            home + "/Applications"
+        ]
+        var seen = Set<String>()
+        var records: [AppRecord] = []
+        for root in roots {
+            for url in appBundles(in: URL(fileURLWithPath: root), depth: 2) where seen.insert(url.path).inserted {
+                let bundle = Bundle(url: url)
+                var record = AppRecord(
+                    name: FileManager.default.displayName(atPath: url.path)
+                        .replacingOccurrences(of: ".app", with: ""),
+                    bundleID: bundle?.bundleIdentifier,
+                    path: url.path,
+                    aliases: bundleAliases(url)
+                )
+                if let item = MDItemCreateWithURL(kCFAllocatorDefault, url as CFURL) {
+                    record.lastUsed = MDItemCopyAttribute(item, "kMDItemLastUsedDate" as CFString) as? Date
+                    record.useCount = (MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? NSNumber)?.intValue
+                }
+                records.append(record)
+            }
+        }
+        installedCache = (Date(), records)
+        return records
+    }
+
+    private func appBundles(in directory: URL, depth: Int) -> [URL] {
+        guard depth > 0,
+              let entries = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return []
+        }
+        var bundles: [URL] = []
+        for entry in entries {
+            if entry.pathExtension == "app" {
+                bundles.append(entry)
+            } else if (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                bundles.append(contentsOf: appBundles(in: entry, depth: depth - 1))
+            }
+        }
+        return bundles
+    }
+
+    enum Resolution {
+        case running(NSRunningApplication)
+        case installed(URL, AppRecord)
+    }
+
+    func resolve(_ query: String) throws -> Resolution {
+        let running = runningApps()
+        switch matchApp(query, in: running) {
+        case .one(let record):
+            if let pid = record.pid, let app = NSRunningApplication(processIdentifier: pid) {
+                return .running(app)
+            }
+        case .ambiguous(let records):
+            throw ambiguity(query, records)
+        case .none:
+            break
+        }
+        switch matchApp(query, in: installedApps()) {
+        case .one(let record):
+            guard let path = record.path else { break }
+            // An installed match may already be running under another name.
+            if let app = NSWorkspace.shared.runningApplications.first(where: {
+                $0.bundleURL?.path == path || ($0.bundleIdentifier != nil && $0.bundleIdentifier == record.bundleID)
+            }) {
+                return .running(app)
+            }
+            return .installed(URL(fileURLWithPath: path), record)
+        case .ambiguous(let records):
+            throw ambiguity(query, records)
+        case .none:
+            break
+        }
+        if query.hasPrefix("/"), query.hasSuffix(".app"), FileManager.default.fileExists(atPath: query) {
+            return .installed(URL(fileURLWithPath: query), AppRecord(name: normalizeAppName((query as NSString).lastPathComponent), path: query))
+        }
+        throw ToolError("No app matches \"\(query)\". Call list_apps to see available apps.")
+    }
+
+    private func ambiguity(_ query: String, _ records: [AppRecord]) -> ToolError {
+        let options = records.prefix(8).map { record in
+            record.bundleID.map { "\(record.name) (\($0))" } ?? record.name
+        }
+        return ToolError("\"\(query)\" matches several apps: \(options.joined(separator: ", ")). Pass a bundle identifier instead.")
+    }
+
+    func launch(_ url: URL) async throws -> NSRunningApplication {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.addsToRecentItems = false
+        do {
+            return try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        } catch {
+            throw ToolError("Could not launch \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+    }
+}
+
+private func bundleAliases(_ url: URL) -> [String] {
+    var aliases = [url.deletingPathExtension().lastPathComponent]
+    if let info = Bundle(url: url)?.infoDictionary {
+        for key in ["CFBundleName", "CFBundleDisplayName"] {
+            if let name = info[key] as? String, !aliases.contains(name) {
+                aliases.append(name)
+            }
+        }
+    }
+    return aliases
+}
+
+/// The app receiving keyboard input, per the accessibility system.
+func frontmostProcessID() -> pid_t? {
+    let systemWide = AXUIElementCreateSystemWide()
+    if let app = systemWide.element(kAXFocusedApplicationAttribute), let pid = app.pid {
+        return pid
+    }
+    return NSWorkspace.shared.frontmostApplication?.processIdentifier
+}
+
+func isScreenLocked() -> Bool {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+        return false
+    }
+    return (session["CGSSessionScreenIsLocked"] as? Bool) == true
+}
