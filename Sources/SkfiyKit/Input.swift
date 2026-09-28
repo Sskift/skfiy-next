@@ -327,6 +327,44 @@ func focusedWindowID(of pid: pid_t) -> CGWindowID? {
     AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute).flatMap(windowID(of:))
 }
 
+/// A click or a modifier press (cmd-tab, a launcher hotkey) since `date`
+/// means the user may have switched apps or windows themselves; typing does not.
+func userMayHaveSwitched(since date: Date) -> Bool {
+    let kinds: [CGEventType] = [.flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+    let idle = kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+    return idle < Date().timeIntervalSince(date)
+}
+
+/// Menus and panels of `pid` floating above normal windows.
+func overlayWindows(of pid: pid_t) -> [CGWindowID] {
+    let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]]) ?? []
+    return windows.compactMap { window in
+        guard (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid,
+              let layer = window[kCGWindowLayer as String] as? Int, layer > 0, layer < 1000,
+              let number = window[kCGWindowNumber as String] as? Int else { return nil }
+        return CGWindowID(number)
+    }
+}
+
+/// The topmost normal window on screen, whoever owns it.
+func topWindow() -> (id: CGWindowID, pid: pid_t)? {
+    let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+        as? [[String: Any]]) ?? []
+    for window in windows {
+        guard (window[kCGWindowLayer as String] as? Int) == 0,
+              ((window[kCGWindowAlpha as String] as? Double) ?? 1) > 0.01,
+              let dictionary = window[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: dictionary), bounds.width > 80, bounds.height > 80,
+              let number = window[kCGWindowNumber as String] as? Int,
+              let owner = window[kCGWindowOwnerPID as String] as? Int else {
+            continue
+        }
+        return (CGWindowID(number), pid_t(owner))
+    }
+    return nil
+}
+
 /// The topmost on-screen window of `pid` containing `point` (menus included).
 func windowID(of pid: pid_t, at point: CGPoint) -> CGWindowID? {
     let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
@@ -345,18 +383,17 @@ func windowID(of pid: pid_t, at point: CGPoint) -> CGWindowID? {
 }
 
 /// Watches the front app on its own thread while a tool runs, so an app that
-/// activates itself inside a blocking accessibility call is sent back at once
+/// comes forward inside a blocking accessibility call is sent back at once
 /// rather than when the call returns.
 final class FrontGuard: @unchecked Sendable {
     private let lock = NSLock()
     private var active = true
     private var handBacks = 0
-    private let target: pid_t
+    private var taker: pid_t?
     private let userApp: pid_t
     private let started = Date()
 
-    init(target: pid_t, userApp: pid_t) {
-        self.target = target
+    init(userApp: pid_t) {
         self.userApp = userApp
         Thread.detachNewThread { [self] in
             while isActive {
@@ -366,13 +403,13 @@ final class FrontGuard: @unchecked Sendable {
         }
     }
 
-    /// Stops watching; true if the front had to be handed back.
+    /// Stops watching; the app that had to be sent back, if any.
     @discardableResult
-    func stop() -> Bool {
+    func stop() -> pid_t? {
         lock.lock()
         defer { lock.unlock() }
         active = false
-        return handBacks > 0
+        return taker
     }
 
     private var isActive: Bool {
@@ -382,16 +419,15 @@ final class FrontGuard: @unchecked Sendable {
     }
 
     private func poll() {
-        let front = SkyLight.frontProcessID() ?? frontmostProcessID()
-        guard front == target else { return }
-        // Input since the tool started means the user switched apps themselves.
-        let kinds: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .mouseMoved, .scrollWheel]
-        let idle = kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
-        guard idle >= Date().timeIntervalSince(started),
+        guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp else { return }
+        guard !userMayHaveSwitched(since: started),
               let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }
         lock.lock()
         let allowed = active && handBacks < 3  // never fight an app that keeps activating
-        if allowed { handBacks += 1 }
+        if allowed {
+            handBacks += 1
+            taker = front
+        }
         lock.unlock()
         guard allowed else { return }
         _ = try? AXUIElementCreateApplication(userApp).set(kAXFrontmostAttribute, kCFBooleanTrue)

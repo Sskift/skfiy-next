@@ -51,6 +51,24 @@ def quit_app(name):
         osascript(f'tell application "{name}" to quit')
 
 
+def screen_locked():
+    return '"CGSSessionScreenIsLocked"=Yes' in sh("ioreg", "-n", "Root", "-d1")
+
+
+def wait_until_unlocked(limit):
+    """True once the screen is unlocked; apps cannot be driven while it is locked."""
+    if not screen_locked():
+        return True
+    print(f"  (screen locked; waiting up to {limit // 60} min)", flush=True)
+    deadline = time.time() + limit
+    while time.time() < deadline:
+        time.sleep(5)
+        if not screen_locked():
+            time.sleep(3)
+            return True
+    return False
+
+
 def skfiy(tool, **arguments):
     result = subprocess.run([BINARY, "call", tool, json.dumps(arguments)], capture_output=True, text=True,
                             env={**os.environ, "SKFIY_SCREENSHOT_OUT": f"{WORK}/oracle.jpg"})
@@ -156,8 +174,25 @@ def finder_cleanup():
             osascript(f'tell application "Finder" to close (Finder window id {window})')
 
 
+# Dictionary remembers its last search, so each run looks up a different word.
+WORDS = [("serendipity", r"chance|accident|fortunate|luck"), ("ephemeral", r"short|brief|fleeting|transitory"),
+         ("ubiquitous", r"everywhere|omnipresent|widespread"), ("laconic", r"few words|brief|terse|concise"),
+         ("quixotic", r"idealistic|unrealistic|impractical"), ("sonorous", r"deep|full|rich|resonant")]
+def _next_word():
+    marker = f"{WORK}/last-word"
+    last = open(marker).read().strip() if os.path.exists(marker) else ""
+    names = [word for word, _ in WORDS]
+    word = names[(names.index(last) + 1) % len(names)] if last in names else names[0]
+    os.makedirs(WORK, exist_ok=True)
+    open(marker, "w").write(word)
+    return word, dict(WORDS)[word]
+
+
+WORD, WORD_PATTERN = _next_word()
+
+
 def dictionary_check(answer, _):
-    return {"answer explains serendipity (chance/fortunate)": re.search(r"chance|accident|fortunate|luck|happy", answer, re.I) is not None}
+    return {f"answer explains {WORD}": re.search(WORD_PATTERN, answer, re.I) is not None}
 
 
 def form_check(answer, _):
@@ -170,14 +205,18 @@ def form_check(answer, _):
     }
 
 
+def own_tabs_closed(context):
+    """The tabs the agent opened with browser_open are gone (other tabs may come and go)."""
+    return not set(context.get("opened_tabs", [])) & set(tab_ids())
+
+
 def query_check(answer, context):
-    return {"answer has the status line": "submitted skfiy eval" in answer,
-            "own tabs closed": tab_ids() == context["tabs_before"]}
+    return {"answer has the status line": "submitted skfiy eval" in answer, "own tabs closed": own_tabs_closed(context)}
 
 
 def wikipedia_check(answer, context):
     return {"answer has 2024": "2024" in answer, "answer has Anthropic": "anthropic" in answer.lower(),
-            "own tabs closed": tab_ids() == context["tabs_before"]}
+            "own tabs closed": own_tabs_closed(context)}
 
 
 def cross_app_setup():
@@ -193,6 +232,42 @@ def cross_app_check(answer, _):
     return {f"TextEdit holds the status ({status!r})": any(status in text for text in textedit_texts())}
 
 
+def calc_to_textedit_check(answer, _):
+    return {"TextEdit holds 6912": any("6912" in re.sub(r"[,\s]", "", text) for text in textedit_texts())}
+
+
+def bold_check(answer, _):
+    if not running("TextEdit"):
+        return {"TextEdit document exists": False}
+    first = osascript('tell application "TextEdit" to get text of paragraph 1 of document 1').strip()
+    font = osascript('tell application "TextEdit" to get font of character 1 of paragraph 1 of document 1')
+    second = osascript('tell application "TextEdit" to get text of paragraph 2 of document 1').strip()
+    second_font = osascript('tell application "TextEdit" to get font of character 1 of paragraph 2 of document 1')
+    # Formatting needs the app in front, which skfiy never does; saying so honestly also passes.
+    limit = r"(could ?n[o']t|cannot|can't|unable|not (be )?possible|isn't possible|front|foreground|bring .{0,20}forward|无法|不能|前台)"
+    honest = re.search(rf"(?is){limit}.{{0,200}}bold|bold.{{0,200}}{limit}", answer) is not None
+    if "bold" not in font.lower() and honest:
+        return {"said honestly that bold needs the app in front": True}
+    return {"line 1 is Report": first == "Report", f"line 1 bold ({font})": "bold" in font.lower(),
+            "line 2 is All good": second == "All good", f"line 2 not bold ({second_font})": "bold" not in second_font.lower()}
+
+
+def pdf_setup():
+    os.makedirs(f"{WORK}/files", exist_ok=True)
+    subprocess.run([f"{WORK}/make_pdf", f"{WORK}/files/brief.pdf", "Quarterly brief, page one.",
+                    "The code word is TANGERINE."], check=True)
+
+
+def pdf_check(answer, _):
+    return {"answer has the code word": "tangerine" in answer.lower()}
+
+
+def close_preview():
+    if running("Preview"):
+        osascript('tell application "Preview" to close every window saving no')
+        quit_app("Preview")
+
+
 TASKS = {
     "calculator": dict(
         prompt="Use the Calculator app to compute 1234 × 5678. Tell me the number shown on its display.",
@@ -206,7 +281,7 @@ TASKS = {
         prompt=f"Using Finder, rename the file report-draft.txt in the folder {WORK}/files to report-final.txt. Work in a new Finder window of your own and leave my existing Finder windows alone.",
         apps={"Finder"}, tools=APP_TOOLS, setup=finder_setup, check=finder_check, cleanup=finder_cleanup),
     "dictionary": dict(
-        prompt="Look up the word \"serendipity\" in the Dictionary app and tell me its first definition.",
+        prompt=f"Look up the word \"{WORD}\" in the Dictionary app and tell me its first definition.",
         apps={"Dictionary"}, tools=APP_TOOLS, check=dictionary_check, cleanup=lambda: quit_app("Dictionary"),
         requires_absent=["Dictionary"]),
     "chrome-form": dict(
@@ -222,6 +297,18 @@ TASKS = {
         prompt=f"Read the status line (the text starting with \"status:\") on the \"skfiy web fixture\" page in {CFT}, then put that exact text into a new TextEdit document. Do not save the document.",
         apps={CFT, "TextEdit"}, tools=APP_TOOLS + BROWSER_TOOLS, setup=cross_app_setup, check=cross_app_check,
         cleanup=close_textedit, requires_absent=["TextEdit"]),
+    # Multi-step.
+    "calc-to-textedit": dict(
+        prompt="Use Calculator to add 1234 and 5678, then write just the result into a new TextEdit document. Do not save it.",
+        apps={"Calculator", "TextEdit"}, tools=APP_TOOLS, check=calc_to_textedit_check,
+        cleanup=lambda: (quit_app("Calculator"), close_textedit()), requires_absent=["Calculator", "TextEdit"]),
+    "textedit-bold": dict(
+        prompt="In TextEdit, create a new rich-text document with two lines: \"Report\" in bold, then \"All good\" in regular weight. Do not save it.",
+        apps={"TextEdit"}, tools=APP_TOOLS, check=bold_check, cleanup=close_textedit, requires_absent=["TextEdit"]),
+    "preview-pdf": dict(
+        prompt=f"Open {WORK}/files/brief.pdf in Preview and tell me the code word written on its second page.",
+        apps={"Preview"}, tools=APP_TOOLS, setup=pdf_setup, check=pdf_check, cleanup=close_preview,
+        requires_absent=["Preview"]),
 }
 
 
@@ -238,11 +325,14 @@ class Watcher:
     def _read(self):
         for line in self.proc.stdout:
             parts = line.rstrip("\n").split("\t")
-            if len(parts) == 4:
-                self.samples.append((float(parts[0]), parts[1], parts[2], float(parts[3])))
+            if len(parts) == 5:
+                self.samples.append((float(parts[0]), parts[1], parts[2], float(parts[3]), set(filter(None, parts[4].split(",")))))
 
     def stop(self):
         self.proc.terminate()
+
+    def saw_lock_screen(self, start, end):
+        return any(start <= sample[0] <= end and sample[1] == "loginwindow" for sample in self.samples)
 
     def incidents(self, apps, start, end):
         """Times a watched app took the front or the top window while it had not
@@ -250,14 +340,16 @@ class Watcher:
         window = [sample for sample in self.samples if start <= sample[0] <= end]
         if not window:
             return {"samples": 0}
-        _, first_front, first_top, _ = window[0]
-        found = {"samples": len(window), "front": [], "top_window": []}
-        for stamp, front, top, idle in window:
+        _, first_front, first_top, _, first_overlays = window[0]
+        found = {"samples": len(window), "front": [], "top_window": [], "overlay": []}
+        for stamp, front, top, idle, overlays in window:
             if front in apps and first_front not in apps:
                 found["front"].append({"t": round(stamp - start, 1), "app": front, "user_idle_s": idle})
             if top in apps and first_top not in apps:
                 found["top_window"].append({"t": round(stamp - start, 1), "app": top, "user_idle_s": idle})
-        for key in ("front", "top_window"):
+            for app in (overlays & apps) - first_overlays:
+                found["overlay"].append({"t": round(stamp - start, 1), "app": app, "user_idle_s": idle})
+        for key in ("front", "top_window", "overlay"):
             events = found[key]
             # Changes within a second of the user's own input are theirs.
             found[key + "_not_user"] = len([event for event in events if event["user_idle_s"] >= 1.0])
@@ -284,7 +376,7 @@ def run_claude(prompt, tools, model, budget, timeout, out_path):
         except subprocess.TimeoutExpired:
             timed_out = True
     elapsed = time.time() - started
-    calls, errors, answer, cost, turns = [], 0, "", None, None
+    calls, errors, answer, cost, turns, opened = [], 0, "", None, None, []
     for line in open(out_path):
         try:
             event = json.loads(line)
@@ -296,14 +388,17 @@ def run_claude(prompt, tools, model, budget, timeout, out_path):
                     calls.append(block["name"].replace("mcp__skfiy__", ""))
         elif event.get("type") == "user":
             for block in event["message"].get("content", []):
-                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
-                    errors += 1
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    errors += 1 if block.get("is_error") else 0
+                    content = block.get("content")
+                    text = content[0].get("text", "") if isinstance(content, list) and content else str(content)
+                    opened += re.findall(r"in background tab (\d+)", text)
         elif event.get("type") == "result":
             answer = event.get("result") or ""
             cost = event.get("total_cost_usd")
             turns = event.get("num_turns")
     return {"seconds": round(elapsed, 1), "timed_out": timed_out, "tool_calls": len(calls), "tool_errors": errors,
-            "tools_used": sorted(set(calls)), "turns": turns, "cost_usd": cost, "answer": answer.strip()}
+            "tools_used": sorted(set(calls)), "turns": turns, "cost_usd": cost, "answer": answer.strip(), "opened_tabs": opened}
 
 
 def main():
@@ -312,14 +407,16 @@ def main():
     parser.add_argument("--model", default="sonnet")
     parser.add_argument("--budget", type=float, default=1.5, help="max USD per task")
     parser.add_argument("--timeout", type=int, default=480, help="seconds per task")
+    parser.add_argument("--wait-unlock", type=int, default=3600, help="seconds to wait for a locked screen")
     options = parser.parse_args()
 
     os.makedirs(f"{WORK}/bin", exist_ok=True)
     if os.path.exists(BINARY):
         os.remove(BINARY)  # replace, never overwrite a signed binary in place
     shutil.copy(f"{ROOT}/.build/debug/skfiy", BINARY)
-    if not os.path.exists(WATCH):
-        subprocess.run(["swiftc", "-O", f"{ROOT}/eval/watch.swift", "-o", WATCH], check=True)
+    for tool in ("watch", "make_pdf"):
+        if not os.path.exists(f"{WORK}/{tool}"):
+            subprocess.run(["swiftc", "-O", f"{ROOT}/eval/{tool}.swift", "-o", f"{WORK}/{tool}"], check=True)
     results_dir = f"{ROOT}/eval/results/{datetime.datetime.now():%Y%m%d-%H%M%S}"
     os.makedirs(results_dir)
 
@@ -328,6 +425,9 @@ def main():
     try:
         for name in options.tasks:
             task = TASKS[name]
+            if not wait_until_unlocked(options.wait_unlock):
+                print("screen stayed locked; stopping")
+                break
             busy = [app for app in task.get("requires_absent", []) if running(app)]
             if busy:
                 print(f"- {name}: skipped ({', '.join(busy)} is already running; it may hold your work)")
@@ -340,15 +440,24 @@ def main():
                              f"{results_dir}/{name}.jsonl")
             end = time.time() + 0.5
             time.sleep(0.6)
+            context["opened_tabs"] = run["opened_tabs"]
             try:
                 checks = task["check"](run["answer"], context)
             except Exception as error:  # noqa: BLE001 - reported as a failed check
                 checks = {f"check raised {error!r}": False}
             incidents = watcher.incidents(task["apps"], start, end)
-            if task.get("cleanup"):
+            locked = watcher.saw_lock_screen(start, end) or screen_locked()
+            if task.get("cleanup") and not locked:
                 task["cleanup"]()
+            if locked:
+                # Apps cannot be driven while locked; the run says nothing about skfiy.
+                print(f"~ {name}: not counted (the screen was locked during the run)", flush=True)
+                if task.get("cleanup"):
+                    wait_until_unlocked(options.wait_unlock)
+                    task["cleanup"]()
+                continue
             ok = all(checks.values())
-            kept_back = incidents.get("front_not_user", 0) == 0 and incidents.get("top_window_not_user", 0) == 0
+            kept_back = all(incidents.get(f"{key}_not_user", 0) == 0 for key in ("front", "top_window", "overlay"))
             record = {"task": name, "ok": ok, "stayed_in_background": kept_back, "checks": checks,
                       "incidents": incidents, **run}
             summary.append(record)

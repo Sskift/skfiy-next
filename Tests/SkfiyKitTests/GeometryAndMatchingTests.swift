@@ -66,6 +66,20 @@ struct AppMatchingTests {
         #expect(matchApp("WeChat", in: [helper, wechat, other]) == .ambiguous([helper, wechat, other]))
     }
 
+    @Test func recognizesTerminals() {
+        #expect(isTerminal(bundleID: "com.mitchellh.ghostty"))
+        #expect(isTerminal(bundleID: "com.apple.Terminal"))
+        #expect(isTerminal(bundleID: "com.googlecode.iterm2"))
+        #expect(!isTerminal(bundleID: "com.apple.TextEdit"))
+        #expect(!isTerminal(bundleID: nil))
+    }
+
+    @Test func ancestorsIncludeThisProcess() {
+        let pids = ancestorProcessIDs()
+        #expect(pids.contains(getpid()))
+        #expect(pids.contains(getppid()))
+    }
+
     @Test func unknownAppIsNone() {
         #expect(matchApp("Photoshop", in: apps) == .none)
         #expect(matchApp("  ", in: apps) == .none)

@@ -276,3 +276,42 @@ func isScreenLocked() -> Bool {
     }
     return (session["CGSSessionScreenIsLocked"] as? Bool) == true
 }
+
+/// Terminals run whatever is typed into them as shell commands, outside the
+/// MCP client's own permission checks, and often host the agent itself.
+let terminalBundleIDs: Set<String> = [
+    "com.mitchellh.ghostty", "com.apple.terminal", "com.googlecode.iterm2", "dev.warp.warp-stable",
+    "dev.warp.warp", "io.alacritty", "org.alacritty", "net.kovidgoyal.kitty", "com.github.wez.wezterm",
+    "co.zeit.hyper", "org.tabby", "com.raphaelamorim.rio", "com.termius-dmg.mac"
+]
+
+func isTerminal(bundleID: String?) -> Bool {
+    bundleID.map { terminalBundleIDs.contains($0.lowercased()) } ?? false
+}
+
+/// This process and its ancestors (the shell, the agent, the terminal or
+/// editor hosting them).
+func ancestorProcessIDs() -> Set<pid_t> {
+    var pids: Set<pid_t> = []
+    var pid = getpid()
+    while pid > 1, pids.insert(pid).inserted {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { break }
+        pid = info.kp_eproc.e_ppid
+    }
+    return pids
+}
+
+/// Whether Apple Events to `bundleID` are already allowed, without asking:
+/// a consent prompt would pop up over the user's work.
+func mayAutomate(_ bundleID: String) -> Bool {
+    var address = AEAddressDesc()
+    let created = bundleID.withCString { pointer in
+        AECreateDesc(typeApplicationBundleID, pointer, strlen(pointer), &address)
+    }
+    guard created == noErr else { return false }
+    defer { AEDisposeDesc(&address) }
+    return AEDeterminePermissionToAutomateTarget(&address, typeWildCard, typeWildCard, false) == noErr
+}
