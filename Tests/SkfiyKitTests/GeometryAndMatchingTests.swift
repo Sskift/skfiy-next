@@ -58,6 +58,14 @@ struct AppMatchingTests {
         #expect(matchApp("Notes", in: apps) == .one(apps[5]))
     }
 
+    @Test func prefersTheRegularAppOverAHelperWithTheSameName() {
+        let wechat = AppRecord(name: "WeChat", bundleID: "com.tencent.xinWeChat", pid: 20)
+        let helper = AppRecord(name: "WeChat", bundleID: "com.tencent.flue.WeChatAppEx", pid: 21, isRegular: false)
+        #expect(matchApp("WeChat", in: [helper, wechat]) == .one(wechat))
+        let other = AppRecord(name: "WeChat", bundleID: "com.example.other", pid: 22)
+        #expect(matchApp("WeChat", in: [helper, wechat, other]) == .ambiguous([helper, wechat, other]))
+    }
+
     @Test func unknownAppIsNone() {
         #expect(matchApp("Photoshop", in: apps) == .none)
         #expect(matchApp("  ", in: apps) == .none)

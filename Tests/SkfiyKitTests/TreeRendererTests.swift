@@ -116,4 +116,20 @@ struct TreeRendererTests {
         let root = UINode(info: NodeInfo(role: "AXScrollArea"), ref: 0)
         #expect(render(root, details: [0: NodeDetails(verticalScroll: 0.354)]).lines == ["[0] ScrollArea vscroll=35%"])
     }
+
+    @Test func windowsWithOnlyChromeCountAsOpaque() {
+        let chrome = UINode(info: NodeInfo(role: "AXWindow", title: "Clash Verge"), children: [
+            UINode(info: NodeInfo(role: "AXGroup"), ref: 1),
+            UINode(info: NodeInfo(role: "AXStaticText", value: "Clash Verge"), ref: 5),
+            UINode(info: NodeInfo(role: "AXButton", subrole: "AXCloseButton"), ref: 2),
+            UINode(info: NodeInfo(role: "AXButton", subrole: "AXFullScreenButton"), children: [
+                UINode(info: NodeInfo(role: "AXGroup"), children: [UINode(info: NodeInfo(role: "AXGroup"), ref: 6)], ref: 4)
+            ], ref: 3)
+        ], ref: 0)
+        #expect(contentElementCount(chrome) == 0)
+        let content = UINode(info: NodeInfo(role: "AXWindow"), children: [
+            UINode(info: NodeInfo(role: "AXGroup"), children: [UINode(info: NodeInfo(role: "AXButton", title: "Play"), ref: 2)], ref: 1)
+        ], ref: 0)
+        #expect(contentElementCount(content) == 1)
+    }
 }

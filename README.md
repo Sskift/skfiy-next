@@ -74,19 +74,22 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 - **菜单**：后台应用的菜单不会被真的打开（那会盖在你的屏幕上），点击菜单栏项时返回菜单内容和编号，再点具体项执行。
 - **截图**：ScreenCaptureKit 只截目标应用自己的窗口，被别的窗口挡住也能截到；隐藏或最小化的窗口不会被拉出来（此时没有截图，但按编号的操作照常可用）。
 - **启动应用**：后台启动；若应用启动时自己抢了前台，会把前台交还给你原来的应用。
+- **兜底**：少数应用会在执行某个动作时自己激活自己（例如 Finder 的「前往文件夹…」）。每次操作期间，skfiy 用独立线程直接向窗口服务器查询前台应用；一旦目标应用在你没碰键鼠时跑到前台，约 10 毫秒内就把前台交还给你原来的应用，并在结果里告诉模型换一种做法。
 
 ### 网页
 
 - **插件路径（推荐）**：在页面的隔离环境里操作 DOM，后台标签页照样可用。输入用 `execCommand('insertText')`，产生 React 等框架认的 input 事件，中文也不经过输入法。点击是合成事件（`isTrusted=false`），绝大多数网站不在意；少数要求真实用户手势的操作（弹窗、写剪贴板）可传 `trusted: true`，通过 `chrome.debugger` 发真实输入事件——执行期间 Chrome 顶部会短暂出现「正在调试此浏览器」提示条，且真实点击/按键只对窗口中正显示的标签页有效（Chrome 会丢弃发往隐藏标签页的这类事件，真实输入文字则不受限）。
-- **应用路径（无插件）**：`get_app_state` 读 Chrome 的辅助功能树，只能操作每个窗口当前显示的标签页。链接/按钮/勾选框/表单/下拉框/可编辑区/滚动都走 AX，产生的是真实可信事件；但 Chromium 会丢弃发往后台窗口网页内容的指针事件，所以画布这类只能靠坐标点的内容需要 `SKFIY_BRIEF_FOCUS=1`。
+- **应用路径（无插件）**：`get_app_state` 读浏览器的辅助功能树（Chrome 等 Chromium 系和 Safari 都可以），只能操作每个窗口当前显示的标签页。链接/按钮/勾选框/表单/下拉框/可编辑区/滚动都走 AX，产生的是真实可信事件；但 Chromium 和 WebKit 都会丢弃发往后台窗口网页内容的指针事件，所以画布这类只能靠坐标点的内容需要 `SKFIY_BRIEF_FOCUS=1`。
 
 ### 已知限制
 
 - 后台应用的菜单保持它上次在前台时的状态，依赖当前文档/选区的菜单项（保存、撤销等）在后台是禁用的；快捷键会退回按键投递，可能无效，工具会明确提示。
 - 少数视图（如 AppKit 文本视图、画布类视图）不接受纯后台鼠标事件。文本视图已由 AX 路径覆盖；其余情况可设 `SKFIY_BRIEF_FOCUS=1`：仅在你键盘鼠标空闲 ≥0.8 秒时，让目标窗口在应用内短暂获得键盘焦点（不激活、不抬升窗口）完成点击，随即把焦点还给你的窗口。默认关闭。
+- 应用自己激活自己只能事后纠正、无法事先阻止：它会在前台停留十几毫秒（实测 13 ms），这期间你敲的键可能落到它那里。
 - SkyLight 与 `_AXUIElementGetWindow` 是私有接口，运行时动态查找；缺失时退回公开 API。
 - `SKFIY_BRIEF_FOCUS` 的焦点归还只做了间接验证（前台应用不变）；它会在你空闲时让目标窗口在其应用内短暂获得键盘焦点，所以默认关闭。
-- WebKit（Safari）尚未测试；插件只支持 Chromium 系浏览器。
+- 插件只支持 Chromium 系浏览器；Safari 走应用路径。
+- 有些应用根本不向辅助功能公开界面：自绘界面（微信 4.x）、CEF 内嵌网页（网易云音乐）、部分 WKWebView 外壳（Clash Verge 等 Tauri 应用）。这时 `get_app_state` 会明确说明，只能靠截图坐标、菜单栏和快捷键；而后台指针点击是否被接受取决于应用本身。
 - 启动期弹出的模态对话框（例如扩展加载失败的提示）有时不在辅助功能树里，只能从截图看到。
 
 ## 环境变量
@@ -105,12 +108,21 @@ make test           # 单元测试（swift-testing）
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
 make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变
+python3 scripts/smoke_chromium.py .build/debug/skfiy Safari   # 同一套网页测试跑在 Safari 上（先在后台打开测试页）
+python3 scripts/app_coverage.py     # 只读探测：对正在运行的应用各取一次状态，只报数量和耗时，不输出内容
+python3 eval/run_eval.py            # 真实任务：交给无头 `claude -p`（只开放 skfiy 工具）完成，独立检查结果，并监视前台与最顶层窗口
 skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存到 /tmp/skfiy-screenshot.jpg
 ```
 
 `scripts/test_browser.sh` 会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，在后台用全新的临时 profile 启动它（加载插件、打开 `scripts/fixtures/web.html`），不碰你自己的浏览器。
 
-最近一次结果（2026-09-28，macOS 26.6，Chrome for Testing 154），全程前台应用未变：TextEdit 12/12；插件 19/19；应用工具默认模式下 9 项网页操作完成，画布像素点击与"点空白处失焦"两项做不到（工具会明确说明原因），开启 `SKFIY_BRIEF_FOCUS=1` 后 11/11。
+最近一次结果（2026-09-28，macOS 26.6.1）：
+
+- 单元测试 52/52；TextEdit 12/12；插件 19/19（Chrome for Testing 154）。
+- 应用工具操作网页：Chrome for Testing 与 Safari 26.6 都是 10/10。其中画布像素点击的通过标准是工具明确说明做不到；"点空白处失焦"需要 `SKFIY_BRIEF_FOCUS=1`，默认跳过。
+- 只读覆盖（`scripts/app_coverage.py`）：11 个正在运行的应用都能取到状态，每次 0.1–0.5 秒；微信、网易云音乐、Clash Verge 不公开辅助功能，工具会明确提示。
+- 真实任务（`eval/run_eval.py`，claude-sonnet-5，只开放 skfiy 工具）：8 项中 7 项完成，8 项全程在后台。失败的一项是 Finder 改名时模型输入新名字后没按回车确认；同一任务前两次都通过。
+- 监视器每 0.25 秒采样前台应用和最顶层窗口。除了应用自己激活自己、随即被交还的情况（见上文「兜底」），没有出现过抢占。
 
 ```
 Sources/SkfiyKit/
@@ -127,7 +139,8 @@ Sources/SkfiyKit/
   BrowserTools.swift  browser_* 工具
 Sources/skfiy/main.swift   CLI：mcp / doctor / tools / call / install-browser-bridge（浏览器以扩展 origin 作参数启动时即为宿主）
 browser-extension/         MV3 插件：service worker + 注入页面的快照/操作函数
-scripts/                   端到端冒烟测试与测试浏览器启动脚本
+scripts/                   端到端冒烟测试、应用覆盖探测、测试浏览器启动脚本
+eval/                      真实任务评测：任务、独立判定、前台/最顶层窗口监视（结果在 eval/results，不入库）
 ```
 
 ## 历史

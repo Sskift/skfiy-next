@@ -13,6 +13,8 @@ public struct AppRecord: Equatable, Sendable {
     public var pid: pid_t?
     public var isFrontmost: Bool
     public var isHidden: Bool
+    /// A regular app with a Dock icon, as opposed to a menu-bar or helper process.
+    public var isRegular: Bool
     public var lastUsed: Date?
     public var useCount: Int?
 
@@ -24,6 +26,7 @@ public struct AppRecord: Equatable, Sendable {
         pid: pid_t? = nil,
         isFrontmost: Bool = false,
         isHidden: Bool = false,
+        isRegular: Bool = true,
         lastUsed: Date? = nil,
         useCount: Int? = nil
     ) {
@@ -34,6 +37,7 @@ public struct AppRecord: Equatable, Sendable {
         self.pid = pid
         self.isFrontmost = isFrontmost
         self.isHidden = isHidden
+        self.isRegular = isRegular
         self.lastUsed = lastUsed
         self.useCount = useCount
     }
@@ -50,7 +54,8 @@ public enum AppMatch: Equatable {
 /// Resolves "App name, full app path, or unambiguous bundle identifier".
 /// Tiers, strongest first: bundle id, path, exact name, name prefix, name
 /// substring. The first tier with a unique app wins; a tier with several
-/// different apps is ambiguous.
+/// different apps is ambiguous, unless only one of them is a regular app
+/// (WeChat vs. its background mini-program helper, also named "WeChat").
 public func matchApp(_ query: String, in records: [AppRecord]) -> AppMatch {
     let needle = normalizeAppName(query)
     guard !needle.isEmpty else { return .none }
@@ -83,6 +88,10 @@ public func matchApp(_ query: String, in records: [AppRecord]) -> AppMatch {
                 return lhs.isFrontmost && !rhs.isFrontmost
             }[0]
             return .one(best)
+        }
+        let regular = distinct.filter(\.isRegular)
+        if regular.count == 1 {
+            return .one(regular[0])
         }
         return .ambiguous(distinct)
     }
@@ -124,7 +133,8 @@ final class AppDirectory {
                     aliases: app.bundleURL.map(bundleAliases) ?? [],
                     pid: app.processIdentifier,
                     isFrontmost: app.processIdentifier == frontmost,
-                    isHidden: app.isHidden
+                    isHidden: app.isHidden,
+                    isRegular: app.activationPolicy == .regular
                 )
             }
     }

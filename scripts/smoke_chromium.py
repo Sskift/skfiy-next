@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Background web smoke test against scripts/fixtures/web.html in a Chromium browser.
+"""Background web smoke test against scripts/fixtures/web.html in a browser
+(Chromium or Safari) through the app tools.
 
 Expects the fixture open in the browser (see `make smoke-web`). Every step
 must leave the browser in the background; each capability is scored on its
@@ -16,9 +17,10 @@ import time
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 APP = sys.argv[2] if len(sys.argv) > 2 else "Google Chrome for Testing"
-# Pointer clicks into web content need SKFIY_BRIEF_FOCUS=1 (Chromium drops
-# pointer input to background windows); without it the tool must say so.
-BRIEF_FOCUS = os.environ.get("SKFIY_BRIEF_FOCUS") == "1"
+# Pointer clicks into web content need SKFIY_BRIEF_FOCUS=1 (Chromium and
+# WebKit drop pointer input to background windows); without it the tool must say so.
+RELOAD = r'\] Button "Reload( this page)?"'
+POINTER = os.environ.get("SKFIY_BRIEF_FOCUS") == "1"
 
 
 class Client:
@@ -36,11 +38,13 @@ class Client:
         return response["result"]
 
     def call(self, tool, **arguments):
+        before = frontmost()
         result = self.request("tools/call", {"name": tool, "arguments": {"app": APP, **arguments}})
         text = result["content"][0]["text"]
         if result["isError"]:
             raise RuntimeError(f"{tool}: {text}")
-        if APP in frontmost():
+        # Only a switch that happened during this call is the call's doing.
+        if APP not in before and APP in frontmost():
             raise AssertionError(f"{tool} brought {APP} to the front")
         return text
 
@@ -84,10 +88,10 @@ def main():
     # disabled while the browser is in the background; the button works).
     for _ in range(20):  # a just-launched browser builds its tree lazily
         tree = client.call("get_app_state")
-        if 'Button "Reload"' in tree and "WebArea" in tree:
+        if re.search(RELOAD, tree) and "WebArea" in tree:
             break
         time.sleep(0.5)
-    client.call("click", element_index=index(tree, r'\] Button "Reload"'))
+    client.call("click", element_index=index(tree, RELOAD))
     time.sleep(1.5)
     _, tree = status(client)
     for _ in range(10):
@@ -142,7 +146,7 @@ def main():
         time.sleep(0.2)
         return status(client)[0]
 
-    if BRIEF_FOCUS:
+    if POINTER:
         case("press_key on the page", key_on_page, r"^key k$")
     else:
         print("  - press_key on the page: skipped (blurring a field with a pointer click needs SKFIY_BRIEF_FOCUS=1)")
@@ -159,10 +163,10 @@ def main():
         _, tree = status(client)
         message = client.call("click", element_index=index(tree, r'"Canvas"')).splitlines()[0]
         time.sleep(0.2)
-        return status(client)[0] if BRIEF_FOCUS else message
+        return status(client)[0] if POINTER else message
 
     case("pointer click on a canvas", click_canvas,
-         r"^canvas (green|orange)$" if BRIEF_FOCUS else r"Chromium ignores pointer input")
+         r"^canvas (green|orange)$" if POINTER else r"ignore pointer input to web content")
 
     def choose_option():
         _, tree = status(client)
