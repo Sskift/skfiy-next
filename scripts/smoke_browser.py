@@ -12,6 +12,7 @@ touching the tab you are looking at.
 
     python3 scripts/smoke_browser.py [path/to/skfiy] [--user-browser]
 """
+import base64
 import json
 import os
 import re
@@ -57,12 +58,32 @@ class Client:
         arguments = {"browser": BROWSER_NAME, **arguments}  # other browsers may be connected too
         self.send({"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call", "params": {"name": tool, "arguments": arguments}})
         result = self.read(self.next_id)["result"]
+        self.last = result
         text = result["content"][0]["text"]
         if not is_browser(before) and is_browser(frontmost()):
             CAME_TO_FRONT = True
         if result["isError"]:
             raise RuntimeError(f"{tool}: {text}")
         return text
+
+
+def find_color(jpeg, rgb, tolerance=40):
+    """Top-left pixel of the first run of `rgb` in a JPEG screenshot."""
+    with open("/tmp/skfiy-shot.jpg", "wb") as out:
+        out.write(jpeg)
+    subprocess.run(["sips", "-s", "format", "bmp", "/tmp/skfiy-shot.jpg", "--out", "/tmp/skfiy-shot.bmp"], capture_output=True)
+    data = open("/tmp/skfiy-shot.bmp", "rb").read()
+    offset = int.from_bytes(data[10:14], "little")
+    width, height = int.from_bytes(data[18:22], "little", signed=True), int.from_bytes(data[22:26], "little", signed=True)
+    depth = int.from_bytes(data[28:30], "little") // 8
+    stride = (width * depth + 3) // 4 * 4
+    for y in range(abs(height)):
+        row = offset + (abs(height) - 1 - y if height > 0 else y) * stride
+        for x in range(0, width, 2):
+            b, g, r = data[row + x * depth: row + x * depth + 3]
+            if abs(r - rgb[0]) + abs(g - rgb[1]) + abs(b - rgb[2]) < tolerance:
+                return x, y
+    return None
 
 
 def front_tabs(text):
@@ -191,6 +212,20 @@ def main():
     case("browser_wait for a text that appears later", wait_later, r'^"loaded later" appeared after [\d.]+ s\. \([1-9]')
     case("browser_wait times out", lambda: client.call("browser_wait", tab_id=tab, text="never shown", timeout=1), r'"never shown" did not appear within')
     case("browser_wait for a quiet page", lambda: client.call("browser_wait", tab_id=tab).splitlines()[0], r"^The page finished loading and stopped changing")
+    if not USER_BROWSER:
+        # A background tab's screenshot comes through the debugger; its pixels
+        # then address browser_click, here the canvas's green half.
+        def background_canvas():
+            client.call("browser_state", tab_id=tab, background_screenshot=True)
+            images = [c for c in client.last["content"] if c["type"] == "image"]
+            if not images:
+                return "no screenshot"
+            spot = find_color(base64.b64decode(images[0]["data"]), (68, 170, 136))
+            if not spot:
+                return "no canvas in the screenshot"
+            return status(client.call("browser_click", tab_id=tab, x=spot[0] + 20, y=spot[1] + 20))
+        case("background tab screenshot, then a click at its pixels", background_canvas, r"^canvas green")
+
     def trusted_typing():
         text = client.call("browser_type", tab_id=tab, index=name, text=" ok", trusted=True)
         return re.search(r'text "Name"[^\n]*', text).group(0)
