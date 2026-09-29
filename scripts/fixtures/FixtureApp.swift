@@ -96,6 +96,26 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     @objc func pressedArchive() { status.stringValue = "status: archive pressed" }
 
+    /// Copies a swatch: an image plus a type of the fixture's own, no text.
+    @objc func copySwatch() {
+        let item = NSPasteboardItem()
+        item.setString("teal", forType: NSPasteboard.PasteboardType("com.skfiy.fixture.swatch"))
+        let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }
+        if let tiff = image.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([item])
+        status.stringValue = "status: swatch copied"
+    }
+
+    @objc func pasteSwatch() {
+        let swatch = NSPasteboard.general.string(forType: NSPasteboard.PasteboardType("com.skfiy.fixture.swatch"))
+        status.stringValue = "status: pasted \(swatch ?? "nothing") swatch"
+    }
+
     @objc func chooseFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -126,10 +146,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 let delegate = Delegate()
 app.delegate = delegate
-// A File menu whose Save As… stays enabled in the background (no documents).
+// Menus whose commands stay enabled in the background (no documents or
+// responder chain involved).
 let mainMenu = NSMenu()
 for (title, items) in [("SkfiyFixture", [NSMenuItem(title: "Quit SkfiyFixture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")]),
-                       ("File", [NSMenuItem(title: "Save As…", action: #selector(Delegate.saveAs), keyEquivalent: "S")])] {
+                       ("File", [NSMenuItem(title: "Save As…", action: #selector(Delegate.saveAs), keyEquivalent: "S")]),
+                       ("Edit", [NSMenuItem(title: "Copy", action: #selector(Delegate.copySwatch), keyEquivalent: "c"),
+                                 NSMenuItem(title: "Paste", action: #selector(Delegate.pasteSwatch), keyEquivalent: "v")])] {
     let menu = NSMenu(title: title)
     items.forEach(menu.addItem)
     let holder = NSMenuItem(title: title, action: nil, keyEquivalent: "")

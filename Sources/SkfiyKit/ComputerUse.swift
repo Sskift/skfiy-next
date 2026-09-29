@@ -39,8 +39,9 @@ public final class ComputerUse {
     private let directory = AppDirectory()
     private var sessions: [pid_t: AppSession] = [:]
     private var accessibilityEnabled: Set<pid_t> = []
-    /// Text copied with cmd+c / cmd+x. The system clipboard belongs to the user.
-    private var clipboard: String?
+    /// What cmd+c / cmd+x copied (or read_clipboard took, with the user's
+    /// approval). The system clipboard belongs to the user.
+    private var clipboard: ClipboardContents?
     /// Asks the user a yes/no question through the client; nil when it cannot.
     public var askUser: ((String) async -> Bool?)? {
         didSet { browser.askUser = askUser }
@@ -54,7 +55,7 @@ public final class ComputerUse {
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "file_dialog", "wait_for"
+        "file_dialog", "read_clipboard", "wait_for"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -84,6 +85,7 @@ public final class ComputerUse {
             case "run_in_front": return try await runInFront(args)
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
+            case "read_clipboard": return try await readClipboard(args)
             case "file_dialog": return try await keepingFront(args) { try await self.fileDialog(args) }
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
@@ -378,6 +380,11 @@ public final class ComputerUse {
         try checkInputTarget(app)
         let pid = app.processIdentifier
         let name = app.localizedName ?? query
+        // cmd+c, cmd+x and cmd+v work on skfiy's clipboard here too.
+        let clipboardKey = chord.modifiers == .command ? chord.baseCharacter.flatMap { "cxv".contains($0) ? $0 : nil } : nil
+        if clipboardKey == "v", clipboard == nil {
+            throw ToolError("skfiy's clipboard is empty, so there is nothing to paste. Copy with cmd+c first, or take what the user copied with read_clipboard.")
+        }
         guard let userApp = frontmostProcessID() else {
             throw ToolError("Could not tell which app is in front.")
         }
@@ -446,6 +453,12 @@ public final class ComputerUse {
         }
         // Let the switch settle: the window becomes key and menus revalidate.
         await Input.pause(0.3)
+        let system = SystemClipboard()
+        let saved = clipboardKey.map { _ in system.read() }
+        if clipboardKey == "v", let clipboard {
+            system.write(clipboard)
+        }
+        let lent = system.changeCount
         var how: String
         if let item = menuItem(for: chord, pid: pid), item.enabled {
             _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
@@ -455,10 +468,25 @@ public final class ComputerUse {
             await Input.pressToFrontApp(chord)
             how = "pressed \(key)"
         } else {
+            if let saved, system.changeCount == lent { system.write(saved) }
             await restore()
             throw ToolError("\(name) lost the front before the shortcut, so nothing was pressed.")
         }
         await Input.pause(0.3)
+        if let saved, let clipboardKey {
+            if clipboardKey == "v" {
+                if system.changeCount == lent { system.write(saved) }
+                how += " on skfiy's clipboard (the user's clipboard was lent for that moment and put back)"
+            } else if await system.waitForChange(from: lent, seconds: 1) {
+                await Input.pause(0.1)
+                let copied = system.read()
+                system.write(saved)
+                clipboard = copied
+                how += ", keeping what it copied (\(copied.summary)) in skfiy's clipboard and putting the user's clipboard back"
+            } else {
+                how += ", but nothing was copied"
+            }
+        }
         await restore()
         let restored = front() == userApp ? "gave the front back to \(user)" : "could not give the front back to \(user)"
         return try await afterAction(app, "With the user's approval, brought \(name) forward for a moment, \(how), and \(restored).")
@@ -1262,7 +1290,7 @@ public final class ComputerUse {
         // itself. Items that depend on the focused document or text (Save,
         // Select All, Close) are disabled while the app is in the background;
         // the common ones are done through accessibility instead.
-        if let how = try clipboardShortcut(chord, pid: pid) {
+        if let how = try await clipboardShortcut(chord, pid: pid) {
             return try await afterAction(app, "Pressed \(key): \(how).")
         }
         var disabledItem: String?
@@ -1614,23 +1642,26 @@ public final class ComputerUse {
         try element.set(kAXSelectedTextRangeAttribute, value)
     }
 
-    /// Standard shortcuts that need the app to be active, done through
-    /// accessibility on the focused element or window.
-    /// cmd+c, cmd+x and cmd+v work on skfiy's own clipboard, in any app, so
-    /// the user's clipboard is never read or overwritten.
-    private func clipboardShortcut(_ chord: KeyChord, pid: pid_t) throws -> String? {
+    /// cmd+c, cmd+x and cmd+v work on skfiy's own clipboard, in any app. Text
+    /// is copied and pasted through accessibility, without the system
+    /// clipboard. Anything else (files, cells, images) goes through the app's
+    /// own Copy, Cut or Paste command, with the user's clipboard lent for that
+    /// moment and put straight back.
+    private func clipboardShortcut(_ chord: KeyChord, pid: pid_t) async throws -> String? {
         guard chord.modifiers == .command, let character = chord.baseCharacter, "cxv".contains(character) else { return nil }
         let focused = AXUIElementCreateApplication(pid).element(kAXFocusedUIElementAttribute)
-        guard let text = focused, Self.textRoles.contains(text.string(kAXRoleAttribute) ?? "")
-                || text.value(kAXSelectedTextRangeAttribute) != nil else {
-            throw ToolError("skfiy copies and pastes text only, with a clipboard of its own, and never uses the user's clipboard; the focused element is not text. Move files with open_file or the app's own commands instead.")
+        let text = focused.flatMap { element in
+            Self.textRoles.contains(element.string(kAXRoleAttribute) ?? "") || element.value(kAXSelectedTextRangeAttribute) != nil ? element : nil
         }
         switch character {
         case "c", "x":
+            guard let text else {
+                return try await copyThroughSystemClipboard(chord, pid: pid, cut: character == "x")
+            }
             guard let selected = text.string(kAXSelectedTextAttribute), !selected.isEmpty else {
                 throw ToolError("Nothing is selected in the focused field; select text first (select_text).")
             }
-            clipboard = selected
+            clipboard = .text(selected)
             if character == "x" {
                 try text.set(kAXSelectedTextAttribute, "" as CFString)
             }
@@ -1638,11 +1669,92 @@ public final class ComputerUse {
             return "\(verb) \(quote(selected, limit: 60)) to skfiy's own clipboard (the user's clipboard is untouched); cmd+v pastes it in any app"
         default:
             guard let clipboard else {
-                throw ToolError("skfiy's clipboard is empty: it never reads the user's clipboard. Copy text with cmd+c first, or type it with type_text.")
+                throw ToolError("skfiy's clipboard is empty. Copy with cmd+c first, type with type_text, or take what the user copied with read_clipboard (they are asked).")
             }
-            try text.set(kAXSelectedTextAttribute, clipboard as CFString)
-            return "pasted \(quote(clipboard, limit: 60)) from skfiy's own clipboard (accessibility)"
+            if let text, !clipboard.isRich, let string = clipboard.text {
+                try text.set(kAXSelectedTextAttribute, string as CFString)
+                return "pasted \(quote(string, limit: 60)) from skfiy's own clipboard (accessibility; the user's clipboard is untouched)"
+            }
+            return try await pasteThroughSystemClipboard(clipboard, chord, pid: pid)
         }
+    }
+
+    /// Runs the app's Copy or Cut command and keeps what it copied, putting
+    /// the user's clipboard back right after.
+    private func copyThroughSystemClipboard(_ chord: KeyChord, pid: pid_t, cut: Bool) async throws -> String {
+        let key = cut ? "cmd+x" : "cmd+c"
+        guard let item = menuItem(for: chord, pid: pid) else {
+            throw ToolError("The focused element is not text, and the app has no menu command for \(key) to copy it with.")
+        }
+        guard item.enabled else {
+            throw ToolError("\(quote(item.title, limit: 30)) is disabled while the app is in the background (nothing selected, or the command only works in the front app). run_in_front with key \"\(key)\" runs it with the user's approval; skfiy then keeps what was copied and puts the user's clipboard back.")
+        }
+        let system = SystemClipboard()
+        let saved = system.read()
+        let before = system.changeCount
+        _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        guard await system.waitForChange(from: before) else {
+            throw ToolError("Pressed \(quote(item.title, limit: 30)), but the app copied nothing (is something selected?). The user's clipboard was not touched.")
+        }
+        await Input.pause(0.15)  // the app may still be adding representations
+        let copied = system.read()
+        system.write(saved)
+        clipboard = copied
+        return "\(cut ? "cut" : "copied") \(copied.summary) into skfiy's own clipboard with the app's \(quote(item.title, limit: 30)) command; the user's clipboard was lent for that moment and put back. cmd+v pastes it in any app"
+    }
+
+    /// Runs the app's Paste command on skfiy's clipboard, with the user's
+    /// clipboard lent for that moment.
+    private func pasteThroughSystemClipboard(_ contents: ClipboardContents, _ chord: KeyChord, pid: pid_t) async throws -> String {
+        guard let item = menuItem(for: chord, pid: pid) else {
+            throw ToolError("skfiy's clipboard holds \(contents.summary), which only the app's Paste command can paste, and the app has none for cmd+v.")
+        }
+        guard item.enabled else {
+            throw ToolError("\(quote(item.title, limit: 30)) is disabled while the app is in the background. run_in_front with key \"cmd+v\" pastes skfiy's clipboard with the user's approval.")
+        }
+        let system = SystemClipboard()
+        let saved = system.read()
+        system.write(contents)
+        let lent = system.changeCount
+        _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        await Input.pause(0.5)  // the app reads the clipboard while pasting
+        let putBack = system.changeCount == lent
+        if putBack {
+            system.write(saved)
+        }
+        return "pasted \(contents.summary) from skfiy's own clipboard with the app's \(quote(item.title, limit: 30)) command; "
+            + (putBack ? "the user's clipboard was lent for that moment and put back" : "the clipboard changed meanwhile (the user may have copied something), so it was left as it is")
+    }
+
+    // MARK: - read_clipboard
+
+    /// Takes what the user copied into skfiy's clipboard, once they approve.
+    func readClipboard(_ args: Arguments) async throws -> ToolResult {
+        let contents = SystemClipboard().read()
+        guard !contents.isEmpty else {
+            throw ToolError("The user's clipboard is empty.")
+        }
+        guard !contents.isConcealed else {
+            throw ToolError("The user's clipboard holds something their password manager marked as secret; skfiy does not read it.")
+        }
+        guard let askUser else {
+            throw ToolError("Reading the user's clipboard needs their approval, and this client cannot ask them. Ask the user to paste it into the conversation instead.")
+        }
+        let reason = args.string("reason").map { " (\($0))" } ?? ""
+        switch await askUser("skfiy wants to use what you copied (\(contents.summary))\(reason).") {
+        case nil:
+            throw ToolError("Reading the user's clipboard needs their approval, and this client cannot ask them (or no answer came). Ask the user to paste it into the conversation instead.")
+        case false?:
+            throw ToolError("The user declined sharing their clipboard. Do not ask again.")
+        case true?:
+            break
+        }
+        clipboard = contents
+        var text = "With the user's approval, took what they copied (\(contents.summary)) into skfiy's own clipboard; cmd+v pastes it in any app."
+        if let string = contents.text {
+            text += "\nIts text:\n" + String(string.prefix(20_000))
+        }
+        return ToolResult(text: text)
     }
 
     private func emulateShortcut(_ chord: KeyChord, pid: pid_t) throws -> String? {

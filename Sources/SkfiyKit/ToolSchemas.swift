@@ -204,6 +204,15 @@ enum ToolSchemas {
             required: ["app", "path"]
         ),
         tool(
+            "read_clipboard",
+            "Take what the user copied into skfiy's own clipboard, so cmd+v pastes it in any app, and return its text if it has any. The user is asked to approve every read; things a password manager marks as secret are never read. Use it only when the task needs what the user copied.",
+            properties: [
+                "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"paste the address you copied into the form\""]
+            ],
+            required: ["reason"],
+            readOnly: true
+        ),
+        tool(
             "wait_for",
             "Wait, without sending any input, until a text appears in an app's window (its accessibility tree, including window titles, menus and field values), or disappears with gone: true; without a text, until the window has stopped changing for a second (loading finished, an animation settled). Use it instead of calling get_app_state again and again. Returns the fresh state like get_app_state, or an error with the current state after timeout.",
             properties: [
@@ -347,6 +356,7 @@ enum ToolSchemas {
     - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder; to save one to a path, use save_document. When an app shows an Open or Save panel anyway (attaching or inserting a file, uploading in Safari, saving in an app save_document cannot script), fill it in with file_dialog.
     - Commands that act on the current selection or document (formatting, Undo, Find) only work in the frontmost app; when a task needs one, use run_in_front, which asks the user first, or say so. Do not retry them with press_key. Terminals and the app hosting you never receive input.
     - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
+    - Copy and paste (cmd+c, cmd+x, cmd+v in press_key) use skfiy's own clipboard: text through accessibility; files, cells and images through the app's own Copy/Paste command, with the user's clipboard lent for that moment and put back. read_clipboard takes what the user copied, with their approval.
     - Everything runs in the background: the user keeps their front app, window order, cursor, clipboard and keyboard focus, and can keep typing. Hidden or minimized apps are not brought forward (no screenshot, but element actions still work).
     - A background mouse click reaches most controls; if a view ignores it (the screenshot shows no change), use an element_index, set_value/select_text, or keyboard shortcuts instead.
     - Web pages in Chrome/Edge/Brave: when the skfiy browser bridge extension is connected, prefer the browser_* tools. They work in background tabs by element index; open your own tab with browser_open instead of taking over the tab the user is looking at.
