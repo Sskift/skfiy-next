@@ -148,7 +148,17 @@ def main():
         state = client.call("get_app_state")
         check(text_value(state) == sample, f"type_text wrote {sample!r}")
 
-        area = find(state, r"\] TextArea")
+        # find keeps a large tree short; its indices are those of the full tree.
+        found = client.call("get_app_state", find="TextArea")
+        body = found.split("\n\n", 1)[1]
+        check("Showing the 1 line(s)" in found and "TextArea" in body and "Menu bar" not in body,
+              "get_app_state find listed only the text area")
+        # zoom reads part of the screenshot at the display's resolution.
+        zoomed = client.call("zoom", x=0, y=0, width=200, height=100)
+        detail = float(re.search(r"px, ([\d.]+)× its detail", zoomed).group(1))
+        check(detail >= 1, f"zoom returned the region at {detail}× the screenshot's detail")
+
+        area = find(found, r"\] TextArea")
         client.call("select_text", element_index=area, text="skfiy")
         client.call("type_text", text="world")
         state = client.call("get_app_state")

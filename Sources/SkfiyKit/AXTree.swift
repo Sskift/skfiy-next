@@ -436,3 +436,27 @@ func markFocus(_ node: inout UINode, focusedRef: Int?) {
         markFocus(&node.children[index], focusedRef: focusedRef)
     }
 }
+
+/// The lines of a rendered tree that contain `query` (case- and
+/// width-insensitive), each with the lines of its ancestors for context.
+public func filterTree(_ lines: [String], matching query: String) -> (lines: [String], matches: Int) {
+    let needle = normalizeAppName(query)
+    let indent = { (line: String) in line.prefix { $0 == " " }.count }
+    var keep = Set<Int>()
+    var matches = 0
+    for (index, line) in lines.enumerated() where normalizeAppName(line).contains(needle) {
+        matches += 1
+        keep.insert(index)
+        var depth = indent(line)
+        var previous = index - 1
+        while previous >= 0, depth > 0 {
+            let level = indent(lines[previous])
+            if level < depth {
+                keep.insert(previous)
+                depth = level
+            }
+            previous -= 1
+        }
+    }
+    return (keep.sorted().map { lines[$0] }, matches)
+}

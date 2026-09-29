@@ -53,7 +53,7 @@ public final class ComputerUse {
 
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
-        "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "run_in_front"
+        "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -81,6 +81,7 @@ public final class ComputerUse {
             case "open_file": return try await keepingFront(args) { try await self.openFile(args) }
             case "save_document": return try await keepingFront(args) { try await self.saveDocument(args) }
             case "run_in_front": return try await runInFront(args)
+            case "zoom": return try await zoom(args)
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
             }
@@ -233,6 +234,35 @@ public final class ComputerUse {
         await Input.pause(max(settleDelay, 0.8))
         let name = app.localizedName ?? appURL.deletingPathExtension().lastPathComponent
         return ToolResult(text: "Opened \(path) in \(name) in the background. Call get_app_state with app \"\(app.bundleIdentifier ?? name)\" to see it.")
+    }
+
+    // MARK: - zoom
+
+    /// A part of the latest screenshot at the display's full resolution, for
+    /// small text. The coordinate system for x/y arguments does not change.
+    func zoom(_ args: Arguments) async throws -> ToolResult {
+        let (app, session) = try target(args)
+        guard let geometry = session.geometry else {
+            throw ToolError("There is no screenshot to zoom into. Call get_app_state first.")
+        }
+        guard let x = try args.double("x"), let y = try args.double("y"),
+              let width = try args.double("width"), let height = try args.double("height") else {
+            throw ToolError("Pass x, y, width and height: a region in pixels of the latest screenshot.")
+        }
+        guard width >= 4, height >= 4, geometry.containsPixel(x: x, y: y), geometry.containsPixel(x: x + width, y: y + height) else {
+            throw ToolError("The region must be at least 4×4 px and inside the latest \(geometry.pixelWidth)×\(geometry.pixelHeight) screenshot.")
+        }
+        let topLeft = geometry.toScreen(x: x, y: y)
+        let bottomRight = geometry.toScreen(x: x + width, y: y + height)
+        let rect = CGRect(x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
+        let backing = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        let shot = try await captureApp(pid: app.processIdentifier, rect: rect, maxScale: Double(backing))
+        let detail = shot.geometry.scale / geometry.scale
+        return ToolResult(
+            text: "Zoomed into x=\(formatNumber(x)) y=\(formatNumber(y)) w=\(formatNumber(width)) h=\(formatNumber(height)) px of the latest screenshot: \(shot.geometry.pixelWidth)×\(shot.geometry.pixelHeight) px, \(formatNumber(detail))× its detail. For reading only; x/y arguments still refer to the full screenshot.",
+            image: shot.data,
+            imageMimeType: shot.mimeType
+        )
     }
 
     // MARK: - run_in_front
@@ -453,6 +483,14 @@ public final class ComputerUse {
             captureNote = "No screenshot: the app has no visible window. Use the menu bar or a shortcut such as cmd+n to open one."
         }
         snapshot.header.append(screenshot.map { screenshotLine($0.geometry) } ?? captureNote ?? "")
+        if let query = args.string("find")?.trimmingCharacters(in: .whitespaces), !query.isEmpty {
+            let total = snapshot.body.count
+            let found = filterTree(snapshot.body, matching: query)
+            snapshot.header.append(found.matches == 0
+                ? "Nothing in the tree matches \(quote(query, limit: 60)) (\(total) lines in all); call get_app_state without find to see everything."
+                : "Showing the \(found.matches) line(s) matching \(quote(query, limit: 60)) with their containers, out of \(total); indices are those of the full tree.")
+            snapshot.body = found.lines
+        }
         sessions[pid] = AppSession(elements: snapshot.elements, geometry: screenshot?.geometry, window: snapshot.chosenWindow)
         return ToolResult(
             text: snapshot.text,
@@ -551,6 +589,16 @@ public final class ComputerUse {
             for (title, menu) in openMenus {
                 renderer.appendLine("Open menu \(quote(title, limit: 40)):")
                 renderMenu(menu, builder: builder, renderer: &renderer, depth: 1)
+            }
+        }
+        // The app's own icons on the right of the menu bar.
+        if let extras = appElement.element("AXExtrasMenuBar") {
+            let items = extras.elements(kAXChildrenAttribute).prefix(10).map { item -> String in
+                let label = nonEmpty(item.string(kAXTitleAttribute)) ?? nonEmpty(item.string(kAXDescriptionAttribute)) ?? app.localizedName ?? "status item"
+                return "[\(renderer.register(builder.add(item)))] \(quote(label, limit: 40))"
+            }
+            if !items.isEmpty {
+                renderer.appendLine("Status items: " + items.joined(separator: " "))
             }
         }
 
@@ -713,6 +761,14 @@ public final class ComputerUse {
 
         // Opening a background app's menu would draw it over the user's screen;
         // list the items instead, ready to be pressed by index.
+        // A status item's menu would open over the user's screen; its items
+        // can only be listed when the app built the menu in advance.
+        if let element, element.string(kAXRoleAttribute) == "AXMenuBarItem",
+           element.element(kAXParentAttribute)?.string(kAXRoleAttribute) != kAXMenuBarRole
+            || element.string(kAXSubroleAttribute) == "AXMenuExtra",
+           element.elements(kAXChildrenAttribute).first?.string(kAXRoleAttribute) != kAXMenuRole {
+            throw ToolError("\(described) is a status item in the menu bar; clicking it would open its menu over the user's screen, and the app does not expose the menu in advance, so it was not clicked. Use the app's own windows or menu bar instead.")
+        }
         if let element, button == .left, count == 1, frontmostProcessID() != pid,
            ["AXMenuBarItem", "AXMenuItem"].contains(element.string(kAXRoleAttribute) ?? ""),
            let menu = element.elements(kAXChildrenAttribute).first,
@@ -1032,6 +1088,13 @@ public final class ComputerUse {
         }
         try checkInputTarget(app)
         let pid = app.processIdentifier
+        if let seconds = try args.double("hold_seconds") {
+            guard (0.05...10).contains(seconds), count == 1 else {
+                throw ToolError("hold_seconds must be between 0.05 and 10, without repeat.")
+            }
+            await Input.hold(chord, seconds: seconds, to: pid)
+            return try await afterAction(app, "Held \(key) for \(formatNumber(seconds)) s (sent to the app in the background).")
+        }
 
         // A background app ignores menu key equivalents, so run the menu item
         // itself. Items that depend on the focused document or text (Save,

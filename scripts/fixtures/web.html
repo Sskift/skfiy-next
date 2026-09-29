@@ -80,6 +80,13 @@
   document.getElementById('same').src = frameURL(location.hostname);
   document.getElementById('cross').src = frameURL(location.hostname === 'localhost' ? '127.0.0.1' : 'localhost');
   addEventListener('message', (e) => { if (typeof e.data === 'string' && e.data.startsWith('frame ')) log(e.data); });
+  // Keys held down: one keydown, one keyup, the time between them.
+  const pressedAt = {};
+  document.addEventListener('keydown', (e) => { if (!e.repeat) pressedAt[e.key] = performance.now(); }, true);
+  document.addEventListener('keyup', (e) => {
+    const held = performance.now() - (pressedAt[e.key] || performance.now());
+    if (held > 250) log(`held ${e.key} ${Math.round(held / 100) / 10}s`, e);
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (e.target === document.body) {
       log('key ' + (e.metaKey ? 'cmd+' : '') + (e.ctrlKey ? 'ctrl+' : '') + e.key, e);

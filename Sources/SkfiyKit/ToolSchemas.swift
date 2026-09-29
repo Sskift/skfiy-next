@@ -47,7 +47,8 @@ enum ToolSchemas {
             "Get the state of an app's focused window: a screenshot plus its accessibility tree, where every element has an index. Launches the app in the background if it is not running. Call it before interacting with an app, and again whenever you need fresh element indices (after navigation, a dialog, or any larger UI change). Also shows the menu bar, open menus with their keyboard shortcuts, and the app's other windows. Never brings the app to the front.",
             properties: [
                 "app": app,
-                "window": ["type": "string", "description": "Optional window title (or part of it) to inspect instead of the focused window; it is not raised"]
+                "window": ["type": "string", "description": "Optional window title (or part of it) to inspect instead of the focused window; it is not raised"],
+                "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"]
             ],
             required: ["app"],
             readOnly: true
@@ -135,7 +136,8 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "key": ["type": "string", "description": "Key or key combination to press"],
-                "repeat": ["type": "integer", "description": "Times to press it (1-100). Defaults to 1"]
+                "repeat": ["type": "integer", "description": "Times to press it (1-100). Defaults to 1"],
+                "hold_seconds": ["type": "number", "description": "Hold the key down this long (0.05-10 s) before releasing it, for games and press-and-hold controls"]
             ],
             required: ["app", "key"]
         ),
@@ -167,6 +169,19 @@ enum ToolSchemas {
                 "overwrite": ["type": "boolean", "description": "Replace an existing file at path (default false)"]
             ],
             required: ["app", "path"]
+        ),
+        tool(
+            "zoom",
+            "See part of the latest screenshot of an app at the display's full resolution, to read small text. Pass a region in pixels of that screenshot. The result is for reading only: x/y arguments of other tools keep referring to the full screenshot.",
+            properties: [
+                "app": app,
+                "x": ["type": "number", "description": "Left edge, in pixels of the latest screenshot"],
+                "y": ["type": "number", "description": "Top edge, in pixels of the latest screenshot"],
+                "width": ["type": "number", "description": "Width in pixels of the latest screenshot"],
+                "height": ["type": "number", "description": "Height in pixels of the latest screenshot"]
+            ],
+            required: ["app", "x", "y", "width", "height"],
+            readOnly: true
         ),
         tool(
             "run_in_front",
