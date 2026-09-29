@@ -9,6 +9,8 @@ public struct NodeInfo: Equatable, Sendable {
     public var description: String?
     public var value: String?
     public var placeholder: String?
+    /// Tooltip text.
+    public var help: String?
     public var enabled: Bool?
     public var focused: Bool?
     public var selected: Bool?
@@ -21,6 +23,7 @@ public struct NodeInfo: Equatable, Sendable {
         description: String? = nil,
         value: String? = nil,
         placeholder: String? = nil,
+        help: String? = nil,
         enabled: Bool? = nil,
         focused: Bool? = nil,
         selected: Bool? = nil,
@@ -32,6 +35,7 @@ public struct NodeInfo: Equatable, Sendable {
         self.description = description
         self.value = value
         self.placeholder = placeholder
+        self.help = help
         self.enabled = enabled
         self.focused = focused
         self.selected = selected
@@ -203,8 +207,11 @@ public struct TreeRenderer {
         if Self.containerRoles.contains(info.role) {
             return hasLabel || hasValue
         }
-        if info.role == "AXStaticText" || info.role == "AXImage" {
+        if info.role == "AXStaticText" {
             return hasLabel
+        }
+        if info.role == "AXImage" {
+            return hasLabel || nonEmpty(info.help) != nil
         }
         return true
     }
@@ -219,6 +226,10 @@ public struct TreeRenderer {
         }
         if let title = nonEmpty(info.title), let description = nonEmpty(info.description), title != description {
             parts.append("desc=" + quote(description, limit: 160))
+        }
+        // The tooltip, so nothing has to be hovered to read it.
+        if let help = nonEmpty(info.help), help != label, help != info.description {
+            parts.append("help=" + quote(help, limit: 160))
         }
 
         let isToggle = Self.toggleRoles.contains(info.role) || info.subrole == "AXSwitch"
@@ -328,7 +339,7 @@ func quote(_ value: String, limit: Int) -> String {
 final class AXTreeBuilder {
     static let attributes: [String] = [
         kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
-        kAXValueAttribute, "AXPlaceholderValue", kAXEnabledAttribute, kAXFocusedAttribute,
+        kAXValueAttribute, "AXPlaceholderValue", kAXHelpAttribute, kAXEnabledAttribute, kAXFocusedAttribute,
         kAXSelectedAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
         "AXVisibleChildren", kAXVisibleRowsAttribute
     ]
@@ -361,6 +372,7 @@ final class AXTreeBuilder {
             description: values[kAXDescriptionAttribute].flatMap(axString),
             value: values[kAXValueAttribute].flatMap(axDisplayValue).map { String($0.prefix(20_000)) },
             placeholder: values["AXPlaceholderValue"].flatMap(axString),
+            help: values[kAXHelpAttribute].flatMap(axString),
             enabled: (values[kAXEnabledAttribute] as? NSNumber)?.boolValue,
             focused: (values[kAXFocusedAttribute] as? NSNumber)?.boolValue,
             selected: (values[kAXSelectedAttribute] as? NSNumber)?.boolValue,

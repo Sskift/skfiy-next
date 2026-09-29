@@ -20,16 +20,19 @@ public enum EmergencyStop {
         FileManager.default.fileExists(atPath: flag.path)
     }
 
-    public static func set(stopped: Bool, sound: Bool = true) {
+    /// Returns how long the confirmation sound plays. A process that exits
+    /// must wait that long: a sound cut off by the process exiting stalls
+    /// screen capture system-wide for a while.
+    @discardableResult
+    public static func set(stopped: Bool, sound: Bool = true) -> TimeInterval {
         if stopped {
             try? FileManager.default.createDirectory(at: flag.deletingLastPathComponent(), withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: flag.path, contents: Data())
         } else {
             try? FileManager.default.removeItem(at: flag)
         }
-        if sound {
-            NSSound(named: stopped ? "Funk" : "Glass")?.play()
-        }
+        guard sound, let confirmation = NSSound(named: stopped ? "Funk" : "Glass"), confirmation.play() else { return 0 }
+        return confirmation.duration
     }
 
     static let refusal = "The user pressed \(shortcut) to stop skfiy, so nothing was done. Stop working and ask them how to continue; they resume skfiy with \(shortcut) again or `skfiy resume`."

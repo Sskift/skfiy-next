@@ -192,6 +192,19 @@ enum ToolSchemas {
                 "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"make the title bold\""]
             ],
             required: ["app", "key", "reason"]
+        ),
+        tool(
+            "wait_for",
+            "Wait, without sending any input, until a text appears in an app's window (its accessibility tree, including window titles, menus and field values), or disappears with gone: true; without a text, until the window has stopped changing for a second (loading finished, an animation settled). Use it instead of calling get_app_state again and again. Returns the fresh state like get_app_state, or an error with the current state after timeout.",
+            properties: [
+                "app": app,
+                "text": ["type": "string", "description": "Text to wait for, case-insensitive"],
+                "gone": ["type": "boolean", "description": "Wait until the text is gone instead. Defaults to false"],
+                "window": ["type": "string", "description": "Optional window title (or part of it) to watch instead of the focused window"],
+                "timeout": ["type": "number", "description": "Seconds to wait at most (0.5-60). Defaults to 10"]
+            ],
+            required: ["app"],
+            readOnly: true
         )
     ]
 
@@ -287,6 +300,28 @@ enum ToolSchemas {
                 "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"]
             ],
             required: ["tab_id", "index", "path"]
+        ),
+        tool(
+            "browser_hover",
+            "Hover over an element of a tab (by index, or x/y of the tab's latest screenshot), in the background: the page gets the pointer events that open hover menus and reveal hover-only controls, and the page's CSS :hover styles apply to it. Stays hovered until you hover something else. Returns the page state with anything that appeared.",
+            properties: [
+                "tab_id": tab, "index": pageIndex, "browser": browserName,
+                "x": ["type": "number", "description": "X in the tab's latest screenshot, when not using index"],
+                "y": ["type": "number", "description": "Y in the tab's latest screenshot, when not using index"]
+            ],
+            required: ["tab_id"]
+        ),
+        tool(
+            "browser_wait",
+            "Wait, sending nothing to the page, until a text appears in a tab (page text, title and field values, in all frames), or disappears with gone: true; without a text, until the page has finished loading and stopped changing for half a second. Returns the page state, or an error with it after timeout.",
+            properties: [
+                "tab_id": tab, "browser": browserName,
+                "text": ["type": "string", "description": "Text to wait for, case-insensitive"],
+                "gone": ["type": "boolean", "description": "Wait until the text is gone instead. Defaults to false"],
+                "timeout": ["type": "number", "description": "Seconds to wait at most (0.5-60). Defaults to 10"]
+            ],
+            required: ["tab_id"],
+            readOnly: true
         )
     ]
 
@@ -294,6 +329,7 @@ enum ToolSchemas {
     Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
     - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.
+    - To wait for something (a page or search result loading, a dialog, a download), use wait_for or browser_wait instead of polling get_app_state.
     - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder; to save one to a path, use save_document rather than a Save panel.
     - Commands that act on the current selection or document (formatting, Undo, Find) only work in the frontmost app; when a task needs one, use run_in_front, which asks the user first, or say so. Do not retry them with press_key. Terminals and the app hosting you never receive input.
     - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
