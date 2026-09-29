@@ -103,6 +103,31 @@ enum Input {
         }
     }
 
+    /// Presses a chord as the keyboard does, for the frontmost app. Only
+    /// run_in_front uses it, once the user approved and the app is in front.
+    static func pressToFrontApp(_ chord: KeyChord) async {
+        let source = CGEventSource(stateID: .hidSystemState)
+        switch chord.key {
+        case .code(let code):
+            let flags = chord.modifiers.eventFlags.union(intrinsicFlags(code))
+            for down in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { continue }
+                event.flags = flags
+                event.post(tap: .cghidEventTap)
+                await pause(0.02)
+            }
+        case .character(let text):
+            let units = Array(text.utf16)
+            for down in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
+                event.flags = chord.modifiers.eventFlags
+                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+                event.post(tap: .cghidEventTap)
+                await pause(0.02)
+            }
+        }
+    }
+
     /// Holds a key down for `seconds` (games, press-and-hold controls): the app
     /// gets one key down and one key up, like a physical key held without
     /// auto-repeat. The emergency stop releases it early.
@@ -456,7 +481,25 @@ final class FrontGuard: @unchecked Sendable {
         return Date() < deadline
     }
 
+    /// While run_in_front has the user's approval to bring an app forward,
+    /// guards still lingering from earlier calls must not send it back.
+    nonisolated(unsafe) private static var suspended = false
+    private static let suspension = NSLock()
+
+    static func suspendAll(_ value: Bool) {
+        suspension.lock()
+        suspended = value
+        suspension.unlock()
+    }
+
+    private static var isSuspended: Bool {
+        suspension.lock()
+        defer { suspension.unlock() }
+        return suspended
+    }
+
     private func poll() {
+        guard !Self.isSuspended else { return }
         guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp else { return }
         // Another app may be the user's own choice; the target app never is.
         guard front == target || !userMayHaveSwitched(since: started),

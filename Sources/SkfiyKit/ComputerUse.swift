@@ -311,33 +311,58 @@ public final class ComputerUse {
             throw ToolError("The user kept typing or clicking, so \(name) was not brought forward. Try again later.")
         }
         let userTop = topWindow().flatMap { $0.pid == userApp ? $0.id : nil }
-        app.activate(options: [])
-        for _ in 0..<20 where frontmostProcessID() != pid {
-            await Input.pause(0.05)
-        }
-        guard frontmostProcessID() == pid else {
-            throw ToolError("\(name) did not come to the front, so nothing was pressed.")
-        }
-        var how = "sent the keys"
-        if let item = menuItem(for: chord, pid: pid), item.enabled {
-            _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
-            how = "ran the menu item \(quote(item.title, limit: 60))"
-        } else {
-            await Input.press(chord, to: pid)
-        }
-        await Input.pause(0.25)
-        if let previous = NSRunningApplication(processIdentifier: userApp), !previous.isTerminated {
-            _ = try? AXUIElementCreateApplication(userApp).set(kAXFrontmostAttribute, kCFBooleanTrue)
-            previous.activate(options: [])
-            for _ in 0..<20 where frontmostProcessID() != userApp {
-                await Input.pause(0.05)
+        let front = { SkyLight.frontProcessID() ?? frontmostProcessID() }
+        // Whatever happens from here on, the user's app gets the front back.
+        func restore() async {
+            guard let previous = NSRunningApplication(processIdentifier: userApp), !previous.isTerminated else { return }
+            for _ in 0..<3 where front() != userApp {
+                _ = try? AXUIElementCreateApplication(userApp).set(kAXFrontmostAttribute, kCFBooleanTrue)
+                previous.activate(options: [])
+                for _ in 0..<10 where front() != userApp {
+                    await Input.pause(0.05)
+                }
             }
             if let userTop, topWindow()?.id != userTop,
                let window = AXUIElementCreateApplication(userApp).elements(kAXWindowsAttribute).first(where: { windowID(of: $0) == userTop }) {
                 _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
             }
         }
-        let restored = frontmostProcessID() == userApp ? "gave the front back to \(user)" : "could not give the front back to \(user)"
+        // Since macOS 14 a background process's activate() may be ignored;
+        // the accessibility frontmost attribute is honored. Activation can take
+        // a moment to land.
+        let appElement = AXUIElementCreateApplication(pid)
+        FrontGuard.suspendAll(true)
+        defer { FrontGuard.suspendAll(false) }
+        _ = try? appElement.set(kAXFrontmostAttribute, kCFBooleanTrue)
+        app.activate(options: [])
+        for _ in 0..<40 where front() != pid {
+            await Input.pause(0.05)
+        }
+        guard front() == pid else {
+            await restore()
+            throw ToolError("\(name) did not come to the front, so nothing was pressed.")
+        }
+        // Make sure the shortcut lands in the app's document window.
+        if let window = appElement.element(kAXFocusedWindowAttribute) ?? appElement.elements(kAXWindowsAttribute).first {
+            _ = try? window.set(kAXMainAttribute, kCFBooleanTrue)
+        }
+        // Let the switch settle: the window becomes key and menus revalidate.
+        await Input.pause(0.3)
+        var how: String
+        if let item = menuItem(for: chord, pid: pid), item.enabled {
+            _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+            how = "ran the menu item \(quote(item.title, limit: 60))"
+        } else if front() == pid {
+            // It is the front app now, so a keystroke like a real one reaches it.
+            await Input.pressToFrontApp(chord)
+            how = "pressed \(key)"
+        } else {
+            await restore()
+            throw ToolError("\(name) lost the front before the shortcut, so nothing was pressed.")
+        }
+        await Input.pause(0.3)
+        await restore()
+        let restored = front() == userApp ? "gave the front back to \(user)" : "could not give the front back to \(user)"
         return try await afterAction(app, "With the user's approval, brought \(name) forward for a moment, \(how), and \(restored).")
     }
 
