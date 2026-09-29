@@ -23,3 +23,18 @@ struct EmergencyStopTests {
         #expect(!EmergencyStop.isStopped)
     }
 }
+
+struct FrontGrantTests {
+    @Test func grantsExpireAndRevoke() {
+        setenv("SKFIY_FRONT_GRANT_FILE", "/tmp/skfiy-grant-test-\(getpid())", 1)
+        defer { FrontGrant.revoke(); unsetenv("SKFIY_FRONT_GRANT_FILE") }
+        #expect(FrontGrant.granted() == nil)
+        FrontGrant.grant(1234, seconds: 30)
+        #expect(FrontGrant.granted() == 1234)
+        FrontGrant.grant(1234, seconds: -1)
+        #expect(FrontGrant.granted() == nil)
+        FrontGrant.grant(99, seconds: 30)
+        FrontGrant.revoke()
+        #expect(FrontGrant.granted() == nil)
+    }
+}

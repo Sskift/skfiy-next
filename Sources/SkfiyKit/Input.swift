@@ -215,7 +215,10 @@ enum Input {
             (0, eventNumber), (1, clickState), (3, buttonNumber), (7, subtype), (40, Int64(pid)),
             (51, Int64(windowID)), (58, group), (91, Int64(windowID)), (92, Int64(windowID))
         ]
-        SkyLight.setWindowLocation?(event, point.x, point.y)
+        // The location within the window: AppKit views work it out from the
+        // screen location, but WebKit reads this field.
+        let origin = windowOrigin(windowID)
+        SkyLight.setWindowLocation?(event, point.x - origin.x, point.y - origin.y)
         for (field, value) in fields {
             if let setIntegerField = SkyLight.setIntegerField {
                 setIntegerField(event, field, value)
@@ -374,6 +377,17 @@ enum Input {
     }
 }
 
+/// A window's top-left corner in screen points, for the few events a call
+/// posts (cheap enough to look up per event).
+func windowOrigin(_ windowID: CGWindowID) -> CGPoint {
+    guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]])?.first,
+          let dictionary = info[kCGWindowBounds as String] as? NSDictionary,
+          let bounds = CGRect(dictionaryRepresentation: dictionary) else {
+        return .zero
+    }
+    return bounds.origin
+}
+
 /// The WindowServer id of a window element.
 func windowID(of window: AXUIElement) -> CGWindowID? {
     var id: CGWindowID = 0
@@ -481,26 +495,9 @@ final class FrontGuard: @unchecked Sendable {
         return Date() < deadline
     }
 
-    /// While run_in_front has the user's approval to bring an app forward,
-    /// guards still lingering from earlier calls must not send it back.
-    nonisolated(unsafe) private static var suspended = false
-    private static let suspension = NSLock()
-
-    static func suspendAll(_ value: Bool) {
-        suspension.lock()
-        suspended = value
-        suspension.unlock()
-    }
-
-    private static var isSuspended: Bool {
-        suspension.lock()
-        defer { suspension.unlock() }
-        return suspended
-    }
-
     private func poll() {
-        guard !Self.isSuspended else { return }
-        guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp else { return }
+        guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp,
+              front != FrontGrant.granted() else { return }
         // Another app may be the user's own choice; the target app never is.
         guard front == target || !userMayHaveSwitched(since: started),
               let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }
@@ -514,5 +511,35 @@ final class FrontGuard: @unchecked Sendable {
         guard allowed else { return }
         _ = try? AXUIElementCreateApplication(userApp).set(kAXFrontmostAttribute, kCFBooleanTrue)
         app.activate(options: [])
+    }
+}
+
+/// An app run_in_front may keep in front, with the user's approval. It is a
+/// file, so guards of every skfiy process (other sessions included) leave that
+/// app alone instead of sending it straight back.
+enum FrontGrant {
+    static var file: URL {
+        if let path = ProcessInfo.processInfo.environment["SKFIY_FRONT_GRANT_FILE"] {
+            return URL(fileURLWithPath: path)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches/skfiy/front-grant")
+    }
+
+    static func grant(_ pid: pid_t, seconds: Double) {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? "\(pid) \(Date().timeIntervalSince1970 + seconds)".write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    static func revoke() {
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// The granted app, while the grant lasts.
+    static func granted() -> pid_t? {
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let fields = text.split(separator: " ")
+        guard fields.count == 2, let pid = pid_t(fields[0]), let until = Double(fields[1]),
+              Date().timeIntervalSince1970 < until else { return nil }
+        return pid
     }
 }
