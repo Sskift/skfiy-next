@@ -8,6 +8,7 @@ running (so no real documents are touched); it is quit without saving.
     swift build && python3 scripts/smoke_textedit.py [path/to/skfiy]
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -102,6 +103,12 @@ def frontmost():
     return info.strip()
 
 
+def pasteboard_change_count():
+    # Only the change counter, never the clipboard's content.
+    script = 'ObjC.import("AppKit"); $.NSPasteboard.generalPasteboard.changeCount'
+    return subprocess.run(["osascript", "-l", "JavaScript", "-e", script], capture_output=True, text=True).stdout.strip()
+
+
 def check(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -150,6 +157,18 @@ def main():
         state = client.call("get_app_state")
         check(text_value(state).startswith("Hello, world"), "cursor_after + press_key inserted a comma")
 
+        # Copy and paste go through skfiy's own clipboard; the user's is never touched.
+        clipboard_before = pasteboard_change_count()
+        area = find(state, r"\] TextArea")
+        client.call("select_text", element_index=area, text="Hello")
+        client.call("press_key", key="cmd+c")
+        client.call("select_text", element_index=area, text="world", selection="cursor_after")
+        client.call("type_text", text=" ")
+        client.call("press_key", key="cmd+v")
+        state = client.call("get_app_state")
+        check(text_value(state).startswith("Hello, world Hello"), "cmd+c, cmd+v copied and pasted text")
+        check(pasteboard_change_count() == clipboard_before, "the user's clipboard was not touched")
+
         area = find(state, r"\] TextArea")
         client.call("set_value", element_index=area, value="set by accessibility")
         state = client.call("get_app_state")
@@ -187,18 +206,25 @@ def main():
         state = client.call("get_app_state")
         check(text_value(state) == "alpha\nbeta\ngammaX", f"pixel click moved the caret: {text_value(state)!r}")
 
+        # Saving to a path goes through Apple Events, never a Save panel.
+        saved = f"/tmp/skfiy-smoke-{os.getpid()}.rtf"
+        client.call("save_document", path=saved)
+        written = open(saved, errors="replace").read() if os.path.exists(saved) else ""
+        check("gammaX" in written, f"save_document wrote {saved}")
+        client.call("save_document", path=saved, expect_error=True)
+        check(os.path.getsize(saved) == len(written.encode()), "save_document refused to overwrite without overwrite: true")
+
         client.call("click", x=5000, y=5000, expect_error=True)
         client.call("click", element_index="99999", expect_error=True)
         client.call("press_key", key="hyper+q", expect_error=True)
 
+        # The document is saved now, so closing it asks nothing.
         client.call("press_key", key="cmd+w")
-        state = client.call("get_app_state")
-        dont_save = find(state, r'Button "(Delete|Don.t Save|不存储|删除)"')
-        client.call("click", element_index=dont_save)
         client.call("press_key", key="cmd+q")
         time.sleep(1)
+        os.remove(saved)
         gone = subprocess.run(["pgrep", "-x", APP], capture_output=True).returncode != 0
-        check(gone, "closed without saving and quit TextEdit")
+        check(gone, "closed the saved document and quit TextEdit")
         check("TextEdit" not in frontmost(), f"TextEdit never came to the front (front app now: {frontmost()})")
         print("PASS")
     finally:

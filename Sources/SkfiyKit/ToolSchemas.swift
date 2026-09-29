@@ -156,6 +156,27 @@ enum ToolSchemas {
                 "app": ["type": "string", "description": "App to open it with; defaults to the file's default app"]
             ],
             required: ["path"]
+        ),
+        tool(
+            "save_document",
+            "Save one of an app's documents to a file path, in the background, without a Save panel (those panels cannot be driven in the background, and cmd+s is disabled there). Works for scriptable document apps such as TextEdit, Preview, Pages, Numbers and Keynote, when skfiy may already send them Apple Events. Existing files are not overwritten unless overwrite is true.",
+            properties: [
+                "app": app,
+                "path": ["type": "string", "description": "Absolute path to save to, with the extension the app uses (e.g. .rtf or .txt for TextEdit); ~ is expanded"],
+                "document": ["type": "string", "description": "Document name (window title) to save; defaults to the app's front document"],
+                "overwrite": ["type": "boolean", "description": "Replace an existing file at path (default false)"]
+            ],
+            required: ["app", "path"]
+        ),
+        tool(
+            "run_in_front",
+            "Press a keyboard shortcut that only works while the app is frontmost (formatting such as cmd+b, Undo, Find, Save…), by bringing the app forward for about a second. The user is asked to approve it first; skfiy then waits until they stop typing and restores their front app and window order right after. Use it only when press_key said the command needs the app in front, and never ask again after the user declines.",
+            properties: [
+                "app": app,
+                "key": ["type": "string", "description": "Key or chord in xdotool syntax, e.g. \"super+b\""],
+                "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"make the title bold\""]
+            ],
+            required: ["app", "key", "reason"]
         )
     ]
 
@@ -247,8 +268,8 @@ enum ToolSchemas {
     Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
     - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.
-    - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder.
-    - Commands that act on the current selection or document (formatting, Save, Undo) only work in the frontmost app; when a task needs one, say so rather than retrying. Terminals and the app hosting you never receive input.
+    - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder; to save one to a path, use save_document rather than a Save panel.
+    - Commands that act on the current selection or document (formatting, Undo, Find) only work in the frontmost app; when a task needs one, use run_in_front, which asks the user first, or say so. Do not retry them with press_key. Terminals and the app hosting you never receive input.
     - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
     - Everything runs in the background: the user keeps their front app, window order, cursor, clipboard and keyboard focus, and can keep typing. Hidden or minimized apps are not brought forward (no screenshot, but element actions still work).
     - A background mouse click reaches most controls; if a view ignores it (the screenshot shows no change), use an element_index, set_value/select_text, or keyboard shortcuts instead.

@@ -1,6 +1,6 @@
 import Foundation
 
-public let skfiyVersion = "0.2.0"
+public let skfiyVersion = "0.3.0"
 
 /// Executes tools for the MCP server; the real one is `ComputerUse`.
 @MainActor
@@ -19,6 +19,11 @@ public final class MCPServer {
     private let executor: ToolExecutor
     private let tools: [[String: Any]]
     private let write: (Data) -> Void
+    /// What the client announced in initialize (e.g. elicitation support).
+    private var clientCapabilities: [String: Any] = [:]
+    /// Requests this server sent to the client, waiting for their responses.
+    private var pending: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
+    private var nextRequest = 0
 
     public init(executor: ToolExecutor, write: @escaping (Data) -> Void = MCPServer.writeToStdout) {
         self.executor = executor
@@ -36,7 +41,13 @@ public final class MCPServer {
         let lines = AsyncStream<String> { continuation in
             let thread = Thread {
                 while let line = readLine(strippingNewline: true) {
-                    continuation.yield(line)
+                    // Answers to our own requests (such as asking the user) arrive
+                    // while a tool call is still running, so they skip the queue.
+                    if let response = Self.clientResponse(line) {
+                        Task { @MainActor in self.deliver(response) }
+                    } else {
+                        continuation.yield(line)
+                    }
                 }
                 continuation.finish()
             }
@@ -65,7 +76,9 @@ public final class MCPServer {
                 }
             }
         } else if let object = message as? [String: Any] {
-            if let response = await respond(to: object) {
+            if object["method"] == nil, object["result"] != nil || object["error"] != nil {
+                deliver(object)
+            } else if let response = await respond(to: object) {
                 send(response)
             }
         } else {
@@ -92,6 +105,7 @@ public final class MCPServer {
 
         switch method {
         case "initialize":
+            clientCapabilities = params["capabilities"] as? [String: Any] ?? [:]
             let requested = params["protocolVersion"] as? String ?? ""
             let version = Self.supportedProtocolVersions.contains(requested)
                 ? requested
@@ -131,6 +145,53 @@ public final class MCPServer {
         default:
             return failure(-32601, "Method not found: \(method)")
         }
+    }
+
+    // MARK: Asking the user
+
+    /// Asks the user a yes/no question through the client (MCP elicitation).
+    /// nil when the client cannot ask or no answer came in time.
+    public func confirm(_ message: String, timeout: TimeInterval = 180) async -> Bool? {
+        guard clientCapabilities["elicitation"] != nil else { return nil }
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": ["allow": ["type": "boolean", "title": "Allow", "default": false]],
+            "required": ["allow"]
+        ]
+        guard let response = await request("elicitation/create", ["message": message, "requestedSchema": schema], timeout: timeout),
+              let result = response["result"] as? [String: Any] else {
+            return nil
+        }
+        let content = result["content"] as? [String: Any]
+        return result["action"] as? String == "accept" && content?["allow"] as? Bool == true
+    }
+
+    /// Sends a request to the client and waits for its response.
+    func request(_ method: String, _ params: [String: Any], timeout: TimeInterval) async -> [String: Any]? {
+        nextRequest += 1
+        let id = "skfiy-\(nextRequest)"
+        return await withCheckedContinuation { continuation in
+            pending[id] = continuation
+            send(["jsonrpc": "2.0", "id": id, "method": method, "params": params])
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self.pending.removeValue(forKey: id)?.resume(returning: nil)
+            }
+        }
+    }
+
+    private func deliver(_ response: [String: Any]) {
+        guard let id = response["id"].map({ "\($0)" }) else { return }
+        pending.removeValue(forKey: id)?.resume(returning: response)
+    }
+
+    nonisolated static func clientResponse(_ line: String) -> [String: Any]? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["method"] == nil, object["id"] != nil, object["result"] != nil || object["error"] != nil else {
+            return nil
+        }
+        return object
     }
 
     private func send(_ object: [String: Any]) {

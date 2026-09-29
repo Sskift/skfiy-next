@@ -39,6 +39,10 @@ public final class ComputerUse {
     private let directory = AppDirectory()
     private var sessions: [pid_t: AppSession] = [:]
     private var accessibilityEnabled: Set<pid_t> = []
+    /// Text copied with cmd+c / cmd+x. The system clipboard belongs to the user.
+    private var clipboard: String?
+    /// Asks the user a yes/no question through the client; nil when it cannot.
+    public var askUser: ((String) async -> Bool?)?
     private let settleDelay: Double
 
     public init() {
@@ -47,7 +51,7 @@ public final class ComputerUse {
 
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
-        "select_text", "scroll", "drag", "press_key", "type_text", "open_file"
+        "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "run_in_front"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -70,6 +74,8 @@ public final class ComputerUse {
             case "press_key": return try await keepingFront(args) { try await self.pressKey(args) }
             case "type_text": return try await keepingFront(args) { try await self.typeText(args) }
             case "open_file": return try await keepingFront(args) { try await self.openFile(args) }
+            case "save_document": return try await keepingFront(args) { try await self.saveDocument(args) }
+            case "run_in_front": return try await runInFront(args)
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
             }
@@ -100,7 +106,7 @@ public final class ComputerUse {
         }
         let userTop = topWindow().flatMap { $0.pid == before ? $0.id : nil }
         let overlaysBefore = Set(target.map { overlayWindows(of: $0.processIdentifier) } ?? [])
-        let guardian = FrontGuard(userApp: before)
+        let guardian = FrontGuard(userApp: before, target: target?.processIdentifier)
         var result: ToolResult
         do {
             result = try await body()
@@ -109,7 +115,7 @@ public final class ComputerUse {
             guardian.stop()
             throw error
         }
-        let taker = guardian.stop()
+        let taker = guardian.stop(lingering: 2)
         let user = NSRunningApplication(processIdentifier: before)?.localizedName ?? "your app"
         var notes: [String] = []
         if let taker {
@@ -146,7 +152,8 @@ public final class ComputerUse {
 
     /// Tools that send input; get_app_state and scroll only look and move the view.
     static let inputTools: Set<String> = [
-        "click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key", "type_text", "open_file"
+        "click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key", "type_text", "open_file",
+        "save_document", "run_in_front"
     ]
 
     private lazy var hostProcesses = ancestorProcessIDs()
@@ -221,6 +228,120 @@ public final class ComputerUse {
         await Input.pause(max(settleDelay, 0.8))
         let name = app.localizedName ?? appURL.deletingPathExtension().lastPathComponent
         return ToolResult(text: "Opened \(path) in \(name) in the background. Call get_app_state with app \"\(app.bundleIdentifier ?? name)\" to see it.")
+    }
+
+    // MARK: - run_in_front
+
+    /// The one exception to working in the background: a shortcut that only
+    /// works in the frontmost app, run after the user approves it in the
+    /// client, in a quiet moment, with their front app and top window put back.
+    func runInFront(_ args: Arguments) async throws -> ToolResult {
+        let query = try args.requiredString("app")
+        guard case .running(let app) = try directory.resolve(query) else {
+            throw ToolError("\(query) is not running.")
+        }
+        let key = try args.requiredString("key")
+        let chord = try parseKeyChord(key)
+        try checkInputTarget(app)
+        let pid = app.processIdentifier
+        let name = app.localizedName ?? query
+        guard let userApp = frontmostProcessID() else {
+            throw ToolError("Could not tell which app is in front.")
+        }
+        guard userApp != pid else {
+            throw ToolError("\(name) is already the front app; use press_key.")
+        }
+        guard let askUser else {
+            throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them. Tell the user what needs doing instead.")
+        }
+        let user = NSRunningApplication(processIdentifier: userApp)?.localizedName ?? "your app"
+        let reason = args.string("reason").map { " (\($0))" } ?? ""
+        let message = "skfiy wants to bring \(name) to the front for about a second to press \(key)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
+        switch await askUser(message) {
+        case nil:
+            throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them (or no answer came). Tell the user what needs doing instead.")
+        case false?:
+            throw ToolError("The user declined bringing \(name) to the front. Do not ask again for the same thing; tell them what is left to do.")
+        case true?:
+            break
+        }
+        // A quiet moment: no typing or clicking for a second, within 15 s.
+        var quiet = false
+        for _ in 0..<60 {
+            if Input.userIdleSeconds() >= 1 { quiet = true; break }
+            await Input.pause(0.25)
+        }
+        guard quiet else {
+            throw ToolError("The user kept typing or clicking, so \(name) was not brought forward. Try again later.")
+        }
+        let userTop = topWindow().flatMap { $0.pid == userApp ? $0.id : nil }
+        app.activate(options: [])
+        for _ in 0..<20 where frontmostProcessID() != pid {
+            await Input.pause(0.05)
+        }
+        guard frontmostProcessID() == pid else {
+            throw ToolError("\(name) did not come to the front, so nothing was pressed.")
+        }
+        var how = "sent the keys"
+        if let item = menuItem(for: chord, pid: pid), item.enabled {
+            _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+            how = "ran the menu item \(quote(item.title, limit: 60))"
+        } else {
+            await Input.press(chord, to: pid)
+        }
+        await Input.pause(0.25)
+        if let previous = NSRunningApplication(processIdentifier: userApp), !previous.isTerminated {
+            _ = try? AXUIElementCreateApplication(userApp).set(kAXFrontmostAttribute, kCFBooleanTrue)
+            previous.activate(options: [])
+            for _ in 0..<20 where frontmostProcessID() != userApp {
+                await Input.pause(0.05)
+            }
+            if let userTop, topWindow()?.id != userTop,
+               let window = AXUIElementCreateApplication(userApp).elements(kAXWindowsAttribute).first(where: { windowID(of: $0) == userTop }) {
+                _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            }
+        }
+        let restored = frontmostProcessID() == userApp ? "gave the front back to \(user)" : "could not give the front back to \(user)"
+        return try await afterAction(app, "With the user's approval, brought \(name) forward for a moment, \(how), and \(restored).")
+    }
+
+    // MARK: - save_document
+
+    /// Saves through the app's scripting interface: the standard suite's
+    /// `save … in`, which needs no Save panel and no front app.
+    func saveDocument(_ args: Arguments) async throws -> ToolResult {
+        let query = try args.requiredString("app")
+        guard case .running(let app) = try directory.resolve(query) else {
+            throw ToolError("\(query) is not running.")
+        }
+        let path = (try args.requiredString("path").trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else {
+            throw ToolError("\"path\" must be an absolute path.")
+        }
+        var isDirectory: ObjCBool = false
+        let parent = (path as NSString).deletingLastPathComponent
+        guard FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw ToolError("The folder \(parent) does not exist.")
+        }
+        let overwrite = (args.values["overwrite"] as? Bool) ?? false
+        if FileManager.default.fileExists(atPath: path), !overwrite {
+            throw ToolError("\(path) already exists; pass overwrite: true to replace it, or choose another path.")
+        }
+        guard let bundleID = app.bundleIdentifier, mayAutomate(bundleID) else {
+            throw ToolError("skfiy may not send Apple Events to \(app.localizedName ?? query) without a permission prompt (which would pop up over the user's work), so it cannot save there. Tell the user; they can save it themselves or allow automation of this app for their terminal in System Settings → Privacy & Security → Automation.")
+        }
+        let escape = { (text: String) in text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") }
+        let document = args.string("document").map { "document \"\(escape($0))\"" } ?? "document 1"
+        var error: NSDictionary?
+        _ = NSAppleScript(source: "tell application id \"\(bundleID)\" to save \(document) in POSIX file \"\(escape(path))\"")?
+            .executeAndReturnError(&error)
+        if let error {
+            throw ToolError("\(app.localizedName ?? query) could not save: \(error[NSAppleScript.errorMessage] as? String ?? "unknown error"). It may not be scriptable, or has no such document.")
+        }
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw ToolError("\(app.localizedName ?? query) reported no error, but nothing was written to \(path).")
+        }
+        return try await afterAction(app, "Saved \(args.string("document").map { quote($0, limit: 60) } ?? "the front document") of \(app.localizedName ?? query) to \(path).")
     }
 
     /// Finder shows a folder opened through Launch Services in one of the
@@ -910,6 +1031,9 @@ public final class ComputerUse {
         // itself. Items that depend on the focused document or text (Save,
         // Select All, Close) are disabled while the app is in the background;
         // the common ones are done through accessibility instead.
+        if let how = try clipboardShortcut(chord, pid: pid) {
+            return try await afterAction(app, "Pressed \(key): \(how).")
+        }
         var disabledItem: String?
         if !chord.modifiers.isDisjoint(with: [.command, .control]) {
             if let item = menuItem(for: chord, pid: pid) {
@@ -941,7 +1065,7 @@ public final class ComputerUse {
         await Input.press(chord, repeat: count, to: pid)
         var message = "Pressed \(key)" + (count > 1 ? " ×\(count)" : "") + " (sent to the app in the background)."
         if let disabledItem {
-            message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut did nothing. Commands that act on the current selection or document (formatting, Save, Undo…) only work in the frontmost app, and toolbar buttons for them are ignored in the background too. skfiy does not bring apps forward; if the task needs such a command, say so instead of retrying."
+            message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut did nothing. Commands that act on the current selection or document (formatting, Save, Undo…) only work in the frontmost app, and toolbar buttons for them are ignored in the background too. skfiy does not bring apps forward on its own; use run_in_front, which asks the user first, or say what is left to do instead of retrying."
         }
         return try await afterAction(app, message)
     }
@@ -1258,6 +1382,35 @@ public final class ComputerUse {
 
     /// Standard shortcuts that need the app to be active, done through
     /// accessibility on the focused element or window.
+    /// cmd+c, cmd+x and cmd+v work on skfiy's own clipboard, in any app, so
+    /// the user's clipboard is never read or overwritten.
+    private func clipboardShortcut(_ chord: KeyChord, pid: pid_t) throws -> String? {
+        guard chord.modifiers == .command, let character = chord.baseCharacter, "cxv".contains(character) else { return nil }
+        let focused = AXUIElementCreateApplication(pid).element(kAXFocusedUIElementAttribute)
+        guard let text = focused, Self.textRoles.contains(text.string(kAXRoleAttribute) ?? "")
+                || text.value(kAXSelectedTextRangeAttribute) != nil else {
+            throw ToolError("skfiy copies and pastes text only, with a clipboard of its own, and never uses the user's clipboard; the focused element is not text. Move files with open_file or the app's own commands instead.")
+        }
+        switch character {
+        case "c", "x":
+            guard let selected = text.string(kAXSelectedTextAttribute), !selected.isEmpty else {
+                throw ToolError("Nothing is selected in the focused field; select text first (select_text).")
+            }
+            clipboard = selected
+            if character == "x" {
+                try text.set(kAXSelectedTextAttribute, "" as CFString)
+            }
+            let verb = character == "x" ? "cut" : "copied"
+            return "\(verb) \(quote(selected, limit: 60)) to skfiy's own clipboard (the user's clipboard is untouched); cmd+v pastes it in any app"
+        default:
+            guard let clipboard else {
+                throw ToolError("skfiy's clipboard is empty: it never reads the user's clipboard. Copy text with cmd+c first, or type it with type_text.")
+            }
+            try text.set(kAXSelectedTextAttribute, clipboard as CFString)
+            return "pasted \(quote(clipboard, limit: 60)) from skfiy's own clipboard (accessibility)"
+        }
+    }
+
     private func emulateShortcut(_ chord: KeyChord, pid: pid_t) throws -> String? {
         guard chord.modifiers == .command, let character = chord.baseCharacter else { return nil }
         let appElement = AXUIElementCreateApplication(pid)
@@ -1273,19 +1426,6 @@ public final class ComputerUse {
             let length = (text.string(kAXValueAttribute) as NSString?)?.length ?? 0
             try setSelection(text, CFRange(location: 0, length: length))
             return "selected all text in the focused field"
-        case "c", "x":
-            guard let text, let selected = text.string(kAXSelectedTextAttribute), !selected.isEmpty else { return nil }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(selected, forType: .string)
-            if character == "x" {
-                try text.set(kAXSelectedTextAttribute, "" as CFString)
-                return "cut the selected text to the clipboard"
-            }
-            return "copied the selected text to the clipboard"
-        case "v":
-            guard let text, let clipboard = NSPasteboard.general.string(forType: .string) else { return nil }
-            try text.set(kAXSelectedTextAttribute, clipboard as CFString)
-            return "pasted the clipboard text into the focused field"
         case "w":
             guard let close = window?.element(kAXCloseButtonAttribute) else { return nil }
             try close.perform(kAXPressAction)

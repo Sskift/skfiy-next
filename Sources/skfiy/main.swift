@@ -88,8 +88,13 @@ case "install-browser-bridge":
     }
 
 case "mcp":
+    Instance.runFromOwnLink()
+    atexit { Instance.removeOwnLink() }
     MainActor.assumeIsolated {
-        MCPServer(executor: ComputerUse()).start()
+        let computerUse = ComputerUse()
+        let server = MCPServer(executor: computerUse)
+        computerUse.askUser = { [weak server] message in await server?.confirm(message) }
+        server.start()
     }
     RunLoop.main.run()
 
