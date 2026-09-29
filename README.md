@@ -20,7 +20,7 @@ macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，
 
 ## 工具
 
-前 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；`zoom`、`open_file`、`save_document`、`run_in_front`、`wait_for` 是 skfiy 额外加的。
+前 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；`zoom`、`open_file`、`save_document`、`run_in_front`、`file_dialog`、`wait_for` 是 skfiy 额外加的。
 
 | 工具 | 作用 |
 | --- | --- |
@@ -36,8 +36,9 @@ macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，
 | `type_text` | 向当前焦点输入文字 |
 | `zoom` | 按截图坐标取一块区域的原始分辨率图像（Retina 下 2 倍），用来看清小字 |
 | `open_file` | 在后台用指定应用打开文件或文件夹，不经过"打开"面板（后台应用的打开/存储面板操作不了） |
-| `save_document` | 把应用的文档存到指定路径，不经过"存储"面板（TextEdit、预览、Pages 等可脚本化的应用；默认不覆盖已有文件） |
+| `save_document` | 把应用的前台文档存到指定路径：可脚本化的应用（TextEdit、预览、Pages 等）走 Apple Event；其他应用从"另存为…"菜单打开自己的存储面板，再像 `file_dialog` 那样填好；默认不覆盖已有文件 |
 | `run_in_front` | 唯一会把应用提到前台的工具：只用于必须在前台才生效的快捷键（加粗、撤销、查找…），先在 Claude Code 里征得你同意，等你停手后提前约一秒，随即还原你的前台和窗口层级 |
+| `file_dialog` | 填写应用正显示的"打开"或"存储"面板：经面板的边栏和分栏一级级走到目标位置，存储时填好文件名，再按"打开"/"存储"，全程在后台（后台发的按键到不了这类面板）。用于附加/插入文件、Safari 里上传、以及 `save_document` 脚本不了的应用 |
 | `wait_for` | 不发送任何输入，等某段文字在窗口里出现（或 `gone` 时消失），不给文字则等窗口停止变化；满足后返回新状态，超时报错并附当前状态。用来代替反复调 `get_app_state` |
 
 浏览器插件连上后多出 13 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
@@ -100,7 +101,11 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 - 应用自己激活自己只能事后纠正、无法事先阻止：它会在前台停留十几毫秒（实测 13 ms），这期间你敲的键可能落到它那里。
 - SkyLight 与 `_AXUIElementGetWindow` 是私有接口，运行时动态查找；缺失时退回公开 API。
 - `SKFIY_BRIEF_FOCUS` 会在你空闲时短暂改变键盘焦点，所以默认关闭。实测时以 10 毫秒间隔采样你前台应用的焦点窗口和焦点元素，全程没有变化；但没法模拟你真的在打字，所以仍按"有风险"对待。
-- 沙盒应用的"打开/存储"面板由另一个系统进程提供，后台投递给应用的按键到不了它：打开文档用 `open_file`，保存用 `save_document`（需要终端已有控制该应用的"自动化"权限；没有的话不会弹窗申请，而是如实说明）。
+- 沙盒应用的"打开/存储"面板由另一个系统进程提供，后台投递给应用的按键到不了它（直接发给那个进程也不行）。不过面板的辅助功能树挂在应用自己名下：`file_dialog` 选中边栏里的位置，再在分栏里逐级设置选中项，最后按面板的"好"按钮，都不需要按键和焦点。限制：
+  - 只支持分栏视图（面板记住的是用户上次选的视图）；
+  - 隐藏的位置（`/tmp`、`~/Library`、以点开头的文件夹）在面板里看不到，也就选不了，工具会直接说明；
+  - 名字栏里的 `/` 会被存成 `:`，所以位置一定靠导航，不靠在名字里写路径；
+  - 文档类应用的"存储…"在后台是禁用的，这时要先用 `run_in_front`（经你同意）把存储面板打开，再用 `file_dialog` 在后台填完。
 - ScreenCaptureKit 同一时间只服务同一路径的一个进程，所以每个 `skfiy mcp` 进程都从 `~/Library/Caches/skfiy/instances/` 下自己的硬链接运行，多个 Claude Code 会话可以同时截图；截图不会卡住工具：
   - 屏幕锁定、屏保运行或显示器睡眠时，截图服务会拒绝（报"用户拒绝"）或不回应，skfiy 直接说明原因，元素树照常返回；
   - 截图服务偶尔会停止回应，有时持续一分钟左右。3 秒没回应就先不带截图返回，之后改由一个临时的子进程截图（进程内的截图服务卡住后不会恢复，新进程往往正常）；
@@ -132,6 +137,7 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 make build          # swift build
 make test           # 单元测试（swift-testing）
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
+make smoke-fixture  # 自建的小应用（窗口放在所有窗口之后）：悬停提示、打开/存储面板、自绘视图的点击
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
 make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变
 python3 scripts/smoke_browser.py ~/.local/bin/skfiy --user-browser   # 同上，但跑在你自己的 Chrome 里：只用自己开的后台标签页，不用调试接口（需先起测试页服务，见 scripts/test_browser.sh）

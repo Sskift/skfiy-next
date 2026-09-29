@@ -5,7 +5,7 @@ TEST_FLAGS := $(if $(wildcard $(TESTING_PLUGINS)),-Xswiftc -plugin-path -Xswiftc
 PREFIX ?= $(HOME)/.local
 EXTENSION_DIR := $(HOME)/Library/Application Support/skfiy/browser-extension
 
-.PHONY: build release test smoke smoke-web smoke-browser install clean
+.PHONY: build release test smoke smoke-fixture smoke-web smoke-browser install clean
 
 build:
 	swift build
@@ -19,6 +19,10 @@ test:
 # Drives TextEdit in the background through the MCP server (TextEdit must not be running).
 smoke: build
 	python3 scripts/smoke_textedit.py .build/debug/skfiy
+
+# Tooltips, file panels and custom-drawn views, against a small app built into /tmp.
+smoke-fixture: build
+	python3 scripts/smoke_fixture.py .build/debug/skfiy
 
 # Web pages through the app tools, in a throwaway Chrome for Testing.
 smoke-web: build

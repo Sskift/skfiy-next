@@ -54,7 +54,7 @@ public final class ComputerUse {
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "wait_for"
+        "file_dialog", "wait_for"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -84,6 +84,7 @@ public final class ComputerUse {
             case "run_in_front": return try await runInFront(args)
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
+            case "file_dialog": return try await keepingFront(args) { try await self.fileDialog(args) }
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
             }
@@ -161,7 +162,7 @@ public final class ComputerUse {
     /// Tools that send input; get_app_state and scroll only look and move the view.
     static let inputTools: Set<String> = [
         "click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key", "type_text", "open_file",
-        "save_document", "run_in_front"
+        "save_document", "run_in_front", "file_dialog"
     ]
 
     private lazy var hostProcesses = ancestorProcessIDs()
@@ -343,6 +344,25 @@ public final class ComputerUse {
         return state
     }
 
+    // MARK: - file_dialog
+
+    /// Fills in the Open or Save panel an app is showing, in the background.
+    func fileDialog(_ args: Arguments) async throws -> ToolResult {
+        let (app, _) = try target(args)
+        try checkInputTarget(app)
+        let path = (try args.requiredString("path").trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else {
+            throw ToolError("\"path\" must be an absolute path.")
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let panel = FilePanel.find(in: appElement) else {
+            throw ToolError("\(app.localizedName ?? "The app") is not showing an Open or Save panel. Open one first (its menu item or button), or use open_file / save_document, which need no panel.")
+        }
+        let overwrite = (args.values["overwrite"] as? Bool) ?? false
+        let summary = try await panel.choose(URL(fileURLWithPath: path), overwrite: overwrite, in: appElement)
+        return try await afterAction(app, summary)
+    }
+
     // MARK: - run_in_front
 
     /// The one exception to working in the background: a shortcut that only
@@ -466,8 +486,10 @@ public final class ComputerUse {
         if FileManager.default.fileExists(atPath: path), !overwrite {
             throw ToolError("\(path) already exists; pass overwrite: true to replace it, or choose another path.")
         }
+        let name = app.localizedName ?? query
         guard let bundleID = app.bundleIdentifier, mayAutomate(bundleID) else {
-            throw ToolError("skfiy may not send Apple Events to \(app.localizedName ?? query) without a permission prompt (which would pop up over the user's work), so it cannot save there. Tell the user; they can save it themselves or allow automation of this app for their terminal in System Settings → Privacy & Security → Automation.")
+            return try await saveThroughPanel(app, path: path, overwrite: overwrite,
+                why: "skfiy may not send Apple Events to \(name) without a permission prompt (which would pop up over the user's work), so it cannot script the save.")
         }
         let escape = { (text: String) in text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") }
         let document = args.string("document").map { "document \"\(escape($0))\"" } ?? "document 1"
@@ -475,12 +497,49 @@ public final class ComputerUse {
         _ = NSAppleScript(source: "tell application id \"\(bundleID)\" to save \(document) in POSIX file \"\(escape(path))\"")?
             .executeAndReturnError(&error)
         if let error {
-            throw ToolError("\(app.localizedName ?? query) could not save: \(error[NSAppleScript.errorMessage] as? String ?? "unknown error"). It may not be scriptable, or has no such document.")
+            let reason = error[NSAppleScript.errorMessage] as? String ?? "unknown error"
+            guard args.string("document") == nil else {
+                throw ToolError("\(name) could not save: \(reason). It may not be scriptable, or has no such document.")
+            }
+            return try await saveThroughPanel(app, path: path, overwrite: overwrite, why: "\(name) could not save through scripting (\(reason)).")
         }
         guard FileManager.default.fileExists(atPath: path) else {
             throw ToolError("\(app.localizedName ?? query) reported no error, but nothing was written to \(path).")
         }
         return try await afterAction(app, "Saved \(args.string("document").map { quote($0, limit: 60) } ?? "the front document") of \(app.localizedName ?? query) to \(path).")
+    }
+
+    /// Saves the front document through the app's own Save panel, opened
+    /// from a menu item that always shows one: Save As…, Save… for an untitled
+    /// document (for a saved one it would overwrite its file), or ⇧⌘S in apps
+    /// without Save As… (in document apps that is Duplicate).
+    private func saveThroughPanel(_ app: NSRunningApplication, path: String, overwrite: Bool, why: String) async throws -> ToolResult {
+        let pid = app.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        if FilePanel.find(in: appElement) == nil {
+            let saveAs = menuItem(for: try parseKeyChord("cmd+alt+shift+s"), pid: pid)
+            let untitled = appElement.element(kAXFocusedWindowAttribute).map { nonEmpty($0.string(kAXDocumentAttribute)) == nil } ?? false
+            let candidates = [saveAs, untitled ? menuItem(for: try parseKeyChord("cmd+s"), pid: pid) : nil,
+                              saveAs == nil ? menuItem(for: try parseKeyChord("cmd+shift+s"), pid: pid) : nil].compactMap { $0 }
+            guard let item = candidates.first(where: \.enabled) else {
+                let shortcut = saveAs != nil ? "cmd+alt+shift+s" : (untitled ? "cmd+s" : "cmd+shift+s")
+                throw ToolError(candidates.isEmpty
+                    ? "\(why) It has no Save menu item that opens a Save panel. Tell the user what is left to do."
+                    : "\(why) Its \(quote(candidates[0].title, limit: 40)) menu item is disabled while it is in the background. Open the Save panel with run_in_front (key \"\(shortcut)\", which asks the user), then call file_dialog with this path.")
+            }
+            _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+            for _ in 0..<20 where FilePanel.find(in: appElement) == nil {
+                await Input.pause(0.15)
+            }
+            guard FilePanel.find(in: appElement) != nil else {
+                throw ToolError("\(why) Pressed its \(quote(item.title, limit: 40)) menu item, but no Save panel appeared.")
+            }
+        }
+        guard let panel = FilePanel.find(in: appElement), panel.isSave else {
+            throw ToolError("\(app.localizedName ?? "The app") is showing an Open panel, not a Save panel; finish or cancel it first.")
+        }
+        let summary = try await panel.choose(URL(fileURLWithPath: path), overwrite: overwrite, in: appElement)
+        return try await afterAction(app, summary)
     }
 
     /// Finder shows a folder opened through Launch Services in one of the
