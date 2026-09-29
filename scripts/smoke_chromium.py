@@ -175,7 +175,7 @@ def main():
         return status(client)[0] if POINTER else message
 
     case("pointer click on a canvas", click_canvas,
-         r"^canvas (green|orange)$" if POINTER else r"ignore pointer input to web content")
+         r"^canvas (green|orange)$" if POINTER else r"ignores pointer input in background windows")
 
     def choose_option():
         _, tree = status(client)

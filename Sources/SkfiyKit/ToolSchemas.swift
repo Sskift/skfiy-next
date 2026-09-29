@@ -63,7 +63,8 @@ enum ToolSchemas {
                 "y": ["type": "number", "description": "Y coordinate in screenshot pixel coordinates"],
                 "click_count": ["type": "integer", "description": "Number of clicks (1-3). Defaults to 1"],
                 "mouse_button": ["type": "string", "enum": ["left", "right", "middle"], "description": "Mouse button to click. Defaults to left."],
-                "modifiers": ["type": "string", "description": "Modifier keys held during the click, e.g. \"cmd\" or \"shift+alt\""]
+                "modifiers": ["type": "string", "description": "Modifier keys held during the click, e.g. \"cmd\" or \"shift+alt\""],
+                "focus": ["type": "boolean", "description": "For views that ignore background clicks (web content, some custom-drawn views): give the app keyboard focus for about 0.1 s during the click, without bringing it forward and only while the user is not typing. Asks the user once per app. Use it after a background click showed no change"]
             ],
             required: ["app"]
         ),
@@ -121,7 +122,8 @@ enum ToolSchemas {
                 "from_x": ["type": "number", "description": "Start X coordinate"],
                 "from_y": ["type": "number", "description": "Start Y coordinate"],
                 "to_x": ["type": "number", "description": "End X coordinate"],
-                "to_y": ["type": "number", "description": "End Y coordinate"]
+                "to_y": ["type": "number", "description": "End Y coordinate"],
+                "focus": ["type": "boolean", "description": "Give the app keyboard focus for about 0.1 s during the drag, as for click (asks the user once per app)"]
             ],
             required: ["app", "from_x", "from_y", "to_x", "to_y"]
         ),
@@ -185,13 +187,17 @@ enum ToolSchemas {
         ),
         tool(
             "run_in_front",
-            "Press a keyboard shortcut that only works while the app is frontmost (formatting such as cmd+b, Undo, Find, Save…), by bringing the app forward for about a second. The user is asked to approve it first; skfiy then waits until they stop typing and restores their front app and window order right after. Use it only when press_key said the command needs the app in front, and never ask again after the user declines.",
+            "Do what only works while the app is frontmost, by bringing it forward for about a second: press a shortcut (formatting such as cmd+b, Undo, Find, Save…, or cmd+c/cmd+v when the app's Copy/Paste is disabled in the background), choose an item from an element's context menu (or a menu button's menu), or click an element or x/y in a view that ignores clicks while its app is in the background (the click is sent to the app, the user's cursor does not move). The user is asked to approve it first; skfiy then waits until they stop typing and restores their front app and window order right after. Use it only when a background tool said the command needs the app in front or the menu cannot open in the background, and never ask again after the user declines.",
             properties: [
                 "app": app,
                 "key": ["type": "string", "description": "Key or chord in xdotool syntax, e.g. \"super+b\""],
+                "element_index": ["type": "string", "description": "With menu_item: the element whose context menu (or menu button menu) holds the command. Alone: the element to click"],
+                "menu_item": ["type": "string", "description": "Menu item to choose, with submenus separated by \" > \", e.g. \"Share > Mail\""],
+                "x": ["type": "number", "description": "X in the latest screenshot of the app, to click there"],
+                "y": ["type": "number", "description": "Y in the latest screenshot of the app, to click there"],
                 "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"make the title bold\""]
             ],
-            required: ["app", "key", "reason"]
+            required: ["app", "reason"]
         ),
         tool(
             "file_dialog",

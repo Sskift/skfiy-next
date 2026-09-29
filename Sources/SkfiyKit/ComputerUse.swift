@@ -39,6 +39,8 @@ public final class ComputerUse {
     private let directory = AppDirectory()
     private var sessions: [pid_t: AppSession] = [:]
     private var accessibilityEnabled: Set<pid_t> = []
+    /// Apps the user allowed brief focus for, this session.
+    private var focusApproved: Set<pid_t> = []
     /// What cmd+c / cmd+x copied (or read_clipboard took, with the user's
     /// approval). The system clipboard belongs to the user.
     private var clipboard: ClipboardContents?
@@ -375,13 +377,51 @@ public final class ComputerUse {
         guard case .running(let app) = try directory.resolve(query) else {
             throw ToolError("\(query) is not running.")
         }
-        let key = try args.requiredString("key")
-        let chord = try parseKeyChord(key)
         try checkInputTarget(app)
         let pid = app.processIdentifier
         let name = app.localizedName ?? query
+        // A shortcut, an item of an element's context menu, or a click.
+        let key = args.string("key")
+        let menuPath = args.string("menu_item").map { $0.components(separatedBy: CharacterSet(charactersIn: ">›")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+        let index = try args.elementIndex()
+        let hasPoint = args.values["x"] != nil || args.values["y"] != nil
+        var menuElement: AXUIElement?
+        var clickPoint: CGPoint?
+        let action: String
+        if let menuPath, !menuPath.isEmpty {
+            guard key == nil, !hasPoint, let index else {
+                throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
+            }
+            guard let session = sessions[pid] else {
+                throw ToolError("No state for \(name) yet. Call get_app_state first.")
+            }
+            let element = try session.element(index)
+            menuElement = element
+            action = "choose \(quote(menuPath.joined(separator: " › "), limit: 80)) from the menu of \(describe(element))"
+        } else if let key {
+            guard index == nil, !hasPoint else {
+                throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
+            }
+            action = "press \(key)"
+        } else if index != nil || hasPoint {
+            guard let session = sessions[pid] else {
+                throw ToolError("No state for \(name) yet. Call get_app_state first.")
+            }
+            if let index {
+                let element = try session.element(index)
+                clickPoint = try await visibleCenter(of: element, session: session)
+                action = "click [\(index)] \(describe(element))"
+            } else {
+                clickPoint = try screenPoint(args, "x", "y", session: session)
+                action = "click at (\(formatNumber(try args.double("x") ?? 0)), \(formatNumber(try args.double("y") ?? 0)))"
+            }
+            try checkPointerTarget(app)
+        } else {
+            throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
+        }
+        let chord = try key.map(parseKeyChord)
         // cmd+c, cmd+x and cmd+v work on skfiy's clipboard here too.
-        let clipboardKey = chord.modifiers == .command ? chord.baseCharacter.flatMap { "cxv".contains($0) ? $0 : nil } : nil
+        let clipboardKey = chord.flatMap { chord in chord.modifiers == .command ? chord.baseCharacter.flatMap { "cxv".contains($0) ? $0 : nil } : nil }
         if clipboardKey == "v", clipboard == nil {
             throw ToolError("skfiy's clipboard is empty, so there is nothing to paste. Copy with cmd+c first, or take what the user copied with read_clipboard.")
         }
@@ -396,7 +436,7 @@ public final class ComputerUse {
         }
         let user = NSRunningApplication(processIdentifier: userApp)?.localizedName ?? "your app"
         let reason = args.string("reason").map { " (\($0))" } ?? ""
-        let message = "skfiy wants to bring \(name) to the front for about a second to press \(key)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
+        let message = "skfiy wants to bring \(name) to the front for about a second to \(action)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
         switch await askUser(message) {
         case nil:
             throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them (or no answer came). Tell the user what needs doing instead.")
@@ -436,8 +476,9 @@ public final class ComputerUse {
         // the accessibility frontmost attribute is honored. Activation can take
         // a moment to land.
         let appElement = AXUIElementCreateApplication(pid)
-        FrontGuard.suspendAll(true)
-        defer { FrontGuard.suspendAll(false) }
+        // Guards of this and every other skfiy process leave it in front meanwhile.
+        FrontGrant.grant(pid, seconds: 20)
+        defer { FrontGrant.revoke() }
         _ = try? appElement.set(kAXFrontmostAttribute, kCFBooleanTrue)
         app.activate(options: [])
         for _ in 0..<40 where front() != pid {
@@ -460,13 +501,28 @@ public final class ComputerUse {
         }
         let lent = system.changeCount
         var how: String
-        if let item = menuItem(for: chord, pid: pid), item.enabled {
+        if let clickPoint {
+            guard front() == pid, let window = windowID(of: pid, at: clickPoint) ?? focusedWindowID(of: pid) else {
+                await restore()
+                throw ToolError("\(name) lost the front, or has no window at that point, so nothing was clicked.")
+            }
+            // Posted to the app, now active, so the user's cursor stays where it is.
+            await Input.click(at: clickPoint, pid: pid, windowID: window, button: .left, count: 1, modifiers: [], chromium: isChromium(app))
+            how = "clicked there"
+        } else if let menuElement, let menuPath {
+            do {
+                how = try await chooseFromMenu(of: menuElement, path: menuPath, pid: pid)
+            } catch {
+                await restore()
+                throw error
+            }
+        } else if let chord, let item = menuItem(for: chord, pid: pid), item.enabled {
             _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
             how = "ran the menu item \(quote(item.title, limit: 60))"
-        } else if front() == pid {
+        } else if let chord, front() == pid {
             // It is the front app now, so a keystroke like a real one reaches it.
             await Input.pressToFrontApp(chord)
-            how = "pressed \(key)"
+            how = "pressed \(key ?? "")"
         } else {
             if let saved, system.changeCount == lent { system.write(saved) }
             await restore()
@@ -490,6 +546,59 @@ public final class ComputerUse {
         await restore()
         let restored = front() == userApp ? "gave the front back to \(user)" : "could not give the front back to \(user)"
         return try await afterAction(app, "With the user's approval, brought \(name) forward for a moment, \(how), and \(restored).")
+    }
+
+    /// Opens the context menu of `element` (or the menu of a menu button) in
+    /// the front app and presses the item at `path`, e.g. ["Share", "Mail"].
+    private func chooseFromMenu(of element: AXUIElement, path: [String], pid: pid_t) async throws -> String {
+        let appElement = AXUIElementCreateApplication(pid)
+        let opener = ["AXMenuButton", "AXPopUpButton"].contains(element.string(kAXRoleAttribute) ?? "") ? kAXPressAction : kAXShowMenuAction
+        let status = AXUIElementPerformAction(element, opener as CFString)
+        guard status == .success || status == .cannotComplete else {
+            throw ToolError("\(describe(element)) has no menu to open.")
+        }
+        // Context menus hang off the application element, a button's menu off the button.
+        var menu: AXUIElement?
+        for _ in 0..<20 {
+            let open = { (parent: AXUIElement) in
+                parent.elements(kAXChildrenAttribute).first { $0.string(kAXRoleAttribute) == kAXMenuRole && self.isOpenMenu($0) }
+            }
+            menu = open(appElement) ?? open(element)
+            if menu != nil { break }
+            await Input.pause(0.05)
+        }
+        guard let menu else {
+            throw ToolError("No menu opened for \(describe(element)).")
+        }
+        let close = { _ = AXUIElementPerformAction(menu, kAXCancelAction as CFString) }
+        var current = menu
+        for (depth, title) in path.enumerated() {
+            let items = current.elements(kAXChildrenAttribute)
+            let titles = items.map { $0.string(kAXTitleAttribute) ?? "" }
+            let wanted = title.lowercased()
+            guard let index = titles.firstIndex(where: { $0.lowercased() == wanted })
+                    ?? titles.firstIndex(where: { $0.lowercased().contains(wanted) }) else {
+                close()
+                let listing = titles.filter { !$0.isEmpty }.prefix(40).map { quote($0, limit: 40) }.joined(separator: ", ")
+                throw ToolError("The menu has no item \(quote(title, limit: 60)), so nothing was chosen. Its items: \(listing).")
+            }
+            let item = items[index]
+            if depth == path.count - 1 {
+                guard item.bool(kAXEnabledAttribute) != false else {
+                    close()
+                    throw ToolError("\(quote(titles[index], limit: 60)) is disabled in that menu, so nothing was chosen.")
+                }
+                _ = AXUIElementPerformAction(item, kAXPressAction as CFString)
+                return "chose \(quote(path.dropLast().map { $0 + " › " }.joined() + titles[index], limit: 80)) from the menu of \(describe(element))"
+            }
+            guard let submenu = item.elements(kAXChildrenAttribute).first(where: { $0.string(kAXRoleAttribute) == kAXMenuRole }) else {
+                close()
+                throw ToolError("\(quote(titles[index], limit: 60)) has no submenu, so nothing was chosen.")
+            }
+            current = submenu
+        }
+        close()
+        throw ToolError("No menu item was given.")
     }
 
     // MARK: - save_document
@@ -917,7 +1026,7 @@ public final class ComputerUse {
         "AXTab", "AXSegment"
     ]
     static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
-    static let menuAlternatives = "Its commands are usually in the menu bar (click a menu bar item to list its items without opening it) or have keyboard shortcuts; to open a file, use open_file."
+    static let menuAlternatives = "Its commands are usually in the menu bar (click a menu bar item to list its items without opening it) or have keyboard shortcuts; to open a file, use open_file. A command found only in this menu can be run with run_in_front, element_index and menu_item, which asks the user first."
     static let backgroundMenuRefusal = "A context menu of a background app would be drawn over the user's screen, so skfiy does not open one. " + menuAlternatives
 
     func click(_ args: Arguments) async throws -> ToolResult {
@@ -999,7 +1108,8 @@ public final class ComputerUse {
         } else {
             throw ToolError("Nothing to click.")
         }
-        let how = try await pointerClick(app, at: target, button: button, count: count, modifiers: modifiers)
+        let how = try await pointerClick(app, at: target, button: button, count: count, modifiers: modifiers,
+                                         focus: (args.values["focus"] as? Bool) ?? false)
         return try await afterAction(app, "Clicked \(described): \(how).")
     }
 
@@ -1071,27 +1181,63 @@ public final class ComputerUse {
         at point: CGPoint,
         button: MouseButton,
         count: Int,
-        modifiers: Modifiers
+        modifiers: Modifiers,
+        focus: Bool
     ) async throws -> String {
         try checkPointerTarget(app)
         let pid = app.processIdentifier
         guard let window = windowID(of: pid, at: point) ?? focusedWindowID(of: pid) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
         }
-        if briefFocusEnabled, frontmostProcessID() != pid, await waitForUserIdle() {
-            let chromium = isChromium(app)
-            let delivered = await Input.withBriefFocus(pid: pid, windowID: window) {
-                await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
-            }
-            if delivered {
-                return "sent a mouse click with a brief in-app focus (your front app kept its place)"
+        let chromium = isChromium(app)
+        var note = ""
+        if frontmostProcessID() != pid, briefFocusEnabled || focus {
+            switch await briefFocusPermission(app) {
+            case true?:
+                if await waitForUserIdle() {
+                    let delivered = await Input.withBriefFocus(pid: pid, windowID: window) {
+                        await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
+                    }
+                    if delivered {
+                        return "sent a mouse click while \(app.localizedName ?? "the app") had keyboard focus for a moment (it did not come forward; the user's front app kept its place). If the screenshot shows no change, this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
+                    }
+                } else {
+                    note = " The user kept typing, so it went without focus; try again in a moment."
+                }
+            case false?:
+                note = " The user declined giving it focus."
+            case nil:
+                note = " Focus needs the user's approval, which this client cannot ask for."
             }
         }
-        await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: isChromium(app))
+        await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
+        let inFront = " this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
         if isInWebContentAt(pid: pid, point: point) {
-            return "sent a background mouse click, but browsers (Chromium, WebKit) ignore pointer input to web content in background windows — use an element_index, the browser_* tools, or set SKFIY_BRIEF_FOCUS=1"
+            // Chromium takes a click during a moment of focus; WebKit only in the front app.
+            let retry = chromium && !focus
+                ? " Click again with focus: true (asks the user once for this app)."
+                : " If the screenshot shows no change," + inFront
+            return "sent a background mouse click, but web content ignores pointer input in background windows; for browser tabs prefer the browser_* tools." + retry + note
         }
-        return "sent a background mouse click; if the screenshot shows no change, this view ignores background clicks — use an element_index or the keyboard"
+        let retry = focus
+            ? " If the screenshot still shows no change," + inFront
+            : " If the screenshot shows no change, click again with focus: true (asks the user once for this app), or use an element_index or the keyboard; failing that," + inFront
+        return "sent a background mouse click." + retry + note
+    }
+
+    /// Whether this app may get keyboard focus for a moment during pointer
+    /// input: SKFIY_BRIEF_FOCUS=1, or the user approved it once for the app
+    /// this session. Nil when the client cannot ask.
+    private func briefFocusPermission(_ app: NSRunningApplication) async -> Bool? {
+        let pid = app.processIdentifier
+        if briefFocusEnabled || focusApproved.contains(pid) { return true }
+        guard let askUser else { return nil }
+        let name = app.localizedName ?? "the app"
+        let answer = await askUser("\(name) ignores clicks while it is in the background. Allow skfiy to give it keyboard focus for about a tenth of a second when it clicks there — only while you are not typing, without bringing it forward? (Asked once for \(name) this session.)")
+        if answer == true {
+            focusApproved.insert(pid)
+        }
+        return answer
     }
 
     func performSecondaryAction(_ args: Arguments) async throws -> ToolResult {
@@ -1259,9 +1405,10 @@ public final class ComputerUse {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at the start point.")
         }
         var how = "background mouse events"
-        if briefFocusEnabled, frontmostProcessID() != pid, await waitForUserIdle(),
+        let focus = (args.values["focus"] as? Bool) ?? false
+        if frontmostProcessID() != pid, briefFocusEnabled || focus, await briefFocusPermission(app) == true, await waitForUserIdle(),
            await Input.withBriefFocus(pid: pid, windowID: window, { await Input.drag(from: start, to: end, pid: pid, windowID: window) }) {
-            how = "mouse events with a brief in-app focus"
+            how = "mouse events while the app had keyboard focus for a moment"
         } else {
             await Input.drag(from: start, to: end, pid: pid, windowID: window)
         }
@@ -1930,11 +2077,15 @@ func formatNumber(_ value: Double) -> String {
     value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
 }
 
-/// Chromium-based browsers (Chrome, Chrome for Testing, Edge, Brave, Arc...).
+/// Chromium-based browsers (Chrome, Chrome for Testing, Edge, Brave, Arc...)
+/// and apps embedding Chromium through CEF (NetEase Music). Electron apps
+/// answer AXManualAccessibility, set for every app, and are left out.
 func isChromium(_ app: NSRunningApplication) -> Bool {
     let bundleID = (app.bundleIdentifier ?? "").lowercased()
     let prefixes = ["com.google.chrome", "org.chromium.", "com.microsoft.edgemac", "com.brave.browser",
                     "com.vivaldi.vivaldi", "company.thebrowser.", "com.operasoftware.", "ai.perplexity.comet"]
+    let frameworks = (app.bundleURL?.path ?? "") + "/Contents/Frameworks/"
     return prefixes.contains { bundleID.hasPrefix($0) }
-        || FileManager.default.fileExists(atPath: (app.bundleURL?.path ?? "") + "/Contents/Frameworks/Chromium Framework.framework")
+        || ["Chromium Framework.framework", "Chromium Embedded Framework.framework"]
+            .contains { FileManager.default.fileExists(atPath: frameworks + $0) }
 }

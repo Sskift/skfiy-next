@@ -5,7 +5,11 @@
 The fixture's window opens behind every other window and the app never
 activates; every step must leave it in the background.
 
-    python3 scripts/smoke_fixture.py [path/to/skfiy]
+    python3 scripts/smoke_fixture.py [path/to/skfiy] [--front]
+
+With --front it also brings the fixture forward for about a second, with an
+approval this script gives, once you have been idle for 10 s: run_in_front
+choosing from a context menu.
 """
 import json
 import os
@@ -14,7 +18,9 @@ import re
 import subprocess
 import sys
 
-BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
+FRONT = "--front" in sys.argv
+ARGS = [arg for arg in sys.argv[1:] if arg != "--front"]
+BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
 APP_PATH = "/tmp/skfiy-test/SkfiyFixture.app"
 APP = "SkfiyFixture"
 # Visible in file panels (Macintosh HD › Users › Shared) and not privacy-protected.
@@ -22,10 +28,11 @@ PANEL_DIR = "/Users/Shared/skfiy-panel-test"
 
 
 class Client:
-    def __init__(self, can_ask=False):
+    def __init__(self, can_ask=False, approve=False):
         self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self.next_id = 0
-        self.asked = []  # approvals the server asked for; this client declines them all
+        self.asked = []  # approvals the server asked for
+        self.answer = {"action": "accept", "content": {"allow": True}} if approve else {"action": "decline"}
         self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {"elicitation": {"form": {}}} if can_ask else {}})
 
     def send(self, message):
@@ -39,7 +46,7 @@ class Client:
             response = json.loads(self.proc.stdout.readline())
             if response.get("method") == "elicitation/create":
                 self.asked.append(response["params"]["message"])
-                self.send({"jsonrpc": "2.0", "id": response["id"], "result": {"action": "decline"}})
+                self.send({"jsonrpc": "2.0", "id": response["id"], "result": self.answer})
                 continue
             if "error" in response:
                 raise RuntimeError(response["error"])
@@ -54,6 +61,14 @@ class Client:
         if result["isError"]:
             raise RuntimeError(f"{tool}: {text}")
         return text
+
+
+def idle_seconds():
+    output = subprocess.run(["ioreg", "-c", "IOHIDSystem", "-d", "4"], capture_output=True, text=True).stdout
+    for line in output.splitlines():
+        if "HIDIdleTime" in line:
+            return int(line.split("=")[-1]) / 1e9
+    return 0
 
 
 def frontmost():
@@ -72,7 +87,8 @@ def build():
     # those of TextEdit, Preview and App Store apps.
     entitlements = "/tmp/skfiy-test/fixture.entitlements"
     with open(entitlements, "wb") as plist:
-        plistlib.dump({"com.apple.security.app-sandbox": True, "com.apple.security.files.user-selected.read-write": True}, plist)
+        plistlib.dump({"com.apple.security.app-sandbox": True, "com.apple.security.files.user-selected.read-write": True,
+                       "com.apple.security.network.client": True}, plist)  # web views need it even for inline pages
     subprocess.run(["codesign", "--force", "-s", "-", "--entitlements", entitlements, APP_PATH], check=True, capture_output=True)
 
 
@@ -106,6 +122,14 @@ def to_pixels(tree, x, y):
     pixels, left, top, width = map(int, match.groups())
     scale = pixels / width
     return (x - left) * scale, (y - top) * scale
+
+
+def green_half(caller, name):
+    """Pixels of the green half of a canvas in the latest screenshot."""
+    now = caller.call("get_app_state")
+    match = re.search(re.escape(name) + r" at (\d+),(\d+) (\d+)x(\d+)", now)
+    left, top, width, height = map(int, match.groups())
+    return to_pixels(now, left + width / 4, top + height / 2)
 
 
 results = []
@@ -200,6 +224,65 @@ def main():
             return " | ".join(answers)
         case("read_clipboard only with the user's approval", read_clipboard, r"^cannot ask \| declined \| asked 1x$")
 
+        # Context menus never open in the background; run_in_front does it with
+        # the user's approval.
+        def right_click():
+            now = client.call("get_app_state")
+            try:
+                client.call("click", element_index=index(now, r'Button "archive"'), mouse_button="right")
+                return "opened"
+            except RuntimeError as error:
+                return "refused, pointing to run_in_front" if "run_in_front" in str(error) else str(error)[:80]
+        case("a background right-click is refused and points to run_in_front", right_click, r"^refused, pointing to run_in_front$")
+
+        def declined_menu():
+            asker = Client(can_ask=True)
+            now = asker.call("get_app_state")
+            try:
+                asker.call("run_in_front", element_index=index(now, r'Button "archive"'), menu_item="Label > Red", reason="smoke test")
+                answer = "ran"
+            except RuntimeError as error:
+                answer = "declined" if "declined" in str(error) else str(error)[:80]
+            asker.proc.stdin.close()
+            return answer + " | " + status(client.call("get_app_state"))
+        case("run_in_front with a context menu does nothing when declined", declined_menu, r"^declined \| (?!label)")
+
+        if FRONT:
+            def approved_menu():
+                print("  … waiting until you have been idle for 10 s (not in Ghostty)")
+                while idle_seconds() < 10 or "Ghostty" in frontmost() or APP in frontmost():
+                    subprocess.run(["sleep", "1"])
+                asker = Client(can_ask=True, approve=True)
+                now = asker.request("tools/call", {"name": "get_app_state", "arguments": {"app": APP}})["content"][0]["text"]
+                user = frontmost()
+                result = asker.request("tools/call", {"name": "run_in_front", "arguments": {
+                    "app": APP, "element_index": index(now, r'Button "archive"'), "menu_item": "Label > Red", "reason": "smoke test"}})
+                back = frontmost() == user
+                asker.proc.stdin.close()
+                text = result["content"][0]["text"]
+                if result["isError"]:
+                    return text[:120]
+                return status(client.call("get_app_state")) + (" | front app back" if back else f" | front app now {frontmost()}")
+            case("run_in_front chooses from a context menu once approved", approved_menu, r"^label red chosen \| front app back$")
+
+            def approved_click(name):
+                def run():
+                    while idle_seconds() < 10 or "Ghostty" in frontmost() or APP in frontmost():
+                        subprocess.run(["sleep", "1"])
+                    asker = Client(can_ask=True, approve=True)
+                    x, y = green_half(asker, name)
+                    user = frontmost()
+                    result = asker.request("tools/call", {"name": "run_in_front", "arguments": {
+                        "app": APP, "x": x, "y": y, "reason": "smoke test"}})
+                    back = frontmost() == user
+                    asker.proc.stdin.close()
+                    if result["isError"]:
+                        return result["content"][0]["text"][:120]
+                    return status(client.call("get_app_state")) + (" | front app back" if back else f" | front app now {frontmost()}")
+                return run
+            case("run_in_front clicks a view that ignores background clicks", approved_click("strict canvas"), r"^strict canvas green clicked \| front app back$")
+            case("run_in_front clicks a web view", approved_click("web canvas"), r"^web canvas green clicked \| front app back$")
+
         def hidden():
             open_panel("Choose file…")
             try:
@@ -214,14 +297,22 @@ def main():
 
         def click_canvas(name):
             def run():
-                now = client.call("get_app_state")
-                match = re.search(re.escape(name) + r" at (\d+),(\d+) (\d+)x(\d+)", now)
-                left, top, width, height = map(int, match.groups())
-                x, y = to_pixels(now, left + width / 4, top + height / 2)  # the green half
-                client.call("click", x=x, y=y)
-                return status(client.call("get_app_state"))
+                x, y = green_half(client, name)
+                answer = client.call("click", x=x, y=y)
+                return status(client.call("get_app_state")) + (" | points to focus" if "focus: true" in answer else "")
             return run
-        case("background click on a custom-drawn canvas", click_canvas("canvas"), r"^canvas green clicked$")
+        case("background click on a custom-drawn canvas", click_canvas("canvas"), r"^canvas green clicked")
+        # Views that refuse an inactive window's first click, and web views,
+        # ignore it; the tool says so and points to focus and run_in_front.
+        case("a view ignoring background clicks is reported, not faked", click_canvas("strict canvas"), r"^(?!strict).* \| points to focus$")
+
+        def declined_focus():
+            asker = Client(can_ask=True)
+            x, y = green_half(asker, "strict canvas")
+            answer = asker.call("click", x=x, y=y, focus=True)
+            asker.proc.stdin.close()
+            return ("declined noted" if "declined giving it focus" in answer else answer[:80]) + f" | asked {len(asker.asked)}x"
+        case("click focus asks the user, and a decline is respected", declined_focus, r"^declined noted \| asked 1x$")
 
         client.call("press_key", key="cmd+q")
     finally:

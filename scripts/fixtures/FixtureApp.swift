@@ -4,9 +4,11 @@
 // - "Choose file…" and "Save as…", which open the system's file panels as
 //   sheets (served by another process, since the fixture is sandboxed),
 // - two custom-drawn canvases that publish no accessibility, one accepting
-//   the first click of an inactive window and one not,
+//   the first click of an inactive window and one not, and a web view (as in
+//   Tauri apps) with a canvas,
 // - a status line, and each canvas's screen frame, readable in the tree.
 import AppKit
+import WebKit
 
 final class Canvas: NSView {
     let name: String
@@ -46,11 +48,16 @@ final class Canvas: NSView {
     }
 }
 
-final class Delegate: NSObject, NSApplicationDelegate {
+final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     let status = NSTextField(labelWithString: "status: ready")
     let frames = NSTextField(labelWithString: "")
     let canvases = [Canvas(name: "canvas", firstMouse: true), Canvas(name: "strict canvas", firstMouse: false)]
+    var web: WKWebView!
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        status.stringValue = "status: web canvas \(message.body) clicked"
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -61,6 +68,18 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
         let archive = NSButton(image: NSImage(systemSymbolName: "archivebox", accessibilityDescription: nil)!, target: self, action: #selector(pressedArchive))
         archive.toolTip = "Archive the selected messages"
+        // A context menu with a submenu, for run_in_front's menu_item.
+        let context = NSMenu()
+        context.addItem(NSMenuItem(title: "Archive all", action: #selector(archiveAll), keyEquivalent: ""))
+        let label = NSMenuItem(title: "Label", action: nil, keyEquivalent: "")
+        label.submenu = NSMenu()
+        for color in ["Red", "Blue"] {
+            label.submenu?.addItem(NSMenuItem(title: color, action: #selector(labelChosen(_:)), keyEquivalent: ""))
+        }
+        context.addItem(label)
+        context.items.forEach { $0.target = self }
+        label.submenu?.items.forEach { $0.target = self }
+        archive.menu = context
 
         let choose = NSButton(title: "Choose file…", target: self, action: #selector(chooseFile))
         let save = NSButton(title: "Save as…", target: self, action: #selector(saveAs))
@@ -69,6 +88,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
             canvas.clicked = { [weak self] what in self?.status.stringValue = "status: \(what) clicked" }
         }
 
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "clicked")
+        web = WKWebView(frame: .zero, configuration: configuration)
+        web.loadHTMLString("""
+            <body style="margin:0"><canvas id=c width=200 height=70></canvas><script>
+            const c = document.getElementById('c'), x = c.getContext('2d');
+            x.fillStyle = '#4a8'; x.fillRect(0, 0, 100, 70); x.fillStyle = '#e84'; x.fillRect(100, 0, 100, 70);
+            c.addEventListener('mousedown', e => webkit.messageHandlers.clicked.postMessage(e.offsetX < 100 ? 'green' : 'orange'));
+            </script></body>
+            """, baseURL: nil)
+
         let place: [(NSView, NSRect)] = [
             (status, NSRect(x: 20, y: 292, width: 420, height: 20)),
             (archive, NSRect(x: 380, y: 262, width: 40, height: 30)),
@@ -76,7 +106,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
             (save, NSRect(x: 170, y: 220, width: 140, height: 30)),
             (canvases[0], NSRect(x: 20, y: 100, width: 200, height: 70)),
             (canvases[1], NSRect(x: 240, y: 100, width: 200, height: 70)),
-            (frames, NSRect(x: 20, y: 20, width: 420, height: 60))
+            (web, NSRect(x: 240, y: 15, width: 200, height: 70)),
+            (frames, NSRect(x: 20, y: 10, width: 210, height: 80))
         ]
         for (view, frame) in place {
             view.frame = frame
@@ -87,14 +118,23 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // Behind every other window, and the app stays inactive.
         window.orderBack(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
-            frames.stringValue = canvases.map { canvas in
-                let f = canvas.screenFrame
-                return "\(canvas.name) at \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))"
+            let named: [(String, CGRect)] = canvases.map { ($0.name, $0.screenFrame) } + [("web canvas", screenFrame(of: web))]
+            frames.stringValue = named.map { name, f in
+                "\(name) at \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))"
             }.joined(separator: "; ")
         }
     }
 
     @objc func pressedArchive() { status.stringValue = "status: archive pressed" }
+
+    func screenFrame(of view: NSView) -> CGRect {
+        let rect = window.convertToScreen(view.convert(view.bounds, to: nil))
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        return CGRect(x: rect.minX, y: top - rect.maxY, width: rect.width, height: rect.height)
+    }
+
+    @objc func archiveAll() { status.stringValue = "status: archive all chosen" }
+    @objc func labelChosen(_ item: NSMenuItem) { status.stringValue = "status: label \(item.title.lowercased()) chosen" }
 
     /// Copies a swatch: an image plus a type of the fixture's own, no text.
     @objc func copySwatch() {
