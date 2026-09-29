@@ -22,19 +22,28 @@ PANEL_DIR = "/Users/Shared/skfiy-panel-test"
 
 
 class Client:
-    def __init__(self):
+    def __init__(self, can_ask=False):
         self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self.next_id = 0
-        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
+        self.asked = []  # approvals the server asked for; this client declines them all
+        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {"elicitation": {"form": {}}} if can_ask else {}})
+
+    def send(self, message):
+        self.proc.stdin.write(json.dumps(message) + "\n")
+        self.proc.stdin.flush()
 
     def request(self, method, params):
         self.next_id += 1
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}) + "\n")
-        self.proc.stdin.flush()
-        response = json.loads(self.proc.stdout.readline())
-        if "error" in response:
-            raise RuntimeError(response["error"])
-        return response["result"]
+        self.send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
+        while True:
+            response = json.loads(self.proc.stdout.readline())
+            if response.get("method") == "elicitation/create":
+                self.asked.append(response["params"]["message"])
+                self.send({"jsonrpc": "2.0", "id": response["id"], "result": {"action": "decline"}})
+                continue
+            if "error" in response:
+                raise RuntimeError(response["error"])
+            return response["result"]
 
     def call(self, tool, **arguments):
         before = frontmost()
@@ -77,6 +86,16 @@ def index(tree, pattern):
 def status(tree, prefix="status"):
     match = re.search(prefix + r': ([^"]*)"', tree)
     return match.group(1) if match else "?"
+
+
+def clipboard_fingerprint():
+    """The types and sizes on the user's clipboard, never its content."""
+    script = ('ObjC.import("AppKit"); var items = $.NSPasteboard.generalPasteboard.pasteboardItems; var out = [];'
+              'for (var i = 0; i < items.count; i++) { var item = items.objectAtIndex(i); var types = item.types;'
+              ' for (var j = 0; j < types.count; j++) { var type = types.objectAtIndex(j).js;'
+              ' if (type == "org.nspasteboard.TransientType") continue; var data = item.dataForType(type);'
+              ' out.push(i + ":" + type + ":" + (data.isNil() ? 0 : data.length)); } } out.join(",")')
+    return subprocess.run(["osascript", "-l", "JavaScript", "-e", script], capture_output=True, text=True).stdout.strip()
 
 
 def to_pixels(tree, x, y):
@@ -154,6 +173,32 @@ def main():
             written = open(f"{PANEL_DIR}/via-menu.txt").read().strip() if os.path.exists(f"{PANEL_DIR}/via-menu.txt") else "nothing"
             return answer.splitlines()[0][:60] + " | " + written
         case("save_document falls back to the app's Save panel", save_document, r"^Saved to .* \| saved by the fixture$")
+
+        # Copying something that is not text goes through the app's Copy
+        # command, with the user's clipboard lent for that moment.
+        def rich_copy_paste():
+            before = clipboard_fingerprint()
+            client.call("press_key", key="cmd+c")
+            client.call("press_key", key="cmd+v")
+            after = clipboard_fingerprint()
+            return status(client.call("get_app_state")) + (" | the user's clipboard is back" if after == before else " | the user's clipboard changed")
+        case("non-text copy and paste lend the user's clipboard and put it back", rich_copy_paste, r"^pasted teal swatch \| the user's clipboard is back$")
+
+        # Reading the user's clipboard needs their approval; nothing is read
+        # here: one client cannot ask, the other declines.
+        def read_clipboard():
+            answers = []
+            for asker in (client, Client(can_ask=True)):
+                try:
+                    asker.call("read_clipboard", reason="smoke test")
+                    answers.append("read")
+                except RuntimeError as error:
+                    answers.append("declined" if "declined" in str(error) else "cannot ask" if "cannot ask" in str(error) else str(error)[:60])
+                if asker is not client:
+                    answers.append(f"asked {len(asker.asked)}x")
+                    asker.proc.stdin.close()
+            return " | ".join(answers)
+        case("read_clipboard only with the user's approval", read_clipboard, r"^cannot ask \| declined \| asked 1x$")
 
         def hidden():
             open_panel("Choose file…")
