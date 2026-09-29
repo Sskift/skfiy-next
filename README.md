@@ -138,7 +138,7 @@ skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存�
 - 单元测试 52/52；TextEdit 12/12；插件 19/19（Chrome for Testing 154）。
 - 应用工具操作网页：Chrome for Testing 与 Safari 26.6 都是 10/10。其中画布像素点击的通过标准是工具明确说明做不到；"点空白处失焦"需要 `SKFIY_BRIEF_FOCUS=1`，默认跳过。
 - 只读覆盖（`scripts/app_coverage.py`）：11 个正在运行的应用都能取到状态，每次 0.1–0.5 秒；微信、网易云音乐、Clash Verge 不公开辅助功能，工具会明确提示。
-- 插件在日常使用的 Chrome 里（`--user-browser`）：15/15，你正在看的标签页没变，Chrome 没到过前台。
+- 插件在日常使用的 Chrome 里（`--user-browser`）：23/23（含跨域 iframe、网页弹窗、上传），你正在看的标签页没变，Chrome 没到过前台。
 - 真实任务（`eval/run_eval.py`，claude-sonnet-5，只开放 skfiy 工具）：8 项中 7 项完成，8 项全程在后台。失败的一项是 Finder 改名时模型输入新名字后没按回车确认；同一任务前两次都通过。
 - 监视器每 0.25 秒采样前台应用和最顶层窗口。除了应用自己激活自己、随即被交还的情况（见上文「兜底」），没有出现过抢占。
 
