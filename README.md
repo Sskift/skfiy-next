@@ -38,7 +38,7 @@ macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，
 | `save_document` | 把应用的文档存到指定路径，不经过"存储"面板（TextEdit、预览、Pages 等可脚本化的应用；默认不覆盖已有文件） |
 | `run_in_front` | 唯一会把应用提到前台的工具：只用于必须在前台才生效的快捷键（加粗、撤销、查找…），先在 Claude Code 里征得你同意，等你停手后提前约一秒，随即还原你的前台和窗口层级 |
 
-浏览器插件连上后多出 10 个网页工具，按标签页 ID 操作，不切换你正在看的标签页：
+浏览器插件连上后多出 11 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
 | --- | --- |
@@ -48,6 +48,7 @@ macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，
 | `browser_click` | 按编号点击（或按截图坐标）；`target=_blank` 链接改为后台新标签页打开 |
 | `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` | 输入（可清空、可提交）、选下拉项、按键、滚动页面或元素 |
 | `browser_navigate` / `browser_close_tab` | 后退/前进/刷新、关闭标签页 |
+| `browser_upload` | 把本地文件填进网页的上传框（不弹文件选择器）；每次上传前都在 Claude Code 里征得你同意，最大 20 MB |
 
 树的样子（Finder）：
 
@@ -109,6 +110,7 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 | `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` 可得到无损截图 |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1` 开启上文的空闲时短暂应用内聚焦 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
+| `SKFIY_UPLOAD_WITHOUT_ASKING` | 关 | `1` 让 `browser_upload` 不再逐次征求同意（只适合无人值守的测试） |
 | `SKFIY_STOP_FILE` | `~/Library/Application Support/skfiy/stopped` | 急停标记文件的位置（测试用它互不干扰） |
 
 ## 开发

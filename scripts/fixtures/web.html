@@ -40,6 +40,17 @@
 <section>
   <canvas id="canvas" width="300" height="120" aria-label="Canvas"></canvas>
 </section>
+<section>
+  <label>Attachment <input id="upload" type="file"></label>
+  <button id="alert">Alert me</button>
+  <button id="confirm">Confirm me</button>
+  <button id="prompt">Prompt me</button>
+</section>
+<section>
+  <!-- Same origin, and cross origin (localhost vs 127.0.0.1): frames report to this page. -->
+  <iframe id="same" title="Same-origin frame" width="300" height="90"></iframe>
+  <iframe id="cross" title="Cross-origin frame" width="300" height="90"></iframe>
+</section>
 <script>
   function log(message, event) {
     const trusted = event && event.isTrusted === false ? ' untrusted' : '';
@@ -57,6 +68,18 @@
   ctx.fillStyle = '#4a8'; ctx.fillRect(0, 0, 150, 120);
   ctx.fillStyle = '#e84'; ctx.fillRect(150, 0, 150, 120);
   canvas.addEventListener('click', (e) => log('canvas ' + (e.offsetX < 150 ? 'green' : 'orange'), e));
+  document.getElementById('upload').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    log(file ? `file ${file.name} ${file.size} bytes: ${(await file.text()).slice(0, 20).trim()}` : 'file none', e);
+  });
+  document.getElementById('alert').addEventListener('click', (e) => { alert('Saved!'); log('alerted', e); });
+  document.getElementById('confirm').addEventListener('click', (e) => log('confirm ' + confirm('Sure?'), e));
+  document.getElementById('prompt').addEventListener('click', (e) => log('prompt ' + prompt('Name?', 'default'), e));
+  // Frames: the page's own frame file, served from both hosts.
+  const frameURL = (host) => `http://${host}:${location.port}/frame.html`;
+  document.getElementById('same').src = frameURL(location.hostname);
+  document.getElementById('cross').src = frameURL(location.hostname === 'localhost' ? '127.0.0.1' : 'localhost');
+  addEventListener('message', (e) => { if (typeof e.data === 'string' && e.data.startsWith('frame ')) log(e.data); });
   document.addEventListener('keydown', (e) => {
     if (e.target === document.body) {
       log('key ' + (e.metaKey ? 'cmd+' : '') + (e.ctrlKey ? 'ctrl+' : '') + e.key, e);

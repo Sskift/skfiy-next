@@ -54,6 +54,36 @@ chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
 connect();
 
+// ------------------------------------------------------------ own tabs
+// Tabs skfiy opened. Only these get dialog hooks: an alert there must not
+// freeze the page the agent is working on, while the user's tabs stay as they are.
+
+async function ownTabs() {
+  const { ownTabs: ids = [] } = await chrome.storage.session.get('ownTabs');
+  return new Set(ids);
+}
+
+async function markOwnTab(tabId) {
+  const ids = await ownTabs();
+  ids.add(tabId);
+  await chrome.storage.session.set({ ownTabs: [...ids] });
+}
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const ids = await ownTabs();
+  if (ids.delete(tabId)) await chrome.storage.session.set({ ownTabs: [...ids] });
+});
+
+chrome.webNavigation.onCommitted.addListener(async ({ tabId }) => {
+  if ((await ownTabs()).has(tabId)) await hookDialogs(tabId);
+});
+
+async function hookDialogs(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true }, world: 'MAIN', injectImmediately: true, func: installDialogHooks
+  }).catch(() => {});
+}
+
 // ---------------------------------------------------------------- requests
 
 async function handle(method, params) {
@@ -106,7 +136,9 @@ async function openTab({ url, tab_id: tabId }) {
   }
   // A background tab in the user's last window, gathered in a "skfiy" group.
   const window = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
-  const tab = await chrome.tabs.create({ url, active: false, ...(window ? { windowId: window.id } : {}) });
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: false, ...(window ? { windowId: window.id } : {}) });
+  await markOwnTab(tab.id);
+  await chrome.tabs.update(tab.id, { url });
   try {
     const existing = await skfiyGroup(tab.windowId);
     const groupId = await chrome.tabs.group({ tabIds: [tab.id], ...(existing != null ? { groupId: existing } : {}) });
@@ -148,17 +180,53 @@ async function waitForLoad(tabId, timeout = 15000) {
   }
 }
 
-async function run(tabId, func, args) {
-  const [result] = await chrome.scripting.executeScript({ target: { tabId }, func, args, world: 'ISOLATED' });
+async function run(tabId, func, args, frameId = 0) {
+  const [result] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args, world: 'ISOLATED' });
   if (!result) throw new Error('the page did not answer');
   return result.result;
 }
 
+// Element indices across frames: index -> { frameId, local }, per tab. The
+// top frame reads same-origin frames itself; cross-origin frames report
+// their own elements, which are numbered after the page's.
+const frameIndex = new Map();
+
 async function tabState({ tab_id: tabId, max_chars: maxChars }) {
   const tab = await tabById(tabId);
   await waitForLoad(tab.id, 5000);
-  const page = await run(tab.id, pageSnapshot, [maxChars || 30000]);
-  return { tabId: tab.id, title: tab.title, url: tab.url, active: tab.active, ...page };
+  const frames = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000], world: 'ISOLATED'
+  });
+  const top = frames.find((f) => f.frameId === 0);
+  if (!top || !top.result) throw new Error('the page did not answer');
+  const map = [];
+  const lines = [];
+  const dialogs = [];
+  let truncated = false;
+  for (const { frameId, result } of [top, ...frames.filter((f) => f.frameId !== 0)]) {
+    if (!result || !result.ownFrame) continue;
+    const base = map.length;
+    if (frameId !== 0) lines.push(`--- frame ${result.url} ---`);
+    for (const line of result.lines) lines.push(line.replace(/^\[(\d+)\]/, (_, n) => `[${Number(n) + base}]`));
+    for (let local = 0; local < result.count; local++) map.push({ frameId, local });
+    dialogs.push(...result.dialogs);
+    truncated = truncated || result.truncated;
+  }
+  frameIndex.set(tab.id, map);
+  const notes = dialogs.map((d) => d.type === 'alert'
+    ? `(page dialog) alert ${JSON.stringify(d.message)}, dismissed`
+    : `(page dialog) ${d.type} ${JSON.stringify(d.message)}, answered ${JSON.stringify(d.answer)}`);
+  return { tabId: tab.id, title: tab.title, url: tab.url, active: tab.active, ...top.result, lines: [...notes, ...lines], truncated };
+}
+
+/// The frame and frame-local index of a page element index.
+function locateIndex(tabId, index) {
+  if (index == null) return { frameId: 0, local: null };
+  const map = frameIndex.get(tabId);
+  if (!map) return { frameId: 0, local: index };
+  const entry = map[Number(index)];
+  if (!entry) throw new Error(`no element ${index}; call browser_state again`);
+  return entry;
 }
 
 async function screenshot({ tab_id: tabId }) {
@@ -173,7 +241,11 @@ async function screenshot({ tab_id: tabId }) {
 
 async function act(params) {
   const tab = await tabById(params.tab_id);
-  const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [params]);
+  const { frameId, local } = locateIndex(tab.id, params.index);
+  if ((await ownTabs()).has(tab.id)) await hookDialogs(tab.id);
+  if (params.trusted && frameId !== 0) throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
+  const inFrame = { ...params, index: local };
+  const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [inFrame], frameId);
   if (result && result.openInBackground) {
     await openTab({ url: result.openInBackground });
     result.message += ' (opened in a new background tab in the "skfiy" group)';
@@ -404,7 +476,19 @@ function pageSnapshot(maxChars) {
 
   const scroller = document.scrollingElement || document.documentElement;
   const maxScroll = Math.max(0, scroller.scrollHeight - innerHeight);
+  // Report this frame on its own unless its parent (same origin) read it already.
+  let ownFrame = window === window.top;
+  if (!ownFrame) {
+    try { ownFrame = !window.parent.document; } catch { ownFrame = true; }
+  }
+  const root = document.documentElement;
+  const dialogs = JSON.parse((root && root.getAttribute('data-skfiy-dialogs')) || '[]');
+  if (root) root.removeAttribute('data-skfiy-dialogs');
   return {
+    count: state.elements.length,
+    ownFrame,
+    url: location.href,
+    dialogs,
     lines,
     truncated,
     viewport: { width: innerWidth, height: innerHeight },
@@ -417,6 +501,11 @@ function pageSnapshot(maxChars) {
 function pageAction(params) {
   const state = globalThis.__skfiy || { elements: [] };
   const { action } = params;
+  // How the page's next confirm() or prompt() is answered (see installDialogHooks).
+  if (params.dialog) {
+    document.documentElement.setAttribute('data-skfiy-dialog-answer',
+      JSON.stringify({ accept: params.dialog !== 'dismiss', text: params.prompt_text }));
+  }
   const pick = () => {
     if (params.index == null) return null;
     const el = state.elements[Number(params.index)];
@@ -622,7 +711,63 @@ function pageAction(params) {
       scroller.scrollBy({ top: vertical ? distance : 0, left: vertical ? 0 : distance, behavior: 'instant' });
       return { message: `Scrolled ${params.direction}` };
     }
+    case 'upload-chunk': {
+      // Files arrive in base64 pieces, since native messages are size-limited.
+      state.uploads = state.uploads || {};
+      state.uploads[params.token] = (state.uploads[params.token] || '') + params.data;
+      return { message: `received ${state.uploads[params.token].length} characters` };
+    }
+    case 'upload-commit': {
+      const el = pick();
+      if (!el || el.tagName !== 'INPUT' || el.type !== 'file') throw new Error(`element ${params.index} is not a file input`);
+      const encoded = (state.uploads || {})[params.token] || '';
+      delete state.uploads[params.token];
+      const binary = atob(encoded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], params.name, { type: params.mime || 'application/octet-stream' }));
+      el.files = transfer.files;
+      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { message: `Attached ${params.name} (${bytes.length} bytes) to [${params.index}]` };
+    }
     default:
       throw new Error(`unknown action ${action}`);
   }
+}
+
+// Runs in the page's own world of the agent's tabs: alert, confirm and prompt
+// would block the page until someone clicks, so they answer at once and leave
+// a note for browser_state. Answers default to OK and the default text.
+function installDialogHooks() {
+  if (window.__skfiyDialogHooks) return;
+  window.__skfiyDialogHooks = true;
+  const record = (entry) => {
+    const root = document.documentElement;
+    if (!root) return;
+    const list = JSON.parse(root.getAttribute('data-skfiy-dialogs') || '[]');
+    list.push(entry);
+    root.setAttribute('data-skfiy-dialogs', JSON.stringify(list.slice(-10)));
+  };
+  const answer = () => {
+    const root = document.documentElement;
+    const raw = root && root.getAttribute('data-skfiy-dialog-answer');
+    if (root) root.removeAttribute('data-skfiy-dialog-answer');
+    return raw ? JSON.parse(raw) : { accept: true };
+  };
+  window.alert = function (message) {
+    record({ type: 'alert', message: String(message ?? '') });
+  };
+  window.confirm = function (message) {
+    const { accept } = answer();
+    record({ type: 'confirm', message: String(message ?? ''), answer: accept });
+    return accept;
+  };
+  window.prompt = function (message, value) {
+    const { accept, text } = answer();
+    const reply = accept ? (text ?? (value ?? '')) : null;
+    record({ type: 'prompt', message: String(message ?? ''), answer: reply });
+    return reply;
+  };
 }

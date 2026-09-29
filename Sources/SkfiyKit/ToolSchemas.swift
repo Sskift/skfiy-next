@@ -212,7 +212,9 @@ enum ToolSchemas {
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
                 "x": ["type": "number", "description": "X in the tab's latest screenshot, when not using index"],
                 "y": ["type": "number", "description": "Y in the tab's latest screenshot, when not using index"],
-                "trusted": ["type": "boolean", "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"]
+                "trusted": ["type": "boolean", "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"],
+                "dialog": ["type": "string", "enum": ["accept", "dismiss"], "description": "How to answer a confirm() or prompt() the click opens, in tabs you opened (default accept); alerts are dismissed. browser_state lists the dialogs that appeared"],
+                "prompt_text": ["type": "string", "description": "Text to answer a prompt() with (default: the prompt's own default)"]
             ],
             required: ["tab_id"]
         ),
@@ -261,6 +263,15 @@ enum ToolSchemas {
             "Close a tab. Only close tabs you opened unless the user asked otherwise.",
             properties: ["tab_id": tab, "browser": browserName],
             required: ["tab_id"]
+        ),
+        tool(
+            "browser_upload",
+            "Attach a local file to a file input of a tab (by index), without the file picker. This sends the file to the website, so the user is asked to approve every upload first; uploads are refused when the client cannot ask. Up to 20 MB.",
+            properties: [
+                "tab_id": tab, "index": pageIndex, "browser": browserName,
+                "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"]
+            ],
+            required: ["tab_id", "index", "path"]
         )
     ]
 

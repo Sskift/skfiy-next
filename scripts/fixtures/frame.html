@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>skfiy frame</title></head>
+<body>
+<button id="press">Frame button</button>
+<input id="field" aria-label="Frame field">
+<script>
+  // Tells the page what happened here, so a test can read it from the page.
+  const origin = location.hostname;
+  const tell = (what) => parent.postMessage(`frame ${what} (${origin})`, '*');
+  document.getElementById('press').addEventListener('click', () => tell('clicked'));
+  document.getElementById('field').addEventListener('input', (e) => tell('typed ' + e.target.value));
+</script>
+</body>
+</html>
