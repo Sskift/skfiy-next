@@ -161,7 +161,7 @@ enum ToolSchemas {
         ),
         tool(
             "save_document",
-            "Save one of an app's documents to a file path, in the background, without a Save panel (those panels cannot be driven in the background, and cmd+s is disabled there). Works for scriptable document apps such as TextEdit, Preview, Pages, Numbers and Keynote, when skfiy may already send them Apple Events. Existing files are not overwritten unless overwrite is true.",
+            "Save the front document of an app to a file path, in the background. Scriptable apps (TextEdit, Preview, Pages, Numbers, Keynote) save through Apple Events when skfiy may already send them; other apps save through their own Save panel, opened from a Save As… menu item and filled in like file_dialog. When that menu item is disabled in the background, the result says to open the panel with run_in_front first. Existing files are not overwritten unless overwrite is true.",
             properties: [
                 "app": app,
                 "path": ["type": "string", "description": "Absolute path to save to, with the extension the app uses (e.g. .rtf or .txt for TextEdit); ~ is expanded"],
@@ -192,6 +192,16 @@ enum ToolSchemas {
                 "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"make the title bold\""]
             ],
             required: ["app", "key", "reason"]
+        ),
+        tool(
+            "file_dialog",
+            "Fill in the Open or Save panel (file dialog) an app is showing, in the background: goes to the path through the panel's sidebar and columns, sets the file name when saving, and presses Open/Save/Choose. Keys typed into a background app never reach these panels, so use this instead of typing a path. Only places the panel shows can be reached (not hidden folders such as /tmp or ~/Library); an existing file is not replaced unless overwrite is true.",
+            properties: [
+                "app": app,
+                "path": ["type": "string", "description": "Absolute path of the file to choose, or to save as (~ is expanded)"],
+                "overwrite": ["type": "boolean", "description": "When saving, replace an existing file at path (default false)"]
+            ],
+            required: ["app", "path"]
         ),
         tool(
             "wait_for",
@@ -334,7 +344,7 @@ enum ToolSchemas {
     - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.
     - To wait for something (a page or search result loading, a dialog, a download), use wait_for or browser_wait instead of polling get_app_state.
-    - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder; to save one to a path, use save_document rather than a Save panel.
+    - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder; to save one to a path, use save_document. When an app shows an Open or Save panel anyway (attaching or inserting a file, uploading in Safari, saving in an app save_document cannot script), fill it in with file_dialog.
     - Commands that act on the current selection or document (formatting, Undo, Find) only work in the frontmost app; when a task needs one, use run_in_front, which asks the user first, or say so. Do not retry them with press_key. Terminals and the app hosting you never receive input.
     - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
     - Everything runs in the background: the user keeps their front app, window order, cursor, clipboard and keyboard focus, and can keep typing. Hidden or minimized apps are not brought forward (no screenshot, but element actions still work).
