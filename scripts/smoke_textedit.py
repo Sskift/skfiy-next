@@ -12,10 +12,13 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 FRONT = None
+# This test's own emergency-stop flag, so stopping it never stops the user's skfiy.
+STOP_ENV = {**os.environ, "SKFIY_STOP_FILE": f"/tmp/skfiy-smoke-stop-{os.getpid()}"}
 BEFORE_CALL = ""
 APP = "TextEdit"
 
@@ -23,7 +26,7 @@ APP = "TextEdit"
 class Client:
     def __init__(self, binary):
         self.proc = subprocess.Popen(
-            [binary, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1
+            [binary, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env=STOP_ENV
         )
         self.next_id = 0
 
@@ -168,6 +171,22 @@ def main():
         state = client.call("get_app_state")
         check(text_value(state).startswith("Hello, world Hello"), "cmd+c, cmd+v copied and pasted text")
         check(pasteboard_change_count() == clipboard_before, "the user's clipboard was not touched")
+
+        # Emergency stop: calls are refused until resumed, and typing breaks off.
+        stop = lambda verb: subprocess.run([BINARY, verb], env=STOP_ENV, capture_output=True)
+        stop("stop")
+        client.call("get_app_state", expect_error=True)
+        stop("resume")
+        state = client.call("get_app_state")
+        check("App: TextEdit" in state, "skfiy stop refused calls until skfiy resume")
+        area = find(state, r"\] TextArea")
+        client.call("select_text", element_index=area, text="Hello, world", selection="cursor_before")
+        threading.Timer(0.25, stop, args=("stop",)).start()
+        client.call("type_text", text="z" * 180, expect_error=True)
+        stop("resume")
+        state = client.call("get_app_state")
+        typed = len(text_value(state)) - len(text_value(state).lstrip("z"))
+        check(0 < typed < 180, f"the emergency stop broke off typing after {typed} of 180 characters")
 
         area = find(state, r"\] TextArea")
         client.call("set_value", element_index=area, value="set by accessibility")

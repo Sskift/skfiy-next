@@ -80,6 +80,7 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 - **启动应用**：后台启动；若应用启动时自己抢了前台，会把前台交还给你原来的应用。
 - **不碰终端**：终端里打的字会作为 shell 命令执行，绕过 Claude Code 自己的权限确认，而且终端里往往正跑着 agent 本身。所以对 Ghostty、Terminal、iTerm2、Warp、kitty 等终端，以及承载 skfiy 的应用（沿父进程链找到的那个），skfiy 只读取、只滚动，不点击、不输入。终端可用 `SKFIY_ALLOW_TERMINALS=1` 放开，承载 skfiy 的应用始终不放开。
 - **打开文件**：`open_file` 通过 Launch Services 在后台打开文档，不激活应用。文件夹会在新的 Finder 窗口里打开，不占用你已有的窗口；这需要 skfiy 所在终端已有控制 Finder 的"自动化"权限，没有的话不会弹窗申请，而是提示模型改用 Finder 菜单。应用本身和可执行文件不会通过它打开。
+- **急停**：任何时候按 ⌃⌥⌘.（control-option-command-句号），所有正在运行的 skfiy 立刻停下：正在逐字输入的在下一个字符前停住，之后的每个调用都被拒绝并提示模型先问你；再按一次恢复（停止和恢复各有一声提示音）。也可以用 `skfiy stop` / `skfiy resume` / `skfiy status`。
 - **兜底**：少数应用会在执行某个动作时自己激活自己（例如 Finder 的「前往文件夹…」「新建 Finder 窗口」），或者被别的动作带到前台（例如「打开方式」打开的应用）。每次操作期间，skfiy 用独立线程直接向窗口服务器查询前台应用；只要有别的应用跑到前台，而这期间你没有点鼠标或按修饰键（打字不算，所以你一直在打字时它照样生效），就在几十毫秒内把前台交还给你原来的应用；如果它的窗口盖住了你原来最顶层的窗口，也会把你的窗口放回最上面，并在结果里告诉模型换一种做法。
 
 ### 网页
@@ -108,6 +109,7 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 | `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` 可得到无损截图 |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1` 开启上文的空闲时短暂应用内聚焦 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
+| `SKFIY_STOP_FILE` | `~/Library/Application Support/skfiy/stopped` | 急停标记文件的位置（测试用它互不干扰） |
 
 ## 开发
 

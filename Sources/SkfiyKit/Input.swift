@@ -105,8 +105,14 @@ enum Input {
 
     /// Types text as Unicode key events, one character per event (Chromium
     /// drops the tail of multi-character events). Newlines and tabs are real keys.
-    static func type(_ text: String, to pid: pid_t) async {
+    /// Types `text`; returns how many characters went out before the user's
+    /// emergency stop, if they pressed it meanwhile.
+    @discardableResult
+    static func type(_ text: String, to pid: pid_t) async -> Int {
+        var typed = 0
         for character in text {
+            if EmergencyStop.isStopped { return typed }
+            typed += 1
             switch character {
             case "\n", "\r", "\r\n":
                 await press(KeyChord(key: .code(CGKeyCode(kVK_Return))), to: pid)
@@ -123,6 +129,7 @@ enum Input {
                 await pause(0.003)
             }
         }
+        return typed
     }
 
     /// True when the active input source is an input method (e.g. Pinyin). It

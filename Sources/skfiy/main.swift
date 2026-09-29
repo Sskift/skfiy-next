@@ -11,6 +11,7 @@ Usage:
   skfiy doctor                   Check (and request) Accessibility + Screen Recording access
   skfiy tools                    List the tools
   skfiy install-browser-bridge   Register the browser extension's native messaging host
+  skfiy stop | resume | status   Emergency stop for every running skfiy (also ⌃⌥⌘. anywhere)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
                                  is saved to $SKFIY_SCREENSHOT_OUT (default /tmp/skfiy-screenshot.<ext>)
 
@@ -95,8 +96,30 @@ case "mcp":
         let server = MCPServer(executor: computerUse)
         computerUse.askUser = { [weak server] message in await server?.confirm(message) }
         server.start()
+        // The emergency stop shortcut needs an event loop; another skfiy may
+        // own it already, so keep trying until this one gets it.
+        if !EmergencyStop.registerShortcut() {
+            Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { timer in
+                MainActor.assumeIsolated {
+                    if EmergencyStop.registerShortcut() { timer.invalidate() }
+                }
+            }
+        }
     }
-    RunLoop.main.run()
+    // An app without a Dock icon or menu bar, so shortcuts reach it.
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    NSApplication.shared.run()
+
+case "stop":
+    EmergencyStop.set(stopped: true)
+    print("skfiy is stopped; every tool call is refused until `skfiy resume` or \(EmergencyStop.shortcut).")
+
+case "resume":
+    EmergencyStop.set(stopped: false)
+    print("skfiy is running again.")
+
+case "status":
+    print(EmergencyStop.isStopped ? "stopped (resume with `skfiy resume` or \(EmergencyStop.shortcut))" : "running")
 
 case "doctor":
     doctor()

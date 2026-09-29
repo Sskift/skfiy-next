@@ -58,6 +58,9 @@ public final class ComputerUse {
 
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
+        if EmergencyStop.isStopped, name != "list_apps" {
+            return ToolResult(text: EmergencyStop.refusal, isError: true)
+        }
         do {
             if Self.inputTools.contains(name) {
                 try refuseProtectedTarget(args)
@@ -268,6 +271,7 @@ public final class ComputerUse {
         // A quiet moment: no typing or clicking for a second, within 15 s.
         var quiet = false
         for _ in 0..<60 {
+            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
             if Input.userIdleSeconds() >= 1 { quiet = true; break }
             await Input.pause(0.25)
         }
@@ -1098,7 +1102,10 @@ public final class ComputerUse {
             }
         }
         let before = focused?.string(kAXValueAttribute)
-        await Input.type(text, to: pid)
+        let typed = await Input.type(text, to: pid)
+        if typed < text.count {
+            throw ToolError("Stopped after \(typed) of \(text.count) character(s): " + EmergencyStop.refusal)
+        }
         await Input.pause(0.15)
         if let focused, let before, focused.string(kAXValueAttribute) == before,
            focused.isSettable(kAXSelectedTextAttribute),
