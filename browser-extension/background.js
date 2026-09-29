@@ -230,14 +230,19 @@ function locateIndex(tabId, index) {
   return entry;
 }
 
-async function screenshot({ tab_id: tabId }) {
+async function screenshot({ tab_id: tabId, background }) {
   const tab = await tabById(tabId);
   const window = await chrome.windows.get(tab.windowId);
-  if (!tab.active || window.state === 'minimized') {
-    return { unavailable: 'Only the tab shown in its window can be captured, and skfiy does not switch the user\'s tabs. Use browser_state text instead.' };
+  if (tab.active && window.state !== 'minimized') {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
+    return { jpeg: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
   }
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
-  return { jpeg: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
+  if (!background) {
+    return { unavailable: 'Only the tab shown in its window can be captured without Chrome\'s debugger, and skfiy does not switch the user\'s tabs.' };
+  }
+  // A hidden tab still renders for the debugger's capture.
+  const shot = await withDebugger(tab.id, (send) => send('Page.captureScreenshot', { format: 'jpeg', quality: 70 }));
+  return { jpeg: shot.data, debugger: true };
 }
 
 // For browser_wait: whether a text is shown in any frame, and how long the

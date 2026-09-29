@@ -39,7 +39,8 @@ final class BrowserTools {
         case "browser_state":
             let tabID = try requiredTab(args)
             let browser = try await browser(for: args, tabID: tabID)
-            return try await state(browser, tabID: tabID, prefix: nil, screenshot: (args.values["screenshot"] as? Bool) ?? true)
+            return try await state(browser, tabID: tabID, prefix: nil, screenshot: (args.values["screenshot"] as? Bool) ?? true,
+                                   background: (args.values["background_screenshot"] as? Bool) ?? false)
         case "browser_navigate":
             let tabID = try requiredTab(args)
             let action = try args.requiredString("action")
@@ -82,7 +83,7 @@ final class BrowserTools {
                     throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
                 }
                 guard let scale = screenshotScale[tabID] else {
-                    throw ToolError("x/y need a screenshot of this tab first (browser_state on the tab the user sees); otherwise hover by index.")
+                    throw ToolError("x/y need a screenshot of this tab first (browser_state; for a background tab with background_screenshot: true); otherwise hover by index.")
                 }
                 params["x"] = x * scale
                 params["y"] = y * scale
@@ -102,7 +103,7 @@ final class BrowserTools {
                     throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
                 }
                 guard let scale = screenshotScale[tabID] else {
-                    throw ToolError("x/y need a screenshot of this tab first (browser_state on the tab the user sees); otherwise click by index.")
+                    throw ToolError("x/y need a screenshot of this tab first (browser_state; for a background tab with background_screenshot: true); otherwise click by index.")
                 }
                 params["x"] = x * scale
                 params["y"] = y * scale
@@ -279,19 +280,25 @@ final class BrowserTools {
         return ToolResult(text: lines.joined(separator: "\n"))
     }
 
-    private func state(_ browser: ConnectedBrowser, tabID: Int, prefix: String?, screenshot: Bool) async throws -> ToolResult {
+    private func state(_ browser: ConnectedBrowser, tabID: Int, prefix: String?, screenshot: Bool, background: Bool = false) async throws -> ToolResult {
         let page = try await send(browser, "state", ["tab_id": tabID]) as? [String: Any] ?? [:]
         var text = formatState(browser: browser.name, page: page)
         if let prefix { text = prefix + "\n" + text }
         var image: Data?
-        if screenshot, page["active"] as? Bool == true,
-           let shot = try? await send(browser, "screenshot", ["tab_id": tabID]) as? [String: Any],
-           let jpeg = (shot["jpeg"] as? String).flatMap({ Data(base64Encoded: $0) }),
-           let viewportWidth = (page["viewport"] as? [String: Any])?["width"] as? Int,
-           let scaled = fitForModel(jpeg) {
-            image = scaled.data
-            screenshotScale[tabID] = Double(viewportWidth) / Double(scaled.width)
-            text += "\n(Screenshot: \(scaled.width)×\(scaled.height) px of the viewport; browser_click accepts x/y in these pixels.)"
+        let shown = page["active"] as? Bool == true
+        if screenshot, shown || background {
+            let shot = try? await send(browser, "screenshot", ["tab_id": tabID, "background": background]) as? [String: Any]
+            if let jpeg = (shot?["jpeg"] as? String).flatMap({ Data(base64Encoded: $0) }),
+               let viewportWidth = (page["viewport"] as? [String: Any])?["width"] as? Int,
+               let scaled = fitForModel(jpeg) {
+                image = scaled.data
+                screenshotScale[tabID] = Double(viewportWidth) / Double(scaled.width)
+                text += "\n(Screenshot: \(scaled.width)×\(scaled.height) px of the viewport\(shot?["debugger"] as? Bool == true ? ", taken through Chrome's debugger" : ""); browser_click accepts x/y in these pixels.)"
+            } else if background {
+                text += "\n(No screenshot: \((shot?["unavailable"] as? String) ?? "Chrome's debugger could not capture this tab").)"
+            }
+        } else if screenshot {
+            text += "\n(No screenshot: this tab is in the background. Pass background_screenshot: true to take one through Chrome's debugger, if the page's look matters: canvas, charts, images.)"
         }
         return ToolResult(text: text, image: image, imageMimeType: "image/jpeg")
     }

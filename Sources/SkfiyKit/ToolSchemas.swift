@@ -228,8 +228,12 @@ enum ToolSchemas {
         ),
         tool(
             "browser_state",
-            "Read a tab as text: headings and page text in document order, with every interactive element numbered ([index] kind \"label\" value=...). Works on background tabs. Includes a screenshot only when the tab is the one shown in its window.",
-            properties: ["tab_id": tab, "browser": browserName, "screenshot": ["type": "boolean", "description": "Attach a screenshot when the tab is visible. Defaults to true"]],
+            "Read a tab as text: headings and page text in document order, with every interactive element numbered ([index] kind \"label\" value=...). Works on background tabs. Includes a screenshot when the tab is the one shown in its window; for a background tab only with background_screenshot, when its look matters (canvas, charts, images).",
+            properties: [
+                "tab_id": tab, "browser": browserName,
+                "screenshot": ["type": "boolean", "description": "Attach a screenshot when the tab is visible. Defaults to true"],
+                "background_screenshot": ["type": "boolean", "description": "Also screenshot a background tab, through Chrome's debugger: Chrome shows its \"started debugging this browser\" bar meanwhile, so use it only when the text is not enough. Defaults to false"]
+            ],
             required: ["tab_id"],
             readOnly: true
         ),
