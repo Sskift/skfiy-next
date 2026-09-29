@@ -32,6 +32,33 @@ struct MCPServerTests {
         #expect((fallback["result"] as? [String: Any])?["protocolVersion"] as? String == MCPServer.supportedProtocolVersions[0])
     }
 
+    @Test func asksTheUserThroughElicitation() async throws {
+        final class Outbox: @unchecked Sendable { var messages: [[String: Any]] = [] }
+        let outbox = Outbox()
+        let server = MCPServer(executor: FakeExecutor(), write: { data in
+            outbox.messages.append((try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:])
+        })
+        // Without elicitation support the server cannot ask.
+        #expect(await server.confirm("?", timeout: 1) == nil)
+
+        _ = await server.respond(to: [
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": ["protocolVersion": "2025-11-25", "capabilities": ["elicitation": ["form": [:]]]]
+        ])
+        for (answer, expected) in [(["action": "accept", "content": ["allow": true]], true),
+                                   (["action": "decline"], false)] as [([String: Any], Bool)] {
+            let asking = Task { await server.confirm("Bring TextEdit forward?", timeout: 5) }
+            while outbox.messages.last?["method"] as? String != "elicitation/create" {
+                await Task.yield()
+            }
+            let request = outbox.messages.removeLast()
+            #expect((request["params"] as? [String: Any])?["message"] as? String == "Bring TextEdit forward?")
+            let reply = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": request["id"]!, "result": answer])
+            await server.handle(line: String(decoding: reply, as: UTF8.self))
+            #expect(await asking.value == expected)
+        }
+    }
+
     @Test func listsTheCodexCompatibleTools() async throws {
         let server = MCPServer(executor: FakeExecutor(), write: { _ in })
         let response = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": "a", "method": "tools/list"]))

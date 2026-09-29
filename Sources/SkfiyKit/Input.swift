@@ -387,14 +387,18 @@ func windowID(of pid: pid_t, at point: CGPoint) -> CGWindowID? {
 /// rather than when the call returns.
 final class FrontGuard: @unchecked Sendable {
     private let lock = NSLock()
-    private var active = true
+    private var deadline = Date.distantFuture
     private var handBacks = 0
     private var taker: pid_t?
     private let userApp: pid_t
+    private let target: pid_t?
     private let started = Date()
 
-    init(userApp: pid_t) {
+    /// `target` is the app being operated: it never gets to keep the front,
+    /// since the user is not working in it.
+    init(userApp: pid_t, target: pid_t?) {
         self.userApp = userApp
+        self.target = target
         Thread.detachNewThread { [self] in
             while isActive {
                 poll()
@@ -403,27 +407,29 @@ final class FrontGuard: @unchecked Sendable {
         }
     }
 
-    /// Stops watching; the app that had to be sent back, if any.
+    /// Reports the app that had to be sent back, if any, and keeps watching a
+    /// little longer: some apps activate themselves well after the action.
     @discardableResult
-    func stop() -> pid_t? {
+    func stop(lingering seconds: TimeInterval = 0) -> pid_t? {
         lock.lock()
         defer { lock.unlock() }
-        active = false
+        deadline = Date().addingTimeInterval(seconds)
         return taker
     }
 
     private var isActive: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return active
+        return Date() < deadline
     }
 
     private func poll() {
         guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp else { return }
-        guard !userMayHaveSwitched(since: started),
+        // Another app may be the user's own choice; the target app never is.
+        guard front == target || !userMayHaveSwitched(since: started),
               let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }
         lock.lock()
-        let allowed = active && handBacks < 3  // never fight an app that keeps activating
+        let allowed = handBacks < 3  // never fight an app that keeps activating
         if allowed {
             handBacks += 1
             taker = front

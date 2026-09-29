@@ -112,7 +112,14 @@ func captureApp(pid: pid_t, rect: CGRect) async throws -> Screenshot {
     }
     let content: SCShareableContent
     do {
-        content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        guard let listed = try await withDeadline(5, {
+            try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        }) else {
+            throw ToolError("No screenshot: screen capture did not answer within 5 s. The accessibility tree still works.")
+        }
+        content = listed
+    } catch let error as ToolError {
+        throw error
     } catch {
         throw ToolError("Screen capture is unavailable: \(error.localizedDescription)")
     }
@@ -141,7 +148,16 @@ func captureApp(pid: pid_t, rect: CGRect) async throws -> Screenshot {
 
     let image: CGImage
     do {
-        image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        // ScreenCaptureKit can stay silent (another process of the same binary
+        // holding it, a stuck capture service); never let that hang a tool.
+        guard let captured = try await withDeadline(5, {
+            try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        }) else {
+            throw ToolError("No screenshot: screen capture did not answer within 5 s. The accessibility tree still works.")
+        }
+        image = captured
+    } catch let error as ToolError {
+        throw error
     } catch {
         throw ToolError("Screenshot failed: \(error.localizedDescription)")
     }
@@ -166,4 +182,38 @@ func encode(_ image: CGImage, format: String) throws -> Data {
         throw ToolError("Could not encode the screenshot.")
     }
     return data as Data
+}
+
+/// Waits for `operation` at most `seconds`, then returns nil. The operation
+/// keeps running (ScreenCaptureKit calls cannot be cancelled), so this does
+/// not use a task group, which would wait for it.
+func withDeadline<T>(_ seconds: Double, _ operation: @escaping () async throws -> T) async throws -> T? {
+    let once = Once()
+    return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T?, Error>) in
+        Task {
+            do {
+                let value = try await operation()
+                if once.claim() { continuation.resume(returning: value) }
+            } catch {
+                if once.claim() { continuation.resume(throwing: error) }
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+            if once.claim() { continuation.resume(returning: nil) }
+        }
+    }
+}
+
+/// A flag that can be claimed once, from any thread.
+final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
+    }
 }
