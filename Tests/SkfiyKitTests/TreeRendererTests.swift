@@ -43,6 +43,20 @@ struct TreeRendererTests {
         #expect(!lines.contains { $0.contains("Below the fold") })
     }
 
+    @Test func showsTooltipsAsHelp() {
+        let root = UINode(info: NodeInfo(role: "AXWindow", title: "Mail"), children: [
+            UINode(info: NodeInfo(role: "AXButton", help: "Archive the selected messages"), ref: 1),
+            UINode(info: NodeInfo(role: "AXButton", title: "Reply", help: "Reply"), ref: 2),
+            UINode(info: NodeInfo(role: "AXImage", help: "Flagged"), ref: 3)
+        ], ref: 0)
+        #expect(render(root).lines == [
+            "[0] Window \"Mail\"",
+            "  [1] Button help=\"Archive the selected messages\"",
+            "  [2] Button \"Reply\"",
+            "  [3] Image help=\"Flagged\""
+        ])
+    }
+
     @Test func togglesShowCheckedState() {
         let root = UINode(info: NodeInfo(role: "AXCheckBox", title: "Bold", value: "1"), ref: 0)
         #expect(render(root).lines == ["[0] CheckBox \"Bold\" checked"])

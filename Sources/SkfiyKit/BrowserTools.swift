@@ -12,7 +12,7 @@ final class BrowserTools {
     nonisolated static let toolNames = [
         "browser_tabs", "browser_open", "browser_state", "browser_click", "browser_type",
         "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
-        "browser_upload"
+        "browser_upload", "browser_hover", "browser_wait"
     ]
     /// Asks the user a yes/no question through the client; nil when it cannot.
     var askUser: ((String) async -> Bool?)?
@@ -51,10 +51,12 @@ final class BrowserTools {
             let browser = try await browser(for: args, tabID: tabID)
             _ = try await send(browser, "close", ["tab_id": tabID])
             return ToolResult(text: "Closed tab \(tabID).")
-        case "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll":
+        case "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover":
             return try await act(name, args)
         case "browser_upload":
             return try await upload(args)
+        case "browser_wait":
+            return try await wait(args)
         default:
             throw ToolError("Unknown tool \(name).")
         }
@@ -73,6 +75,18 @@ final class BrowserTools {
         if let index = try args.elementIndex("index") { params["index"] = index }
         if (args.values["trusted"] as? Bool) == true { params["trusted"] = true }
         switch name {
+        case "browser_hover":
+            params["action"] = "hover"
+            if params["index"] == nil {
+                guard let x = try args.double("x"), let y = try args.double("y") else {
+                    throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
+                }
+                guard let scale = screenshotScale[tabID] else {
+                    throw ToolError("x/y need a screenshot of this tab first (browser_state on the tab the user sees); otherwise hover by index.")
+                }
+                params["x"] = x * scale
+                params["y"] = y * scale
+            }
         case "browser_click":
             params["action"] = "click"
             if let dialog = args.string("dialog") {
@@ -165,6 +179,52 @@ final class BrowserTools {
         let result = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-commit",
                                                      "token": token, "name": name, "mime": mime], timeout: 30) as? [String: Any] ?? [:]
         return try await state(browser, tabID: tabID, prefix: ((result["message"] as? String) ?? "Attached \(name)") + ", with the user's approval.", screenshot: false)
+    }
+
+    /// Asks the page a few times a second, sending it nothing, until a text
+    /// shows up (or goes away), or without a text until it is loaded and quiet.
+    private func wait(_ args: Arguments) async throws -> ToolResult {
+        let tabID = try requiredTab(args)
+        let timeout = try args.double("timeout") ?? 10
+        guard (0.5...60).contains(timeout) else {
+            throw ToolError("timeout must be between 0.5 and 60 seconds.")
+        }
+        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let gone = (args.values["gone"] as? Bool) ?? false
+        if gone, text.isEmpty {
+            throw ToolError("gone needs a text to wait for the disappearance of.")
+        }
+        let browser = try await browser(for: args, tabID: tabID)
+        let started = Date()
+        var met = false
+        while !met {
+            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
+            let probe = (try? await send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
+            let loading = probe["loading"] as? Bool ?? true
+            if text.isEmpty {
+                met = !loading && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
+            } else if let found = probe["found"] as? Bool {
+                met = found != gone
+            }
+            if !met {
+                if Date().timeIntervalSince(started) >= timeout { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+        let waited = formatNumber((Date().timeIntervalSince(started) * 10).rounded() / 10)
+        var state = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
+        let subject = quote(text, limit: 60)
+        let outcome = switch (text.isEmpty, gone, met) {
+        case (true, _, true): "The page finished loading and stopped changing after \(waited) s."
+        case (true, _, false): "The page was still loading or changing after \(waited) s."
+        case (false, false, true): "\(subject) appeared after \(waited) s."
+        case (false, false, false): "\(subject) did not appear within \(waited) s."
+        case (false, true, true): "\(subject) was gone after \(waited) s."
+        case (false, true, false): "\(subject) was still there after \(waited) s."
+        }
+        state.text = outcome + "\n" + state.text
+        state.isError = !met
+        return state
     }
 
     // MARK: Browsers and requests

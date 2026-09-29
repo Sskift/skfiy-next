@@ -9,6 +9,9 @@
   #scroller { height: 90px; width: 260px; overflow: auto; border: 1px solid #999; }
   canvas { border: 1px solid #333; }
   #editor { border: 1px solid #999; padding: 4px; width: 260px; }
+  .menu { display: inline-block; position: relative; margin-right: 24px; }
+  .cssmenu .cssmenu-items { display: none; }
+  .cssmenu:hover .cssmenu-items { display: block; }
 </style>
 </head>
 <body>
@@ -47,6 +50,18 @@
   <button id="prompt">Prompt me</button>
 </section>
 <section>
+  <button id="later">Load later</button> <span id="later-out"></span>
+</section>
+<section>
+  <!-- Hover menus: opened by script, by the page's CSS, and by a stylesheet from another origin. -->
+  <div class="menu" id="jsmenu"><button>Account</button>
+    <div id="jsmenu-items" hidden><button onclick="log('logout clicked', event)">Log out</button></div></div>
+  <div class="menu cssmenu"><a href="#products">Products</a>
+    <div class="cssmenu-items"><a href="#p1" onclick="log('product clicked', event)">Product one</a></div></div>
+  <div class="menu xmenu"><a href="#help">Help</a>
+    <div class="xmenu-items"><a href="#faq" onclick="log('faq clicked', event)">FAQ page</a></div></div>
+</section>
+<section>
   <!-- Same origin, and cross origin (localhost vs 127.0.0.1): frames report to this page. -->
   <iframe id="same" title="Same-origin frame" width="300" height="90"></iframe>
   <iframe id="cross" title="Cross-origin frame" width="300" height="90"></iframe>
@@ -75,10 +90,21 @@
   document.getElementById('alert').addEventListener('click', (e) => { alert('Saved!'); log('alerted', e); });
   document.getElementById('confirm').addEventListener('click', (e) => log('confirm ' + confirm('Sure?'), e));
   document.getElementById('prompt').addEventListener('click', (e) => log('prompt ' + prompt('Name?', 'default'), e));
+  const jsmenu = document.getElementById('jsmenu');
+  jsmenu.addEventListener('mouseenter', () => { document.getElementById('jsmenu-items').hidden = false; });
+  jsmenu.addEventListener('mouseleave', () => { document.getElementById('jsmenu-items').hidden = true; });
+  document.getElementById('later').addEventListener('click', (e) => {
+    log('loading', e);
+    setTimeout(() => { document.getElementById('later-out').textContent = 'loaded later'; }, 1500);
+  });
   // Frames: the page's own frame file, served from both hosts.
   const frameURL = (host) => `http://${host}:${location.port}/frame.html`;
   document.getElementById('same').src = frameURL(location.hostname);
   document.getElementById('cross').src = frameURL(location.hostname === 'localhost' ? '127.0.0.1' : 'localhost');
+  const foreignCSS = document.createElement('link');
+  foreignCSS.rel = 'stylesheet';
+  foreignCSS.href = frameURL(location.hostname === 'localhost' ? '127.0.0.1' : 'localhost').replace('frame.html', 'hover.css');
+  document.head.appendChild(foreignCSS);
   addEventListener('message', (e) => { if (typeof e.data === 'string' && e.data.startsWith('frame ')) log(e.data); });
   // Keys held down: one keydown, one keyup, the time between them.
   const pressedAt = {};

@@ -95,6 +95,7 @@ async function handle(method, params) {
     case 'state': return tabState(params);
     case 'screenshot': return screenshot(params);
     case 'act': return act(params);
+    case 'probe': return probe(params);
     default: throw new Error(`unknown method ${method}`);
   }
 }
@@ -239,12 +240,43 @@ async function screenshot({ tab_id: tabId }) {
   return { jpeg: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
 }
 
+// For browser_wait: whether a text is shown in any frame, and how long the
+// page has gone without DOM changes.
+async function probe({ tab_id: tabId, text }) {
+  const tab = await tabById(tabId);
+  const frames = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true }, func: pageProbe, args: [String(text || '').toLowerCase()], world: 'ISOLATED'
+  }).catch(() => []);
+  const answers = frames.map((f) => f.result).filter(Boolean);
+  return {
+    loading: tab.status !== 'complete' || !answers.length,
+    found: answers.some((a) => a.found),
+    quietMs: answers.length ? Math.min(...answers.map((a) => a.quietMs)) : 0
+  };
+}
+
+function pageProbe(text) {
+  const quiet = (globalThis.__skfiyQuiet = globalThis.__skfiyQuiet || { last: Date.now() });
+  if (!quiet.observer && document.documentElement) {
+    quiet.observer = new MutationObserver(() => { quiet.last = Date.now(); });
+    quiet.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
+  let found = false;
+  if (text) {
+    const fields = Array.from(document.querySelectorAll('input:not([type=password]), textarea')).map((el) => el.value);
+    const content = [document.title, (document.body && document.body.innerText) || '', ...fields].join('\n');
+    found = content.toLowerCase().includes(text);
+  }
+  return { found, quietMs: Date.now() - quiet.last };
+}
+
 async function act(params) {
   const tab = await tabById(params.tab_id);
   const { frameId, local } = locateIndex(tab.id, params.index);
   if ((await ownTabs()).has(tab.id)) await hookDialogs(tab.id);
   if (params.trusted && frameId !== 0) throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
   const inFrame = { ...params, index: local };
+  if (params.action === 'hover') inFrame.css = await foreignStyles(tab.id, frameId);
   const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [inFrame], frameId);
   if (result && result.openInBackground) {
     await openTab({ url: result.openInBackground });
@@ -253,6 +285,31 @@ async function act(params) {
   await delay(250);
   await waitForLoad(tab.id, 8000);
   return result;
+}
+
+// :hover rules in stylesheets from other origins, which the page may not read;
+// host permissions let the extension fetch them.
+const cssCache = new Map();
+
+async function foreignStyles(tabId, frameId) {
+  const hrefs = await run(tabId, unreadableSheets, [], frameId).catch(() => []);
+  const texts = [];
+  for (const href of (hrefs || []).slice(0, 20)) {
+    if (!cssCache.has(href)) {
+      const text = await fetch(href, { credentials: 'omit' }).then((r) => (r.ok ? r.text() : '')).catch(() => '');
+      cssCache.set(href, text.length < 3000000 ? text : '');
+    }
+    if (cssCache.get(href)) texts.push(cssCache.get(href));
+  }
+  return texts;
+}
+
+function unreadableSheets() {
+  const hrefs = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    try { void sheet.cssRules; } catch { if (sheet.href) hrefs.push(sheet.href); }
+  }
+  return hrefs;
 }
 
 // Real input events through Chrome's debugger, for pages that ignore
@@ -566,7 +623,75 @@ function pageAction(params) {
     return { target, proceed };
   };
 
+  // Script cannot put an element in the :hover state, so the page's :hover
+  // rules are copied onto an attribute that marks the hovered chain.
+  const applyHoverStyles = (foreign) => {
+    const rules = [];
+    const convert = (list) => {
+      for (const rule of Array.from(list || [])) {
+        if (rule.selectorText !== undefined && rule.style) {
+          if (rule.selectorText.includes(':hover')) {
+            rules.push(`${rule.selectorText.replace(/:hover\b/g, '[data-skfiy-hover]')} { ${rule.style.cssText} }`);
+          }
+        } else if (rule.media) {
+          if (matchMedia(rule.media.mediaText).matches) convert(rule.cssRules);
+        } else if (rule.cssRules) {
+          convert(rule.cssRules);
+        }
+      }
+    };
+    for (const sheet of Array.from(document.styleSheets)) {
+      if (sheet.ownerNode && sheet.ownerNode.id === 'skfiy-hover-style') continue;
+      try { convert(sheet.cssRules); } catch { /* another origin: among `foreign` */ }
+    }
+    for (const text of foreign) {
+      try {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(text);
+        convert(sheet.cssRules);
+      } catch { /* not parsable */ }
+    }
+    let style = document.getElementById('skfiy-hover-style');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'skfiy-hover-style';
+      (document.head || document.documentElement).appendChild(style);
+    }
+    style.textContent = rules.join('\n');
+  };
+
   switch (action) {
+    case 'hover': {
+      const el = params.index != null ? pick() : document.elementFromPoint(Number(params.x), Number(params.y));
+      if (!el) throw new Error(params.index != null || params.x == null ? 'index (or x and y) is required' : 'nothing at that point of the viewport');
+      if (params.index != null) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const at = params.index != null ? center(el) : { clientX: Number(params.x), clientY: Number(params.y) };
+      // The element and its ancestors, across shadow roots.
+      const chain = (node) => {
+        const list = [];
+        for (let n = node; n; n = n.parentElement || (n.parentNode && n.parentNode.host) || null) list.push(n);
+        return list;
+      };
+      const fire = (target, type, bubbles) => target.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type,
+        { bubbles, cancelable: true, composed: true, view: window, pointerId: 1, pointerType: 'mouse', isPrimary: true, ...at }));
+      const before = state.hovered && state.hovered.isConnected ? state.hovered : null;
+      const left = before ? chain(before) : [];
+      const entered = chain(el);
+      if (before && before !== el) {
+        fire(before, 'pointerout', true); fire(before, 'mouseout', true);
+        for (const n of left.filter((n) => !entered.includes(n))) { fire(n, 'pointerleave', false); fire(n, 'mouseleave', false); }
+      }
+      if (before !== el) {
+        fire(el, 'pointerover', true); fire(el, 'mouseover', true);
+        for (const n of entered.filter((n) => !left.includes(n)).reverse()) { fire(n, 'pointerenter', false); fire(n, 'mouseenter', false); }
+      }
+      fire(el, 'pointermove', true); fire(el, 'mousemove', true);
+      for (const n of Array.from(document.querySelectorAll('[data-skfiy-hover]'))) n.removeAttribute('data-skfiy-hover');
+      for (const n of entered) n.setAttribute('data-skfiy-hover', '');
+      applyHoverStyles(params.css || []);
+      state.hovered = el;
+      return { message: params.index != null ? `Hovered [${params.index}]` : `Hovered at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${el.tagName.toLowerCase()}>` };
+    }
     case 'locate': {
       const el = pick();
       if (!el) throw new Error('index (or x and y) is required');

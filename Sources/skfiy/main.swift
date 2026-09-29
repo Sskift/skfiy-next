@@ -111,11 +111,13 @@ case "mcp":
     NSApplication.shared.run()
 
 case "stop":
-    EmergencyStop.set(stopped: true)
+    let playing = EmergencyStop.set(stopped: true)
+    Thread.sleep(forTimeInterval: playing + 0.1)
     print("skfiy is stopped; every tool call is refused until `skfiy resume` or \(EmergencyStop.shortcut).")
 
 case "resume":
-    EmergencyStop.set(stopped: false)
+    let playing = EmergencyStop.set(stopped: false)
+    Thread.sleep(forTimeInterval: playing + 0.1)
     print("skfiy is running again.")
 
 case "status":
@@ -154,6 +156,18 @@ case "call":
             }
         }
         exit(result.isError ? 1 : 0)
+    }
+    RunLoop.main.run()
+
+case "capture-window":
+    // Internal: a screenshot in a fresh process, for `skfiy mcp` when its own
+    // screen capture stalled.
+    Instance.runFromOwnLink()
+    atexit { Instance.removeOwnLink() }
+    Task { @MainActor in
+        let (output, ok) = await captureWindowCommand(Array(arguments.dropFirst()))
+        print(output)
+        exit(ok ? 0 : 1)
     }
     RunLoop.main.run()
 

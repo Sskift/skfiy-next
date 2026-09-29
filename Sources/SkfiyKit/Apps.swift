@@ -277,6 +277,17 @@ func isScreenLocked() -> Bool {
     return (session["CGSSessionScreenIsLocked"] as? Bool) == true
 }
 
+/// Why no screenshot can be taken right now, if that is the case. Screen
+/// capture refuses ("the user declined") or stalls meanwhile.
+func screenUnavailableReason() -> String? {
+    if isScreenLocked() { return "the screen is locked" }
+    if CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return "the display is asleep" }
+    if NSWorkspace.shared.runningApplications.contains(where: { ($0.bundleIdentifier ?? "").hasPrefix("com.apple.ScreenSaver") }) {
+        return "the screen saver is running"
+    }
+    return nil
+}
+
 /// Terminals run whatever is typed into them as shell commands, outside the
 /// MCP client's own permission checks, and often host the agent itself.
 let terminalBundleIDs: Set<String> = [

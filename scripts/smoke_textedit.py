@@ -200,6 +200,19 @@ def main():
         typed = len(text_value(state)) - len(text_value(state).lstrip("z"))
         check(0 < typed < 180, f"the emergency stop broke off typing after {typed} of 180 characters")
 
+        # wait_for: a text another process puts there a second later.
+        script = 'tell application "TextEdit" to set text of document 1 to "ready now"'
+        threading.Timer(1.0, subprocess.run, args=(["osascript", "-e", script],), kwargs={"capture_output": True}).start()
+        started = time.time()
+        waited = client.call("wait_for", text="Ready now", timeout=8)
+        check(waited.startswith('"ready now" appeared after') and time.time() - started >= 0.8,
+              f"wait_for saw the text appear after {time.time() - started:.1f} s")
+        client.call("wait_for", text="ready now", gone=True, timeout=1, expect_error=True)
+        check(True, "wait_for timed out while the text stayed")
+        waited = client.call("wait_for")
+        check(waited.startswith("The window stopped changing"), "wait_for without a text returned once the window was still")
+
+        state = client.call("get_app_state")
         area = find(state, r"\] TextArea")
         client.call("set_value", element_index=area, value="set by accessibility")
         state = client.call("get_app_state")
@@ -230,9 +243,17 @@ def main():
         area = scroll_area_text(state)
         client.call("set_value", element_index=area, value="alpha\nbeta\ngamma")
         client.call("select_text", element_index=area, text="alpha", selection="cursor_before")
-        state = client.call("get_app_state")
-        shot = re.search(r"Screenshot: \d+×(\d+) px", state)
-        check(shot is not None, "get_app_state returned a screenshot: " + " | ".join(state.splitlines()[:4])[:200])
+        # Screen capture occasionally stalls system-wide for up to a minute;
+        # the tree still comes back meanwhile. This step needs pixels.
+        waited = time.time()
+        for _ in range(20):
+            state = client.call("get_app_state")
+            shot = re.search(r"Screenshot: \d+×(\d+) px", state)
+            if shot:
+                break
+            time.sleep(3)
+        stalled = f" (screen capture recovered after {time.time() - waited:.0f} s)" if time.time() - waited > 5 else ""
+        check(shot is not None, "get_app_state returned a screenshot" + (stalled or ": " + " | ".join(state.splitlines()[:4])[:120]))
         height = int(shot.group(1))
         client.call("click", x=40, y=height - 40)
         client.call("type_text", text="X")
@@ -265,6 +286,11 @@ def main():
         print("PASS")
     finally:
         client.close()
+        # Only test documents are open (TextEdit was not running at the start).
+        # Quitting without saving keeps a failed run from leaving windows that
+        # TextEdit would restore next time.
+        if subprocess.run(["pgrep", "-x", APP], capture_output=True).returncode == 0:
+            subprocess.run(["osascript", "-e", 'tell application "TextEdit" to quit saving no'], capture_output=True)
 
 
 if __name__ == "__main__":

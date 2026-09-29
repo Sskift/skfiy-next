@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 USER_BROWSER = "--user-browser" in sys.argv
 ARGS = [arg for arg in sys.argv[1:] if arg != "--user-browser"]
@@ -166,6 +167,30 @@ def main():
         return result + f" | asked={len(client.asked) - asked_before}"
     case("upload a file after approval", attach, rf"^file skfiy-upload-\d+\.txt 13 bytes: hello upload( untrusted)? \| asked=1$")
     os.remove(upload)
+
+    # Hover menus open in the background tab; their items can then be clicked.
+    # Every result renumbers the page, so indices come from the latest one.
+    latest = [client.call("browser_state", tab_id=tab)]
+
+    def hover_then_click(trigger, item, done):
+        def run():
+            hovered = client.call("browser_hover", tab_id=tab, index=index(latest[0], trigger))
+            latest[0] = client.call("browser_click", tab_id=tab, index=index(hovered, item))
+            return status(latest[0])
+        case(f"hover {trigger} reveals {item}", run, done)
+    hover_then_click(r'button "Account"', r'button "Log out"', r"^logout clicked")
+    hover_then_click(r'link "Products"', r'link "Product one"', r"^product clicked")
+    hover_then_click(r'link "Help"', r'link "FAQ page"', r"^faq clicked")
+
+    # Waiting: a text that shows up later, one that never does, and a quiet page.
+    def wait_later():
+        act("browser_click", index=index(client.call("browser_state", tab_id=tab), r'button "Load later"'))
+        started = time.time()
+        text = client.call("browser_wait", tab_id=tab, text="Loaded later", timeout=10)
+        return f"{text.splitlines()[0]} ({time.time() - started:.1f} s)"
+    case("browser_wait for a text that appears later", wait_later, r'^"loaded later" appeared after [\d.]+ s\. \([1-9]')
+    case("browser_wait times out", lambda: client.call("browser_wait", tab_id=tab, text="never shown", timeout=1), r'"never shown" did not appear within')
+    case("browser_wait for a quiet page", lambda: client.call("browser_wait", tab_id=tab).splitlines()[0], r"^The page finished loading and stopped changing")
     def trusted_typing():
         text = client.call("browser_type", tab_id=tab, index=name, text=" ok", trusted=True)
         return re.search(r'text "Name"[^\n]*', text).group(0)

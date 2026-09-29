@@ -53,7 +53,8 @@ public final class ComputerUse {
 
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
-        "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front"
+        "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
+        "wait_for"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -82,6 +83,7 @@ public final class ComputerUse {
             case "save_document": return try await keepingFront(args) { try await self.saveDocument(args) }
             case "run_in_front": return try await runInFront(args)
             case "zoom": return try await zoom(args)
+            case "wait_for": return try await waitFor(args)
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
             }
@@ -263,6 +265,82 @@ public final class ComputerUse {
             image: shot.data,
             imageMimeType: shot.mimeType
         )
+    }
+
+    // MARK: - wait_for
+
+    /// Polls the accessibility tree, sending nothing, until a text shows up (or
+    /// goes away), or without a text until the window stops changing; then
+    /// returns the fresh state.
+    func waitFor(_ args: Arguments) async throws -> ToolResult {
+        try requireAccessibility()
+        let query = try args.requiredString("app")
+        guard case .running(let app) = try directory.resolve(query) else {
+            throw ToolError("\(query) is not running. Call get_app_state first; it launches the app in the background.")
+        }
+        let timeout = try args.double("timeout") ?? 10
+        guard (0.5...60).contains(timeout) else {
+            throw ToolError("timeout must be between 0.5 and 60 seconds.")
+        }
+        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let gone = (args.values["gone"] as? Bool) ?? false
+        if gone, text.isEmpty {
+            throw ToolError("gone needs a text to wait for the disappearance of.")
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 2)
+        await enableAccessibility(app, appElement)
+        let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
+        let name = app.localizedName ?? query
+        let what = text.isEmpty ? "the window to stop changing" : "\(quote(text, limit: 60)) to \(gone ? "disappear" : "appear")"
+        let outcome = { (met: Bool, seconds: String) -> String in
+            let subject = quote(text, limit: 60)
+            switch (text.isEmpty, gone, met) {
+            case (true, _, true): return "The window stopped changing after \(seconds) s."
+            case (true, _, false): return "The window was still changing after \(seconds) s."
+            case (false, false, true): return "\(subject) appeared after \(seconds) s."
+            case (false, false, false): return "\(subject) did not appear within \(seconds) s (text only in the screenshot cannot be matched)."
+            case (false, true, true): return "\(subject) was gone after \(seconds) s."
+            case (false, true, false): return "\(subject) was still there after \(seconds) s."
+            }
+        }
+        let started = Date()
+        var last: String?
+        var unchangedSince = started
+        var met = false
+        while !met {
+            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
+            // While locked, accessibility answers for the lock screen, not the app.
+            guard !isScreenLocked() else {
+                throw ToolError("The screen locked while waiting for \(what). Try again after it is unlocked.")
+            }
+            guard !app.isTerminated else {
+                sessions[app.processIdentifier] = nil
+                throw ToolError("\(name) quit while waiting for \(what).")
+            }
+            // A window that is not there (yet) proves nothing either way.
+            if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil) {
+                let current = snapshot.text.lowercased()
+                if text.isEmpty {
+                    if current != last {
+                        last = current
+                        unchangedSince = Date()
+                    }
+                    met = Date().timeIntervalSince(unchangedSince) >= 1
+                } else {
+                    met = current.contains(text) != gone
+                }
+            }
+            if !met {
+                if Date().timeIntervalSince(started) >= timeout { break }
+                await Input.pause(0.3)
+            }
+        }
+        let waited = formatNumber((Date().timeIntervalSince(started) * 10).rounded() / 10)
+        var state = try await getAppState(args)
+        state.text = outcome(met, waited) + "\n" + state.text
+        state.isError = !met
+        return state
     }
 
     // MARK: - run_in_front

@@ -1,0 +1,3 @@
+/* Served from the other host than web.html, so the page's script cannot read it. */
+.xmenu .xmenu-items { display: none; }
+.xmenu:hover .xmenu-items { display: block; }
