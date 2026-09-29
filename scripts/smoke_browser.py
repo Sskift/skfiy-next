@@ -13,6 +13,7 @@ touching the tab you are looking at.
     python3 scripts/smoke_browser.py [path/to/skfiy] [--user-browser]
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -30,16 +31,31 @@ class Client:
     def __init__(self):
         self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self.next_id = 0
+        self.asked = []  # approvals the server asked for (answered yes)
+        self.send({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                   "params": {"protocolVersion": "2025-11-25", "capabilities": {"elicitation": {"form": {}}}}})
+        self.read(0)
+
+    def send(self, message):
+        self.proc.stdin.write(json.dumps(message) + "\n")
+        self.proc.stdin.flush()
+
+    def read(self, wanted):
+        while True:
+            message = json.loads(self.proc.stdout.readline())
+            if message.get("method") == "elicitation/create":
+                self.asked.append(message["params"]["message"])
+                self.send({"jsonrpc": "2.0", "id": message["id"], "result": {"action": "accept", "content": {"allow": True}}})
+            elif message.get("id") == wanted:
+                return message
 
     def call(self, tool, **arguments):
         global CAME_TO_FRONT
         before = frontmost()
         self.next_id += 1
         arguments = {"browser": BROWSER_NAME, **arguments}  # other browsers may be connected too
-        request = {"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}
-        self.proc.stdin.write(json.dumps(request) + "\n")
-        self.proc.stdin.flush()
-        result = json.loads(self.proc.stdout.readline())["result"]
+        self.send({"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call", "params": {"name": tool, "arguments": arguments}})
+        result = self.read(self.next_id)["result"]
         text = result["content"][0]["text"]
         if not is_browser(before) and is_browser(frontmost()):
             CAME_TO_FRONT = True
@@ -121,6 +137,35 @@ def main():
         return re.search(r'region "Scroller"[^\n]*', text).group(0)
 
     case("scroll an element", scroll_element, r"scroll=[1-9]\d*/")
+
+    # Frames: the same-origin one is read inline, the cross-origin one after it.
+    frames = client.call("browser_state", tab_id=tab)
+    buttons = [int(n) for n in re.findall(r'\[(\d+)\] button "Frame button"', frames)]
+    fields = [int(n) for n in re.findall(r'\[(\d+)\] text "Frame field"', frames)]
+    case("both frames listed", lambda: f"{len(buttons)} frame buttons, {len(fields)} frame fields", r"^2 frame buttons, 2 frame fields$")
+    case("click in a same-origin frame", lambda: act("browser_click", index=buttons[0]), r"^frame clicked \(127\.0\.0\.1\)$")
+    case("click in a cross-origin frame", lambda: act("browser_click", index=buttons[1]), r"^frame clicked \(localhost\)$")
+    case("type in a cross-origin frame", lambda: act("browser_type", index=fields[1], text="hi"), r"^frame typed hi \(localhost\)$")
+
+    # Page dialogs in the agent's own tab answer at once instead of blocking.
+    page = client.call("browser_state", tab_id=tab)
+    def alert():
+        # The click returns the page state, which reports (and clears) the dialog.
+        text = client.call("browser_click", tab_id=tab, index=index(page, r'button "Alert me"'))
+        return status(text) + " | " + (re.search(r"\(page dialog\)[^\n]*", text) or re.search("$", "")).group(0)
+    case("alert does not block the page", alert, r'^alerted( untrusted)? \| \(page dialog\) alert "Saved!"')
+    case("confirm answered with dismiss", lambda: act("browser_click", index=index(page, r'button "Confirm me"'), dialog="dismiss"), r"^confirm false( untrusted)?$")
+    case("prompt answered with text", lambda: act("browser_click", index=index(page, r'button "Prompt me"'), prompt_text="skfiy"), r"^prompt skfiy( untrusted)?$")
+
+    # Uploads send a local file to the site, so the user is asked first.
+    upload = f"/tmp/skfiy-upload-{os.getpid()}.txt"
+    open(upload, "w").write("hello upload\n")
+    asked_before = len(client.asked)
+    def attach():
+        result = act("browser_upload", index=index(page, r'file "Attachment"'), path=upload)
+        return result + f" | asked={len(client.asked) - asked_before}"
+    case("upload a file after approval", attach, rf"^file skfiy-upload-\d+\.txt 13 bytes: hello upload( untrusted)? \| asked=1$")
+    os.remove(upload)
     def trusted_typing():
         text = client.call("browser_type", tab_id=tab, index=name, text=" ok", trusted=True)
         return re.search(r'text "Name"[^\n]*', text).group(0)

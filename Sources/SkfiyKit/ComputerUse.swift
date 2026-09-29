@@ -42,7 +42,9 @@ public final class ComputerUse {
     /// Text copied with cmd+c / cmd+x. The system clipboard belongs to the user.
     private var clipboard: String?
     /// Asks the user a yes/no question through the client; nil when it cannot.
-    public var askUser: ((String) async -> Bool?)?
+    public var askUser: ((String) async -> Bool?)? {
+        didSet { browser.askUser = askUser }
+    }
     private let settleDelay: Double
 
     public init() {

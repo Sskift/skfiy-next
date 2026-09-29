@@ -18,7 +18,7 @@ pkill -9 -f "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Test
 mkdir -p "$WORK/bin" "$WORK/web" "$WORK/extension"
 rm -f "$WORK/bin/skfiy" && cp "$SKFIY" "$WORK/bin/skfiy"   # replace, never overwrite a signed binary in place
 cp browser-extension/* "$WORK/extension/"
-cp scripts/fixtures/web.html "$WORK/web/"
+cp scripts/fixtures/*.html "$WORK/web/"
 rm -rf "$PROFILE"   # a fresh profile, so no stale extension service worker is cached
 "$WORK/bin/skfiy" install-browser-bridge --user-data-dir "$PROFILE" >/dev/null
 

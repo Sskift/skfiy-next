@@ -1,5 +1,6 @@
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 /// Web page tools backed by the browser bridge extension. They address tabs by
 /// id, so they work on background tabs and never switch what the user sees.
@@ -10,8 +11,11 @@ final class BrowserTools {
 
     nonisolated static let toolNames = [
         "browser_tabs", "browser_open", "browser_state", "browser_click", "browser_type",
-        "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab"
+        "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
+        "browser_upload"
     ]
+    /// Asks the user a yes/no question through the client; nil when it cannot.
+    var askUser: ((String) async -> Bool?)?
 
     static let notConnected = """
     No browser is connected to skfiy. To enable the browser tools, run `make install` in the skfiy repository (or `skfiy install-browser-bridge`), then in Chrome open chrome://extensions, turn on Developer mode, click "Load unpacked", and choose ~/Library/Application Support/skfiy/browser-extension.
@@ -49,6 +53,8 @@ final class BrowserTools {
             return ToolResult(text: "Closed tab \(tabID).")
         case "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll":
             return try await act(name, args)
+        case "browser_upload":
+            return try await upload(args)
         default:
             throw ToolError("Unknown tool \(name).")
         }
@@ -69,6 +75,14 @@ final class BrowserTools {
         switch name {
         case "browser_click":
             params["action"] = "click"
+            if let dialog = args.string("dialog") {
+                guard ["accept", "dismiss"].contains(dialog) else { throw ToolError("dialog must be accept or dismiss.") }
+                params["dialog"] = dialog
+            }
+            if let text = args.string("prompt_text") {
+                params["dialog"] = params["dialog"] ?? "accept"
+                params["prompt_text"] = text
+            }
             if params["index"] == nil {
                 guard let x = try args.double("x"), let y = try args.double("y") else {
                     throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
@@ -104,6 +118,53 @@ final class BrowserTools {
         let result = try await send(browser, "act", params, timeout: 30) as? [String: Any] ?? [:]
         let message = (result["message"] as? String) ?? "Done"
         return try await state(browser, tabID: tabID, prefix: message + ".", screenshot: false)
+    }
+
+    /// Sends a file to the page in pieces and attaches it to a file input,
+    /// once the user has approved sending it to that site.
+    private func upload(_ args: Arguments) async throws -> ToolResult {
+        let tabID = try requiredTab(args)
+        guard let index = try args.elementIndex("index") else { throw ToolError("Missing required argument \"index\".") }
+        let path = (try args.requiredString("path") as NSString).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            throw ToolError("No file at \(path).")
+        }
+        let data: Data
+        do { data = try Data(contentsOf: URL(fileURLWithPath: path)) } catch {
+            throw ToolError("Could not read \(path): \(error.localizedDescription)")
+        }
+        guard data.count <= 20_000_000 else { throw ToolError("\(path) is larger than 20 MB.") }
+        let browser = try await browser(for: args, tabID: tabID)
+        let windows = (try? await send(browser, "tabs", [:]) as? [[String: Any]]) ?? []
+        let url = windows.flatMap { ($0["tabs"] as? [[String: Any]]) ?? [] }.first { $0["id"] as? Int == tabID }?["url"] as? String
+        let site = url.flatMap { URL(string: $0)?.host } ?? "tab \(tabID)"
+        let name = (path as NSString).lastPathComponent
+        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+        let allowed: Bool?
+        if ProcessInfo.processInfo.environment["SKFIY_UPLOAD_WITHOUT_ASKING"] == "1" {
+            allowed = true
+        } else {
+            allowed = await askUser?("skfiy wants to upload \(name) (\(size), from \(path)) to \(site).")
+        }
+        switch allowed {
+        case nil: throw ToolError("Uploading sends a file to a website, so the user must approve it, and this client cannot ask them. Tell the user which file to attach.")
+        case false?: throw ToolError("The user declined uploading \(name). Do not ask again; tell them what is left to do.")
+        case true?: break
+        }
+        let token = UUID().uuidString
+        let encoded = data.base64EncodedString()
+        var offset = encoded.startIndex
+        while offset < encoded.endIndex {
+            let end = encoded.index(offset, offsetBy: 400_000, limitedBy: encoded.endIndex) ?? encoded.endIndex
+            _ = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-chunk",
+                                                "token": token, "data": String(encoded[offset..<end])], timeout: 30)
+            offset = end
+        }
+        let mime = UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let result = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-commit",
+                                                     "token": token, "name": name, "mime": mime], timeout: 30) as? [String: Any] ?? [:]
+        return try await state(browser, tabID: tabID, prefix: ((result["message"] as? String) ?? "Attached \(name)") + ", with the user's approval.", screenshot: false)
     }
 
     // MARK: Browsers and requests
