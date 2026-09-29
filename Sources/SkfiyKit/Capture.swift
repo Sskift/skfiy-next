@@ -38,10 +38,13 @@ public struct CaptureGeometry: Equatable, Sendable {
 /// Downscale factor that keeps a point-resolution capture inside the model's
 /// image limits, so the model never sees a server-side-resized image whose
 /// coordinates would no longer match ours. Never upscales.
-public func captureScale(for size: CGSize, maxLongEdge: Double = 1_568, maxPixels: Double = 1_150_000) -> Double {
+/// Pixels per point for a capture of `size` points: at most `maxScale` (1 for
+/// regular screenshots, the display's backing scale for zooms), within the
+/// size limits the model handles well.
+public func captureScale(for size: CGSize, maxLongEdge: Double = 1_568, maxPixels: Double = 1_150_000, maxScale: Double = 1) -> Double {
     let width = max(Double(size.width), 1)
     let height = max(Double(size.height), 1)
-    return min(1, maxLongEdge / max(width, height), (maxPixels / (width * height)).squareRoot())
+    return min(maxScale, maxLongEdge / max(width, height), (maxPixels / (width * height)).squareRoot())
 }
 
 struct Screenshot {
@@ -106,7 +109,7 @@ func displayBounds(containing point: CGPoint) -> CGRect {
 /// Captures `rect` showing only `pid`'s windows (and the AppKit panel
 /// services), so other apps overlapping it do not leak into the frame.
 @MainActor
-func captureApp(pid: pid_t, rect: CGRect) async throws -> Screenshot {
+func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> Screenshot {
     guard CGPreflightScreenCaptureAccess() else {
         throw ToolError("Screen Recording permission is not granted. Run `skfiy doctor`, then restart the host app (e.g. your terminal).")
     }
@@ -138,7 +141,7 @@ func captureApp(pid: pid_t, rect: CGRect) async throws -> Screenshot {
         $0.processID == pid || panelServiceBundleIDs.contains($0.bundleIdentifier)
     }
     let filter = SCContentFilter(display: display, including: applications, exceptingWindows: [])
-    let scale = captureScale(for: region.size)
+    let scale = captureScale(for: region.size, maxScale: maxScale)
     let configuration = SCStreamConfiguration()
     configuration.sourceRect = region.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
     configuration.width = max(1, Int((region.width * scale).rounded()))

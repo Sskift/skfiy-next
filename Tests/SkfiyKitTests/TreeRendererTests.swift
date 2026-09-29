@@ -117,6 +117,24 @@ struct TreeRendererTests {
         #expect(render(root, details: [0: NodeDetails(verticalScroll: 0.354)]).lines == ["[0] ScrollArea vscroll=35%"])
     }
 
+    @Test func findKeepsMatchesWithTheirContainers() {
+        let lines = [
+            "[0] Window \"Report\"",
+            "  [1] Toolbar",
+            "    [2] Button \"Share\"",
+            "  [3] ScrollArea",
+            "    [4] Outline \"list view\"",
+            "      [5] Row(OutlineRow) \"invoice.pdf | 12 KB\"",
+            "      [6] Row(OutlineRow) \"notes.txt | 1 KB\"",
+            "Menu bar: [7] \"Apple\" [8] \"File\""
+        ]
+        let found = filterTree(lines, matching: "INVOICE")
+        #expect(found.matches == 1)
+        #expect(found.lines == [lines[0], lines[3], lines[4], lines[5]])
+        #expect(filterTree(lines, matching: "file").lines == [lines[7]])
+        #expect(filterTree(lines, matching: "nothing here").matches == 0)
+    }
+
     @Test func windowsWithOnlyChromeCountAsOpaque() {
         let chrome = UINode(info: NodeInfo(role: "AXWindow", title: "Clash Verge"), children: [
             UINode(info: NodeInfo(role: "AXGroup"), ref: 1),

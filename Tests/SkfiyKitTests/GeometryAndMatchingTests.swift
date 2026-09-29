@@ -30,6 +30,15 @@ struct GeometryTests {
     }
 }
 
+struct CaptureScaleTests {
+    @Test func screenshotsStayAtOnePixelPerPointButZoomsUseTheDisplay() {
+        #expect(captureScale(for: CGSize(width: 800, height: 600)) == 1)
+        #expect(captureScale(for: CGSize(width: 200, height: 100), maxScale: 2) == 2)
+        // A large window is scaled down to the size limits either way.
+        #expect(captureScale(for: CGSize(width: 3136, height: 1000), maxScale: 2) == 0.5)
+    }
+}
+
 struct AppMatchingTests {
     let apps = [
         AppRecord(name: "TextEdit", bundleID: "com.apple.TextEdit", path: "/System/Applications/TextEdit.app", aliases: ["TextEdit"], pid: 10),

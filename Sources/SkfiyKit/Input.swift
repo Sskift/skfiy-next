@@ -103,10 +103,36 @@ enum Input {
         }
     }
 
+    /// Holds a key down for `seconds` (games, press-and-hold controls): the app
+    /// gets one key down and one key up, like a physical key held without
+    /// auto-repeat. The emergency stop releases it early.
+    static func hold(_ chord: KeyChord, seconds: Double, to pid: pid_t) async {
+        let post: (Bool) -> Void
+        switch chord.key {
+        case .code(let code):
+            let flags = chord.modifiers.eventFlags.union(intrinsicFlags(code))
+            post = { down in postKey(code, down: down, flags: flags, to: pid) }
+        case .character(let text):
+            let units = Array(text.utf16)
+            post = { down in
+                guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: 0, keyDown: down) else { return }
+                event.flags = chord.modifiers.eventFlags
+                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+                event.postToPid(pid)
+            }
+        }
+        post(true)
+        let until = Date().addingTimeInterval(seconds)
+        while Date() < until, !EmergencyStop.isStopped {
+            await pause(min(0.05, until.timeIntervalSinceNow))
+        }
+        post(false)
+    }
+
     /// Types text as Unicode key events, one character per event (Chromium
-    /// drops the tail of multi-character events). Newlines and tabs are real keys.
-    /// Types `text`; returns how many characters went out before the user's
-    /// emergency stop, if they pressed it meanwhile.
+    /// drops the tail of multi-character events). Newlines and tabs are real
+    /// keys. Returns how many characters went out before the user's emergency
+    /// stop, if they pressed it meanwhile.
     @discardableResult
     static func type(_ text: String, to pid: pid_t) async -> Int {
         var typed = 0

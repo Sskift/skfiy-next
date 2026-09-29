@@ -151,6 +151,15 @@ def main():
     else:
         print("  - press_key on the page: skipped (blurring a field with a pointer click needs SKFIY_BRIEF_FOCUS=1)")
 
+    def hold_key():
+        _, tree = status(client)
+        client.call("click", element_index=index(tree, r'\] TextField "Name"'))
+        client.call("press_key", key="x", hold_seconds=0.8)
+        time.sleep(0.2)
+        return status(client)[0]
+
+    case("hold a key", hold_key, r"^held x 0\.[789]s$")
+
     def scroll_region():
         _, tree = status(client)
         client.call("scroll", element_index=index(tree, r'Group\(LandmarkRegion\) "Scroller"'), direction="down", pages=0.5)
