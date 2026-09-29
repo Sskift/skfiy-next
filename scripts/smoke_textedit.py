@@ -155,7 +155,9 @@ def main():
               "get_app_state find listed only the text area")
         # zoom reads part of the screenshot at the display's resolution.
         zoomed = client.call("zoom", x=0, y=0, width=200, height=100)
-        detail = float(re.search(r"px, ([\d.]+)× its detail", zoomed).group(1))
+        match = re.search(r"px, ([\d.]+)× its detail", zoomed)
+        check(match is not None, f"zoom answered: {zoomed.splitlines()[0][:100]}")
+        detail = float(match.group(1))
         check(detail >= 1, f"zoom returned the region at {detail}× the screenshot's detail")
 
         area = find(found, r"\] TextArea")
@@ -229,7 +231,9 @@ def main():
         client.call("set_value", element_index=area, value="alpha\nbeta\ngamma")
         client.call("select_text", element_index=area, text="alpha", selection="cursor_before")
         state = client.call("get_app_state")
-        height = int(re.search(r"Screenshot: \d+×(\d+) px", state).group(1))
+        shot = re.search(r"Screenshot: \d+×(\d+) px", state)
+        check(shot is not None, "get_app_state returned a screenshot: " + " | ".join(state.splitlines()[:4])[:200])
+        height = int(shot.group(1))
         client.call("click", x=40, y=height - 40)
         client.call("type_text", text="X")
         state = client.call("get_app_state")
@@ -250,9 +254,12 @@ def main():
         # The document is saved now, so closing it asks nothing.
         client.call("press_key", key="cmd+w")
         client.call("press_key", key="cmd+q")
-        time.sleep(1)
+        for _ in range(25):  # a saved document may take a moment to close
+            gone = subprocess.run(["pgrep", "-x", APP], capture_output=True).returncode != 0
+            if gone:
+                break
+            time.sleep(0.2)
         os.remove(saved)
-        gone = subprocess.run(["pgrep", "-x", APP], capture_output=True).returncode != 0
         check(gone, "closed the saved document and quit TextEdit")
         check("TextEdit" not in frontmost(), f"TextEdit never came to the front (front app now: {frontmost()})")
         print("PASS")

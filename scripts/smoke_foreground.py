@@ -89,6 +89,7 @@ def main():
         setup.call("click", element_index=area)
         setup.call("type_text", text="Title")
         setup.call("press_key", key="cmd+a")
+        time.sleep(2)  # TextEdit may activate itself once after launching; skfiy hands the front back
 
         before = front()
         out = setup.call("run_in_front", key="super+b", reason="make the title bold")
@@ -97,9 +98,12 @@ def main():
 
         declining = Client(elicitation=True, answer={"action": "decline"})
         declining.call("get_app_state")
+        before = front()
         out = declining.call("run_in_front", key="super+b", reason="make the title bold")
+        after = front()
         results.append(check(out.startswith("ERROR") and "declined" in out and len(declining.asked) == 1
-                             and front() == before and not bold(), "the user declines: nothing happens"))
+                             and after == before and not bold(),
+                             f"the user declines: nothing happens (asked {len(declining.asked)}×, front {before} -> {after}, {out[:70]!r})"))
         declining.close()
 
         if ACCEPT:
