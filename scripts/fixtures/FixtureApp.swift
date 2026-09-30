@@ -48,12 +48,46 @@ final class Canvas: NSView {
     }
 }
 
+/// Words drawn as pixels only, like custom-drawn apps (WeChat): nothing in
+/// the accessibility tree, so they can only be found by recognizing text.
+final class TextCanvas: NSView {
+    let words = ["发送消息", "Cancel"]
+    var clicked: (String) -> Void = { _ in }
+    private var rects: [(String, NSRect)] = []
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        bounds.fill()
+        rects = []
+        var x: CGFloat = 24
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 22), .foregroundColor: NSColor.black]
+        for word in words {
+            let size = (word as NSString).size(withAttributes: attributes)
+            let rect = NSRect(x: x, y: bounds.midY - size.height / 2, width: size.width, height: size.height)
+            (word as NSString).draw(in: rect, withAttributes: attributes)
+            rects.append((word, rect))
+            x += size.width + 48
+        }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        clicked(rects.first { $0.1.insetBy(dx: -4, dy: -4).contains(point) }?.0 ?? "nothing")
+    }
+
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+}
+
 final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     let status = NSTextField(labelWithString: "status: ready")
     let frames = NSTextField(labelWithString: "")
     let canvases = [Canvas(name: "canvas", firstMouse: true), Canvas(name: "strict canvas", firstMouse: false)]
     var web: WKWebView!
+    var opaque: NSWindow!
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         status.stringValue = "status: web canvas \(message.body) clicked"
@@ -117,6 +151,16 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         window.center()
         // Behind every other window, and the app stays inactive.
         window.orderBack(nil)
+
+        // A second window with nothing but drawn words.
+        opaque = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 110), styleMask: [.titled], backing: .buffered, defer: false)
+        opaque.title = "skfiy opaque"
+        opaque.isReleasedWhenClosed = false
+        let words = TextCanvas()
+        words.clicked = { [weak self] word in self?.status.stringValue = "status: text \(word) clicked" }
+        opaque.contentView = words
+        opaque.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: window.frame.minY - 20))
+        opaque.orderBack(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
             let named: [(String, CGRect)] = canvases.map { ($0.name, $0.screenFrame) } + [("web canvas", screenFrame(of: web))]
             frames.stringValue = named.map { name, f in

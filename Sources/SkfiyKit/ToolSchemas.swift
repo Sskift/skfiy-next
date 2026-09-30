@@ -48,7 +48,8 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "window": ["type": "string", "description": "Optional window title (or part of it) to inspect instead of the focused window; it is not raised"],
-                "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"]
+                "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"],
+                "ocr": ["type": "boolean", "description": "Also list the text recognized in the screenshot, with x/y to click it. On by default for windows that publish no accessibility (custom-drawn apps such as WeChat); pass true for text drawn in a canvas or image elsewhere"]
             ],
             required: ["app"],
             readOnly: true
@@ -226,7 +227,8 @@ enum ToolSchemas {
                 "text": ["type": "string", "description": "Text to wait for, case-insensitive"],
                 "gone": ["type": "boolean", "description": "Wait until the text is gone instead. Defaults to false"],
                 "window": ["type": "string", "description": "Optional window title (or part of it) to watch instead of the focused window"],
-                "timeout": ["type": "number", "description": "Seconds to wait at most (0.5-60). Defaults to 10"]
+                "timeout": ["type": "number", "description": "Seconds to wait at most (0.5-60). Defaults to 10"],
+                "ocr": ["type": "boolean", "description": "Also match text recognized in the screenshot. On by default for windows that publish no accessibility"]
             ],
             required: ["app"],
             readOnly: true

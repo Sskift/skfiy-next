@@ -126,7 +126,7 @@ def to_pixels(tree, x, y):
 
 def green_half(caller, name):
     """Pixels of the green half of a canvas in the latest screenshot."""
-    now = caller.call("get_app_state")
+    now = caller.call("get_app_state", window="skfiy fixture")
     match = re.search(re.escape(name) + r" at (\d+),(\d+) (\d+)x(\d+)", now)
     left, top, width, height = map(int, match.groups())
     return to_pixels(now, left + width / 4, top + height / 2)
@@ -157,28 +157,28 @@ def main():
     try:
         client.call("get_app_state", app=APP_PATH)  # launches it in the background
         subprocess.run(["sleep", "0.5"])
-        tree = client.call("get_app_state")
+        tree = client.call("get_app_state", window="skfiy fixture")
 
         case("the tooltip is in the tree", lambda: re.search(r'Button[^\n]*help="[^"]*"', tree).group(0), r'help="Archive the selected messages"')
 
         # File panels (served by another process) are filled in through
         # accessibility, only ever pointed at this test folder.
         def open_panel(button):
-            now = client.call("get_app_state")
+            now = client.call("get_app_state", window="skfiy fixture")
             client.call("click", element_index=index(now, r'Button "' + button + '"'))
             subprocess.run(["sleep", "1"])
 
         def choose():
             open_panel("Choose file…")
             client.call("file_dialog", path=f"{PANEL_DIR}/inner/attach-me.txt")
-            return status(client.call("get_app_state"))
+            return status(client.call("get_app_state", window="skfiy fixture"))
         case("file_dialog chooses a file in an Open panel", choose, re.escape(f"chosen {PANEL_DIR}/inner/attach-me.txt"))
 
         def save():
             open_panel("Save as…")
             client.call("file_dialog", path=f"{PANEL_DIR}/saved.txt")
             written = open(f"{PANEL_DIR}/saved.txt").read().strip() if os.path.exists(f"{PANEL_DIR}/saved.txt") else "nothing"
-            return status(client.call("get_app_state")) + " | " + written
+            return status(client.call("get_app_state", window="skfiy fixture")) + " | " + written
         case("file_dialog saves through a Save panel", save, re.escape(f"saved {PANEL_DIR}/saved.txt | saved by the fixture"))
 
         def refuse_then_replace():
@@ -189,7 +189,7 @@ def main():
             except RuntimeError as error:
                 refused = "refused" if "already exists" in str(error) else str(error)[:80]
             client.call("file_dialog", path=f"{PANEL_DIR}/saved.txt", overwrite=True)
-            return refused + " | " + status(client.call("get_app_state"))
+            return refused + " | " + status(client.call("get_app_state", window="skfiy fixture"))
         case("file_dialog replaces only with overwrite", refuse_then_replace, r"^refused \| saved ")
 
         def save_document():
@@ -205,7 +205,7 @@ def main():
             client.call("press_key", key="cmd+c")
             client.call("press_key", key="cmd+v")
             after = clipboard_fingerprint()
-            return status(client.call("get_app_state")) + (" | the user's clipboard is back" if after == before else " | the user's clipboard changed")
+            return status(client.call("get_app_state", window="skfiy fixture")) + (" | the user's clipboard is back" if after == before else " | the user's clipboard changed")
         case("non-text copy and paste lend the user's clipboard and put it back", rich_copy_paste, r"^pasted teal swatch \| the user's clipboard is back$")
 
         # Reading the user's clipboard needs their approval; nothing is read
@@ -217,17 +217,19 @@ def main():
                     asker.call("read_clipboard", reason="smoke test")
                     answers.append("read")
                 except RuntimeError as error:
-                    answers.append("declined" if "declined" in str(error) else "cannot ask" if "cannot ask" in str(error) else str(error)[:60])
+                    answers.append("declined" if "declined" in str(error) else "cannot ask" if "cannot ask" in str(error)
+                                   else "empty" if "clipboard is empty" in str(error) else str(error)[:60])
                 if asker is not client:
                     answers.append(f"asked {len(asker.asked)}x")
                     asker.proc.stdin.close()
             return " | ".join(answers)
-        case("read_clipboard only with the user's approval", read_clipboard, r"^cannot ask \| declined \| asked 1x$")
+        # With an empty clipboard there is nothing to ask about.
+        case("read_clipboard only with the user's approval", read_clipboard, r"^(cannot ask \| declined \| asked 1x|empty \| empty \| asked 0x)$")
 
         # Context menus never open in the background; run_in_front does it with
         # the user's approval.
         def right_click():
-            now = client.call("get_app_state")
+            now = client.call("get_app_state", window="skfiy fixture")
             try:
                 client.call("click", element_index=index(now, r'Button "archive"'), mouse_button="right")
                 return "opened"
@@ -237,14 +239,14 @@ def main():
 
         def declined_menu():
             asker = Client(can_ask=True)
-            now = asker.call("get_app_state")
+            now = asker.call("get_app_state", window="skfiy fixture")
             try:
                 asker.call("run_in_front", element_index=index(now, r'Button "archive"'), menu_item="Label > Red", reason="smoke test")
                 answer = "ran"
             except RuntimeError as error:
                 answer = "declined" if "declined" in str(error) else str(error)[:80]
             asker.proc.stdin.close()
-            return answer + " | " + status(client.call("get_app_state"))
+            return answer + " | " + status(client.call("get_app_state", window="skfiy fixture"))
         case("run_in_front with a context menu does nothing when declined", declined_menu, r"^declined \| (?!label)")
 
         if FRONT:
@@ -253,7 +255,7 @@ def main():
                 while idle_seconds() < 10 or "Ghostty" in frontmost() or APP in frontmost():
                     subprocess.run(["sleep", "1"])
                 asker = Client(can_ask=True, approve=True)
-                now = asker.request("tools/call", {"name": "get_app_state", "arguments": {"app": APP}})["content"][0]["text"]
+                now = asker.request("tools/call", {"name": "get_app_state", "arguments": {"app": APP, "window": "skfiy fixture"}})["content"][0]["text"]
                 user = frontmost()
                 result = asker.request("tools/call", {"name": "run_in_front", "arguments": {
                     "app": APP, "element_index": index(now, r'Button "archive"'), "menu_item": "Label > Red", "reason": "smoke test"}})
@@ -262,7 +264,7 @@ def main():
                 text = result["content"][0]["text"]
                 if result["isError"]:
                     return text[:120]
-                return status(client.call("get_app_state")) + (" | front app back" if back else f" | front app now {frontmost()}")
+                return status(client.call("get_app_state", window="skfiy fixture")) + (" | front app back" if back else f" | front app now {frontmost()}")
             case("run_in_front chooses from a context menu once approved", approved_menu, r"^label red chosen \| front app back$")
 
             def approved_click(name):
@@ -278,7 +280,7 @@ def main():
                     asker.proc.stdin.close()
                     if result["isError"]:
                         return result["content"][0]["text"][:120]
-                    return status(client.call("get_app_state")) + (" | front app back" if back else f" | front app now {frontmost()}")
+                    return status(client.call("get_app_state", window="skfiy fixture")) + (" | front app back" if back else f" | front app now {frontmost()}")
                 return run
             case("run_in_front clicks a view that ignores background clicks", approved_click("strict canvas"), r"^strict canvas green clicked \| front app back$")
             case("run_in_front clicks a web view", approved_click("web canvas"), r"^web canvas green clicked \| front app back$")
@@ -290,16 +292,29 @@ def main():
                 answer = "not refused"
             except RuntimeError as error:
                 answer = "refused: hidden" if "hidden" in str(error) else str(error)[:100]
-            now = client.call("get_app_state")
+            now = client.call("get_app_state")  # the panel is the focused window
             client.call("click", element_index=index(now, r'Button "Cancel"'))
             return answer
         case("file_dialog explains that hidden folders are out of reach", hidden, r"^refused: hidden$")
+
+        # A window that publishes no accessibility: its text is recognized from
+        # the pixels, positioned for click x/y, and wait_for matches it.
+        def recognized_text():
+            opaque = client.call("get_app_state", window="skfiy opaque")
+            match = re.search(r'"发送消息" x=(\d+) y=(\d+)', opaque)
+            if not match:
+                return "not recognized: " + " | ".join(l for l in opaque.splitlines() if "recognized" in l or '" x=' in l)[:120]
+            client.call("click", x=int(match.group(1)), y=int(match.group(2)))
+            waited = client.call("wait_for", window="skfiy opaque", text="Cancel", timeout=5).splitlines()[0]
+            return status(client.call("get_app_state", window="skfiy fixture")) + " | " + waited
+        case("text in a window without accessibility is recognized and clicked", recognized_text,
+             r'^text 发送消息 clicked \| "cancel" appeared after')
 
         def click_canvas(name):
             def run():
                 x, y = green_half(client, name)
                 answer = client.call("click", x=x, y=y)
-                return status(client.call("get_app_state")) + (" | points to focus" if "focus: true" in answer else "")
+                return status(client.call("get_app_state", window="skfiy fixture")) + (" | points to focus" if "focus: true" in answer else "")
             return run
         case("background click on a custom-drawn canvas", click_canvas("canvas"), r"^canvas green clicked")
         # Views that refuse an inactive window's first click, and web views,
