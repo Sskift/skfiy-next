@@ -16,6 +16,8 @@ final class BrowserTools {
     ]
     /// Asks the user a yes/no question through the client; nil when it cannot.
     var askUser: ((String) async -> Bool?)?
+    /// The last typing went into a password field (for the action log).
+    var lastInputWasSecret = false
 
     static let notConnected = """
     No browser is connected to skfiy. To enable the browser tools, run `make install` in the skfiy repository (or `skfiy install-browser-bridge`), then in Chrome open chrome://extensions, turn on Developer mode, click "Load unpacked", and choose ~/Library/Application Support/skfiy/browser-extension.
@@ -131,6 +133,7 @@ final class BrowserTools {
         }
         let browser = try await browser(for: args, tabID: tabID)
         let result = try await send(browser, "act", params, timeout: 30) as? [String: Any] ?? [:]
+        lastInputWasSecret = result["secret"] as? Bool == true
         let message = (result["message"] as? String) ?? "Done"
         return try await state(browser, tabID: tabID, prefix: message + ".", screenshot: false)
     }

@@ -81,6 +81,12 @@ final class TextCanvas: NSView {
     override func accessibilityChildren() -> [Any]? { [] }
 }
 
+/// The window's own content takes the initial keyboard focus, so it does
+/// not start in the password field.
+final class Content: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
+
 final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     let status = NSTextField(labelWithString: "status: ready")
@@ -97,8 +103,9 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "skfiy fixture"
         window.isReleasedWhenClosed = false
-        let content = NSView()
+        let content = Content()
         window.contentView = content
+        window.initialFirstResponder = content
 
         let archive = NSButton(image: NSImage(systemSymbolName: "archivebox", accessibilityDescription: nil)!, target: self, action: #selector(pressedArchive))
         archive.toolTip = "Archive the selected messages"
@@ -115,6 +122,8 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         label.submenu?.items.forEach { $0.target = self }
         archive.menu = context
 
+        let password = NSSecureTextField()
+        password.placeholderString = "Password"
         let choose = NSButton(title: "Choose file…", target: self, action: #selector(chooseFile))
         let save = NSButton(title: "Save as…", target: self, action: #selector(saveAs))
 
@@ -138,6 +147,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
             (archive, NSRect(x: 380, y: 262, width: 40, height: 30)),
             (choose, NSRect(x: 20, y: 220, width: 140, height: 30)),
             (save, NSRect(x: 170, y: 220, width: 140, height: 30)),
+            (password, NSRect(x: 320, y: 224, width: 120, height: 24)),
             (canvases[0], NSRect(x: 20, y: 100, width: 200, height: 70)),
             (canvases[1], NSRect(x: 240, y: 100, width: 200, height: 70)),
             (web, NSRect(x: 240, y: 15, width: 200, height: 70)),
@@ -151,6 +161,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         window.center()
         // Behind every other window, and the app stays inactive.
         window.orderBack(nil)
+        window.makeFirstResponder(content)
 
         // A second window with nothing but drawn words.
         opaque = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 110), styleMask: [.titled], backing: .buffered, defer: false)

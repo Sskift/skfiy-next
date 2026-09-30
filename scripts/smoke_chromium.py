@@ -25,7 +25,7 @@ POINTER = os.environ.get("SKFIY_BRIEF_FOCUS") == "1"
 
 class Client:
     def __init__(self):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, "SKFIY_ACTION_LOG": "off"})
         self.next_id = 0
 
     def request(self, method, params):

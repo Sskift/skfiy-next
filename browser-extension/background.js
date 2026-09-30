@@ -770,7 +770,7 @@ function pageAction(params) {
         const { proceed } = key(el, 'Enter', { code: 'Enter', keyCode: 13 });
         if (proceed && el.form) el.form.requestSubmit();
       }
-      return { message: `Typed ${String(params.text || '').length} character(s)${params.submit ? ' and submitted' : ''}` };
+      return { message: `Typed ${String(params.text || '').length} character(s)${params.submit ? ' and submitted' : ''}`, secret: el.type === 'password' };
     }
     case 'select': {
       const el = pick();

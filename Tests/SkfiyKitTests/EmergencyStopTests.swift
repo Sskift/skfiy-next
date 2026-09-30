@@ -12,6 +12,7 @@ struct EmergencyStopTests {
             unsetenv("SKFIY_STOP_FILE")
         }
         let computerUse = ComputerUse()
+        computerUse.actionLog = nil  // tests never write to the user's action log
         EmergencyStop.set(stopped: true, sound: false)
         #expect(EmergencyStop.isStopped)
         for tool in ["get_app_state", "type_text", "press_key", "open_file", "browser_tabs"] {

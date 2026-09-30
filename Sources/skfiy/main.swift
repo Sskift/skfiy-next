@@ -12,6 +12,7 @@ Usage:
   skfiy tools                    List the tools
   skfiy install-browser-bridge   Register the browser extension's native messaging host
   skfiy stop | resume | status   Emergency stop for every running skfiy (also ⌃⌥⌘. anywhere)
+  skfiy log [N]                  The last N actions skfiy took (~/Library/Logs/skfiy/actions.jsonl)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
                                  is saved to $SKFIY_SCREENSHOT_OUT (default /tmp/skfiy-screenshot.<ext>)
 
@@ -119,6 +120,12 @@ case "resume":
     let playing = EmergencyStop.set(stopped: false)
     Thread.sleep(forTimeInterval: playing + 0.1)
     print("skfiy is running again.")
+
+case "log":
+    // What skfiy did: the last N actions (default 30).
+    let count = arguments.count > 1 ? Int(arguments[1]) ?? 30 : 30
+    let lines = ActionLog.standard?.recent(count) ?? []
+    print(lines.isEmpty ? "No actions recorded (SKFIY_ACTION_LOG=off turns recording off)." : lines.joined(separator: "\n"))
 
 case "status":
     print(EmergencyStop.isStopped ? "stopped (resume with `skfiy resume` or \(EmergencyStop.shortcut))" : "running")
