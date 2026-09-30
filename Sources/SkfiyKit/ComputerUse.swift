@@ -62,7 +62,22 @@ public final class ComputerUse {
 
     private let browser = BrowserTools()
 
+    /// Runs a tool and records what it changed in the action log.
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
+        lastInputWasSecret = false
+        browser.lastInputWasSecret = false
+        let result = await perform(name, raw)
+        actionLog?.record(tool: name, arguments: raw, result: result, secret: lastInputWasSecret || browser.lastInputWasSecret)
+        return result
+    }
+
+    /// Where actions are recorded; nil records nothing.
+    var actionLog = ActionLog.standard
+
+    /// Typing or a value went into a password field, so the log keeps only its length.
+    private var lastInputWasSecret = false
+
+    private func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
         if EmergencyStop.isStopped, name != "list_apps" {
             return ToolResult(text: EmergencyStop.refusal, isError: true)
@@ -1321,6 +1336,7 @@ public final class ComputerUse {
         let element = try session.element(index)
         let text = try args.requiredText("value")
         let role = element.string(kAXRoleAttribute) ?? ""
+        lastInputWasSecret = element.string(kAXSubroleAttribute) == "AXSecureTextField"
         if role == "AXPopUpButton" || role == "AXComboBox" && !element.isSettable(kAXValueAttribute) {
             let how = try await chooseOption(element, text, app: app)
             return try await afterAction(app, "Chose \(quote(text, limit: 60)) in [\(index)] \(describe(element)) (\(how)).")
@@ -1528,6 +1544,7 @@ public final class ComputerUse {
         try checkInputTarget(app)
         let pid = app.processIdentifier
         let focused = focusedElement(pid)
+        lastInputWasSecret = focused?.string(kAXSubroleAttribute) == "AXSecureTextField"
         var note = ""
         if let focused, !Self.textRoles.contains(focused.string(kAXRoleAttribute) ?? ""),
            focused.value(kAXSelectedTextRangeAttribute) == nil {

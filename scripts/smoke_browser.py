@@ -31,7 +31,7 @@ CAME_TO_FRONT = False
 
 class Client:
     def __init__(self):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, "SKFIY_ACTION_LOG": "off"})
         self.next_id = 0
         self.asked = []  # approvals the server asked for (answered yes)
         self.send({"jsonrpc": "2.0", "id": 0, "method": "initialize",

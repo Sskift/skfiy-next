@@ -20,7 +20,7 @@ ACCEPT = "--accept" in sys.argv
 
 class Client:
     def __init__(self, elicitation, answer):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, "SKFIY_ACTION_LOG": "off"})
         self.answer = answer
         self.asked = []
         self.next_id = 0

@@ -131,12 +131,21 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 - 有些应用根本不向辅助功能公开界面：自绘界面（微信 4.x）、CEF 内嵌网页（网易云音乐；按 Chrome 的方式开启辅助功能也没用）、部分 WKWebView 外壳（Clash Verge 等 Tauri 应用）。这时 `get_app_state` 会明确说明，并识别截图里的文字给出位置（网易云音乐实测识别出 21 段文字，整个调用 1.3 秒）；Vision 会把同一行上的几个按钮连成一段，skfiy 按字间的大间隔拆开，每个按钮各有自己的坐标。坐标点击按上一条的三类处理。
 - 启动期弹出的模态对话框（例如扩展加载失败的提示）有时不在辅助功能树里，只能从截图看到。
 
+## 操作日志
+
+skfiy 做过的每个改动类操作（点击、输入、按键、文件打开和保存、网页操作、经你同意的前台操作、读取你的剪贴板）都追加到 `~/Library/Logs/skfiy/actions.jsonl`：时间、会话、工具、参数、结果的第一行。只读操作（看状态、放大、等待）不记。文件只有你能读（600），超过 5 MB 时轮换成 `actions.1.jsonl`。
+
+- 输入到密码框里的文字只记长度（应用里靠辅助功能的 `AXSecureTextField`，网页里靠 `type=password`）；剪贴板的内容从不记。
+- `skfiy log [N]` 查看最近 N 条（默认 30）。
+- `SKFIY_ACTION_LOG=off` 关闭记录，或设为别的路径；测试脚本都用临时文件或关闭，不写你的日志。
+
 ## 环境变量
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
 | `SKFIY_SETTLE_SECONDS` | `0.4` | 动作后等待界面稳定再截图的时间 |
 | `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` 可得到无损截图 |
+| `SKFIY_ACTION_LOG` | `~/Library/Logs/skfiy/actions.jsonl` | 操作日志的路径；`off` 不记录 |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1`：所有指针点击都用上文的空闲时短暂应用内聚焦，不再逐个应用询问 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
 | `SKFIY_UPLOAD_WITHOUT_ASKING` | 关 | `1` 让 `browser_upload` 不再逐次征求同意（只适合无人值守的测试） |
@@ -163,7 +172,7 @@ skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存�
 最近一次结果（2026-09-29，macOS 26.6.1）：
 
 - 单元测试 62/62；TextEdit 25 项全过；插件 34/34（Chrome for Testing 154，含悬停菜单、`browser_wait`、后台标签页截图后按像素点击）。
-- 自建小应用（`make smoke-fixture`）15/15：悬停提示、不公开辅助功能的窗口里识别文字并点击、打开/存储面板、`save_document` 走存储面板、非文字拷贝粘贴后你的剪贴板原样放回、`read_clipboard` 必须经同意、右键菜单在后台被拒并指向 `run_in_front`。加 `--front` 后 17/17：经同意用 `run_in_front` 选右键子菜单项、点"拒绝非活跃窗口第一下点击"的视图和 WebKit 网页视图，前台每次都还回你原来的应用。
+- 自建小应用（`make smoke-fixture`）16/16：悬停提示、操作日志只记密码长度、不公开辅助功能的窗口里识别文字并点击、打开/存储面板、`save_document` 走存储面板、非文字拷贝粘贴后你的剪贴板原样放回、`read_clipboard` 必须经同意、右键菜单在后台被拒并指向 `run_in_front`。加 `--front` 后 17/17：经同意用 `run_in_front` 选右键子菜单项、点"拒绝非活跃窗口第一下点击"的视图和 WebKit 网页视图，前台每次都还回你原来的应用。
 - 应用工具操作网页（Chrome for Testing）11/11；`SKFIY_BRIEF_FOCUS=1` 时 12/12（画布像素点击生效）。
 - 只读覆盖（`scripts/app_coverage.py`）：11 个正在运行的应用都能取到状态，每次 0.1–0.5 秒；微信、网易云音乐、Clash Verge 不公开辅助功能，工具会明确提示。
 - `run_in_front`（`scripts/smoke_foreground.py --accept`）：不同意时什么也不做；同意后 TextEdit 在前台约 1.1 秒，加粗生效，前台还回你原来的应用。

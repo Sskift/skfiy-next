@@ -25,11 +25,13 @@ APP_PATH = "/tmp/skfiy-test/SkfiyFixture.app"
 APP = "SkfiyFixture"
 # Visible in file panels (Macintosh HD › Users › Shared) and not privacy-protected.
 PANEL_DIR = "/Users/Shared/skfiy-panel-test"
+ACTION_LOG = f"/tmp/skfiy-fixture-actions-{os.getpid()}.jsonl"  # never the user's log
 
 
 class Client:
     def __init__(self, can_ask=False, approve=False):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+                                     env={**os.environ, "SKFIY_ACTION_LOG": ACTION_LOG})
         self.next_id = 0
         self.asked = []  # approvals the server asked for
         self.answer = {"action": "accept", "content": {"allow": True}} if approve else {"action": "decline"}
@@ -297,6 +299,16 @@ def main():
             return answer
         case("file_dialog explains that hidden folders are out of reach", hidden, r"^refused: hidden$")
 
+        # The action log keeps what was typed, except into password fields.
+        def password_log():
+            now = client.call("get_app_state", window="skfiy fixture")
+            client.call("click", element_index=index(now, r"TextField\(SecureTextField\)"))
+            client.call("type_text", text="hunter2")
+            logged = open(ACTION_LOG).read()
+            entry = [json.loads(line) for line in logged.splitlines() if '"type_text"' in line][-1]
+            return ("secret leaked" if "hunter2" in logged else "no secret") + " | " + entry["arguments"]["text"]
+        case("the action log records only the length of a password", password_log, r"^no secret \| \(7 characters, password field\)$")
+
         # A window that publishes no accessibility: its text is recognized from
         # the pixels, positioned for click x/y, and wait_for matches it.
         def recognized_text():
@@ -334,6 +346,8 @@ def main():
         client.proc.stdin.close()
         subprocess.run(["pkill", "-x", APP])
         subprocess.run(["rm", "-rf", PANEL_DIR])
+        if os.path.exists(ACTION_LOG):
+            os.remove(ACTION_LOG)
     front = frontmost()
     case("the fixture never came to the front", lambda: "never" if APP not in front else front, r"^never$")
     print(f"{sum(results)}/{len(results)} fixture checks passed")

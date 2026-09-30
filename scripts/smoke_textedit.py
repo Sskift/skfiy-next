@@ -19,6 +19,9 @@ BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 FRONT = None
 # This test's own emergency-stop flag, so stopping it never stops the user's skfiy.
 STOP_ENV = {**os.environ, "SKFIY_STOP_FILE": f"/tmp/skfiy-smoke-stop-{os.getpid()}"}
+# And its own action log, never the user's.
+ACTION_LOG = f"/tmp/skfiy-smoke-actions-{os.getpid()}.jsonl"
+STOP_ENV["SKFIY_ACTION_LOG"] = ACTION_LOG
 BEFORE_CALL = ""
 APP = "TextEdit"
 
@@ -283,6 +286,12 @@ def main():
         os.remove(saved)
         check(gone, "closed the saved document and quit TextEdit")
         check("TextEdit" not in frontmost(), f"TextEdit never came to the front (front app now: {frontmost()})")
+        logged = [json.loads(line) for line in open(ACTION_LOG)] if os.path.exists(ACTION_LOG) else []
+        tools = {entry["tool"] for entry in logged}
+        check(any(entry["tool"] == "type_text" and entry["arguments"].get("text") == sample for entry in logged)
+              and "get_app_state" not in tools and "save_document" in tools,
+              f"the action log recorded {len(logged)} actions (typing, saving), not the looks")
+        os.remove(ACTION_LOG)
         print("PASS")
     finally:
         client.close()
