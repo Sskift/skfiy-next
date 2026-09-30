@@ -304,7 +304,7 @@ public final class ComputerUse {
             case (true, _, true): return "The window stopped changing after \(seconds) s."
             case (true, _, false): return "The window was still changing after \(seconds) s."
             case (false, false, true): return "\(subject) appeared after \(seconds) s."
-            case (false, false, false): return "\(subject) did not appear within \(seconds) s (text only in the screenshot cannot be matched)."
+            case (false, false, false): return "\(subject) did not appear within \(seconds) s."
             case (false, true, true): return "\(subject) was gone after \(seconds) s."
             case (false, true, false): return "\(subject) was still there after \(seconds) s."
             }
@@ -325,7 +325,12 @@ public final class ComputerUse {
             }
             // A window that is not there (yet) proves nothing either way.
             if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil) {
-                let current = snapshot.text.lowercased()
+                var current = snapshot.text.lowercased()
+                if (args.values["ocr"] as? Bool) ?? snapshot.opaque,
+                   let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
+                   let lines = try? await recognizeText(pid: app.processIdentifier, region: region) {
+                    current += "\n" + lines.map(\.text).joined(separator: "\n").lowercased()
+                }
                 if text.isEmpty {
                     if current != last {
                         last = current
@@ -782,6 +787,16 @@ public final class ComputerUse {
             captureNote = "No screenshot: the app has no visible window. Use the menu bar or a shortcut such as cmd+n to open one."
         }
         snapshot.header.append(screenshot.map { screenshotLine($0.geometry) } ?? captureNote ?? "")
+        // Text only in the pixels: the whole window when it publishes no
+        // accessibility, or on request (canvas, images).
+        if let screenshot, (args.values["ocr"] as? Bool) ?? snapshot.opaque {
+            do {
+                let lines = try await recognizeText(pid: pid, region: screenshot.geometry.rect)
+                snapshot.body.append(contentsOf: textLines(lines, geometry: screenshot.geometry))
+            } catch {
+                snapshot.body.append("(Text recognition failed: \(error.localizedDescription))")
+            }
+        }
         if let query = args.string("find")?.trimmingCharacters(in: .whitespaces), !query.isEmpty {
             let total = snapshot.body.count
             let found = filterTree(snapshot.body, matching: query)
@@ -798,12 +813,40 @@ public final class ComputerUse {
         )
     }
 
+    /// Recognizes the text shown in `region` of an app, from a capture at the
+    /// display's full resolution (small text reads better).
+    private func recognizeText(pid: pid_t, region: CGRect) async throws -> [RecognizedText] {
+        let backing = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        let shot = try await captureApp(pid: pid, rect: region, maxScale: Double(backing))
+        guard let image = TextRecognition.decode(shot.data) else { return [] }
+        return TextRecognition.sorted(try await TextRecognition.recognize(image, showing: shot.geometry.rect))
+    }
+
+    /// Recognized text as tree lines, with the middle of each line in pixels
+    /// of the screenshot, ready for click x/y.
+    private func textLines(_ lines: [RecognizedText], geometry: CaptureGeometry) -> [String] {
+        guard !lines.isEmpty else {
+            return ["Text recognized in the screenshot: none."]
+        }
+        var out = ["Text recognized in the screenshot (not in the accessibility tree; click it with x/y):"]
+        for line in lines.prefix(200) {
+            let middle = geometry.toPixels(CGPoint(x: line.frame.midX, y: line.frame.midY))
+            out.append("  \(quote(line.text, limit: 80)) x=\(Int(middle.x.rounded())) y=\(Int(middle.y.rounded()))")
+        }
+        if lines.count > 200 {
+            out.append("  (\(lines.count - 200) more lines; zoom in or scroll)")
+        }
+        return out
+    }
+
     struct Snapshot {
         var header: [String]
         var body: [String]
         var elements: [AXUIElement]
         var focusedWindowFrame: CGRect?
         var chosenWindow: AXUIElement?
+        /// The window publishes no accessibility elements.
+        var opaque = false
         var text: String { (header.filter { !$0.isEmpty } + [""] + body).joined(separator: "\n") }
     }
 
@@ -931,9 +974,9 @@ public final class ComputerUse {
             header.append("Keyboard focus: [\(index)]")
         }
         if opaqueWindow {
-            header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Work from the screenshot with x/y clicks, the menu bar, and keyboard shortcuts.")
+            header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Its text is recognized from the screenshot below, with positions for x/y clicks; also use the menu bar and keyboard shortcuts.")
         }
-        return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow)
+        return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow, opaque: opaqueWindow)
     }
 
     private static let menuItemAttributes = [
