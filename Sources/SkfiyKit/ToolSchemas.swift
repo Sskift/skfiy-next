@@ -43,6 +43,11 @@ enum ToolSchemas {
             readOnly: true
         ),
         tool(
+            "get_desktop_status",
+            "Read whether the desktop is locked/unavailable, whether a locked-use grant is armed, and whether emergency stop is active. Does not unlock the Mac or request authorization. If locked use is revoked, ask the user to unlock manually; never enter a password or operate loginwindow.",
+            properties: [:], required: [], readOnly: true
+        ),
+        tool(
             "get_app_state",
             "Get the state of an app's focused window: a screenshot plus its accessibility tree, where every element has an index. Launches the app in the background if it is not running. Call it before interacting with an app, and again whenever you need fresh element indices (after navigation, a dialog, or any larger UI change). Also shows the menu bar, open menus with their keyboard shortcuts, and the app's other windows. Never brings the app to the front.",
             properties: [
@@ -368,6 +373,7 @@ enum ToolSchemas {
 
     static let instructions = """
     Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
+    - get_desktop_status diagnoses lock state without unlocking. Locked use is available only when the user started mcp --locked-use and approved the local system prompt. Never enable it yourself, operate loginwindow, type an unlock password, or retry a failed automatic unlock. On revocation or a partially completed action, ask for manual unlock and inspect state before retrying. run_in_front is unavailable under locked-use protection.
     - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.
     - To wait for something (a page or search result loading, a dialog, a download), use wait_for or browser_wait instead of polling get_app_state.

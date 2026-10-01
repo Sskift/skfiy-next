@@ -52,13 +52,23 @@ public final class ComputerUse {
     /// themselves (sign in, enter a code); nil when the client cannot ask.
     public var waitForUser: ((String) async -> Bool?)?
     private let settleDelay: Double
+    private var lockedUse: LockedUseClient?
+
+    public func enableLockedUse() async throws {
+        let client = LockedUseClient()
+        try await client.start()
+        lockedUse = client
+        Input.lockedUseIsValid = { [weak client] in client != nil && client?.failure == nil }
+    }
+
+    public func disconnect() { lockedUse?.disconnect() }
 
     public init() {
         settleDelay = Double(ProcessInfo.processInfo.environment["SKFIY_SETTLE_SECONDS"] ?? "") ?? 0.4
     }
 
     nonisolated public static let toolNames = [
-        "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
+        "list_apps", "get_desktop_status", "get_app_state", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
         "file_dialog", "read_clipboard", "wait_for", "hand_over"
     ] + BrowserTools.toolNames
@@ -69,7 +79,22 @@ public final class ComputerUse {
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         lastInputWasSecret = false
         browser.lastInputWasSecret = false
-        let result = await perform(name, raw)
+        let needsDesktop = Self.toolNames.contains(name) && !name.hasPrefix("browser_") &&
+            !["list_apps", "get_desktop_status", "hand_over"].contains(name)
+        var result: ToolResult
+        if let lockedUse, needsDesktop, !EmergencyStop.isStopped {
+            do {
+                try await lockedUse.begin()
+                result = await perform(name, raw)
+                // End also verifies relock. An interrupted/partial operation is
+                // an error, even when the app's action itself already succeeded.
+                try await lockedUse.end()
+            } catch {
+                result = ToolResult(text: "Locked use stopped: \(error). The last action may be partial; inspect the app after manual unlock before retrying.", isError: true)
+            }
+        } else {
+            result = await perform(name, raw)
+        }
         actionLog?.record(tool: name, arguments: raw, result: result, secret: lastInputWasSecret || browser.lastInputWasSecret)
         return result
     }
@@ -82,15 +107,17 @@ public final class ComputerUse {
 
     private func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
-        if EmergencyStop.isStopped, name != "list_apps" {
+        if EmergencyStop.isStopped, !["list_apps", "get_desktop_status"].contains(name) {
             return ToolResult(text: EmergencyStop.refusal, isError: true)
         }
         do {
-            if Self.inputTools.contains(name) {
+            if Self.inputTools.contains(name) || name == "scroll" {
                 try refuseProtectedTarget(args)
             }
             switch name {
             case "list_apps": return listApps()
+            case "get_desktop_status":
+                return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: \(lockedUse?.status ?? "disabled; start skfiy mcp --locked-use to opt in").\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
             case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
             case "click": return try await keepingFront(args) { try await self.click(args) }
             case "perform_secondary_action": return try await keepingFront(args) { try await self.performSecondaryAction(args) }
@@ -102,7 +129,11 @@ public final class ComputerUse {
             case "type_text": return try await keepingFront(args) { try await self.typeText(args) }
             case "open_file": return try await keepingFront(args) { try await self.openFile(args) }
             case "save_document": return try await keepingFront(args) { try await self.saveDocument(args) }
-            case "run_in_front": return try await runInFront(args)
+            case "run_in_front":
+                guard lockedUse?.protected != true else {
+                    throw ToolError("run_in_front needs the user's visible desktop. Use background actions during locked use, or unlock manually.")
+                }
+                return try await runInFront(args)
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
             case "read_clipboard": return try await readClipboard(args)
@@ -128,6 +159,9 @@ public final class ComputerUse {
     /// top and menus that popped up are closed. Nothing is undone when the user
     /// clicked or pressed a modifier meanwhile, since that may have been them.
     private func keepingFront(_ args: Arguments, _ body: () async throws -> ToolResult) async throws -> ToolResult {
+        // loginwindow and the guardian's covers must never become restoration
+        // targets. The guardian owns presentation during temporary unlock.
+        if lockedUse?.protected == true { return try await body() }
         guard let before = frontmostProcessID() else {
             return try await body()
         }
@@ -196,6 +230,10 @@ public final class ComputerUse {
     private func refuseProtectedTarget(_ args: Arguments) throws {
         guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return }
         let name = app.localizedName ?? query
+        if ["com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.securityagent",
+            "io.github.sskift.skfiy.locked-use"].contains(app.bundleIdentifier ?? "") {
+            throw ToolError("\(name) is a system authentication or locked-use protection interface. skfiy never sends it agent-directed input; unlock manually if needed.")
+        }
         if hostProcesses.contains(app.processIdentifier) {
             throw ToolError("\(name) is hosting this agent, so skfiy never sends it input. Reading it with get_app_state still works.")
         }
@@ -1679,6 +1717,7 @@ public final class ComputerUse {
     }
 
     private func checkInputTarget(_ app: NSRunningApplication) throws {
+        try lockedUse?.check()
         guard !isScreenLocked() else {
             throw ToolError("The screen is locked. No input was sent.")
         }

@@ -272,8 +272,9 @@ func frontmostProcessID() -> pid_t? {
 
 func isScreenLocked() -> Bool {
     guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
-        return false
+        return true
     }
+    guard session[kCGSessionOnConsoleKey as String] as? Bool == true else { return true }
     return (session["CGSSessionScreenIsLocked"] as? Bool) == true
 }
 

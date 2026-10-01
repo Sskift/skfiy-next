@@ -5,6 +5,12 @@ on:
   pull_request:
 
 jobs:
+  locked-use-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authorization and installation policy tests
+        run: make test-locked-use
   test:
     runs-on: macos-15
     steps:
@@ -13,3 +19,9 @@ jobs:
         run: swift build
       - name: Unit tests
         run: swift test
+      - name: Locked-use policy tests
+        run: make test-locked-use
+      - name: Authorization plugin boundary tests (no system installation)
+        run: make test-locked-use-plugin
+      - name: Build and verify native guardian and authorization bundle
+        run: make locked-use

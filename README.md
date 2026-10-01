@@ -1,5 +1,7 @@
 # skfiy
 
+新增实验性 [锁屏运行](locked-use/README.md)：`skfiy mcp --locked-use`，经本地身份验证后在原生桌面操作期间遮屏、短暂解锁、完成后重新锁定。默认关闭；M1 Pro / macOS Tahoe 26.6.1 的真机验收尚未完成，安装与恢复方法见专项文档。
+
 macOS 的 computer use 内核：一个 MCP server，让 Claude Code（或任何 MCP 客户端）看见并操作 Mac 上的应用，能力对标 Codex 的 Computer Use，并且**全程在后台进行**——不抢焦点、不改变窗口层级、不移动鼠标、不打断你正在进行的输入，你的剪贴板最多被借用一瞬间并原样放回。唯一的例外是 `run_in_front`：只有你在 Claude Code 里点了同意，它才会把应用提到前台一秒左右。
 
 单个 Swift 二进制，无运行时依赖；另有一个可选的 Chromium 浏览器插件，让 agent 在你真实的 Chrome（带登录态）里用**后台标签页**工作。

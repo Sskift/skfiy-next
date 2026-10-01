@@ -56,6 +56,10 @@ enum SkyLight {
 /// going to whatever app they are in.
 @MainActor
 enum Input {
+    static var lockedUseIsValid: (() -> Bool)?
+    static var canSend: Bool {
+        !EmergencyStop.isStopped && !isScreenLocked() && (lockedUseIsValid?() ?? true)
+    }
     /// A private source, so the user's physically held modifiers never leak in.
     private static let keySource = CGEventSource(stateID: .privateState)
     private static let mouseSource = CGEventSource(stateID: .hidSystemState)
@@ -67,6 +71,7 @@ enum Input {
     // MARK: Keyboard
 
     private static func postKey(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, to pid: pid_t) {
+        guard canSend || (!down && !isScreenLocked()) else { return }
         guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: down) else { return }
         event.flags = flags
         event.postToPid(pid)
@@ -93,6 +98,7 @@ enum Input {
         case .code(let code):
             let flags = chord.modifiers.eventFlags.union(intrinsicFlags(code))
             for index in 0..<max(1, count) {
+                guard canSend else { return }
                 postKey(code, down: true, flags: flags, to: pid)
                 await pause(0.012)
                 postKey(code, down: false, flags: flags, to: pid)
@@ -111,6 +117,7 @@ enum Input {
         case .code(let code):
             let flags = chord.modifiers.eventFlags.union(intrinsicFlags(code))
             for down in [true, false] {
+                guard canSend else { return }
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { continue }
                 event.flags = flags
                 event.post(tap: .cghidEventTap)
@@ -119,6 +126,7 @@ enum Input {
         case .character(let text):
             let units = Array(text.utf16)
             for down in [true, false] {
+                guard canSend else { return }
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 event.flags = chord.modifiers.eventFlags
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
@@ -140,6 +148,7 @@ enum Input {
         case .character(let text):
             let units = Array(text.utf16)
             post = { down in
+                guard canSend || (!down && !isScreenLocked()) else { return }
                 guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: 0, keyDown: down) else { return }
                 event.flags = chord.modifiers.eventFlags
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
@@ -148,7 +157,7 @@ enum Input {
         }
         post(true)
         let until = Date().addingTimeInterval(seconds)
-        while Date() < until, !EmergencyStop.isStopped {
+        while Date() < until, canSend {
             await pause(min(0.05, until.timeIntervalSinceNow))
         }
         post(false)
@@ -162,7 +171,7 @@ enum Input {
     static func type(_ text: String, to pid: pid_t) async -> Int {
         var typed = 0
         for character in text {
-            if EmergencyStop.isStopped { return typed }
+            if !canSend { return typed }
             typed += 1
             switch character {
             case "\n", "\r", "\r\n":
@@ -211,6 +220,8 @@ enum Input {
         group: Int64,
         eventNumber: Int64 = 0
     ) {
+        let releasing = [CGEventType.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type)
+        guard canSend || (releasing && !isScreenLocked()) else { return }
         let fields: [(UInt32, Int64)] = [
             (0, eventNumber), (1, clickState), (3, buttonNumber), (7, subtype), (40, Int64(pid)),
             (51, Int64(windowID)), (58, group), (91, Int64(windowID)), (92, Int64(windowID))
