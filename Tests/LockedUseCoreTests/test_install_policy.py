@@ -31,11 +31,21 @@ class PolicyTests(unittest.TestCase):
 
     def test_refuses_unknown_policies(self):
         changes = [{"class": "allow"}, {"rule": []}, {"rule": ["allow"]},
-                   {"rule": ["other-plugin", "use-login-window-ui"]}, {"k-of-n": 0},
+                   {"rule": ["other-plugin", "use-login-window-ui"]}, {"k-of-n": 2},
                    {"k-of-n": True}, {"class": "user"}, {"rule": "use-login-window-ui"}]
         for change in changes:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 policy.install_policy(dict(self.original, **change))
+
+    def test_stock_policy_without_kofn_is_or_when_extended_and_restored_exactly(self):
+        for explicit in (False, True):
+            original = copy.deepcopy(self.original)
+            original.pop("k-of-n")
+            if explicit:
+                original["k-of-n"] = 0
+            installed = policy.install_policy(original)
+            self.assertEqual(installed["k-of-n"], 1)
+            self.assertEqual(policy.uninstall_policy(installed, original, installed), original)
 
     def test_does_not_overwrite_subsequent_admin_changes(self):
         installed = policy.install_policy(self.original)

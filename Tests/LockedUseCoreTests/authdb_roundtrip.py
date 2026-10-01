@@ -21,6 +21,7 @@ right = prefix + ".rule"
 try:
     policy.write_right(policy.BRANCH, policy.branch_policy())
     original = policy.read_right(policy.RIGHT)  # Read only; never write this name.
+    print("Host screensaver policy:", policy.comparable(original), flush=True)
     installed = policy.install_policy(original)
     policy.write_right(right, installed)
     observed = policy.read_right(right)

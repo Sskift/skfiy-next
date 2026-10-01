@@ -35,10 +35,13 @@ def comparable(rule):
 def install_policy(original):
     """Preserve normal login-window authentication; refuse custom/MDM policies."""
     if (original.get("class") != "rule" or original.get("rule") != ["use-login-window-ui"]
-            or type(original.get("k-of-n")) is not int or original["k-of-n"] != 1):
+            or type(original.get("k-of-n", 0)) is not int or original.get("k-of-n", 0) not in (0, 1)):
         raise ValueError("Refusing nonstandard screensaver policy (including other unlock plugins). Restore it through its owner before installing skfiy.")
     result = copy.deepcopy(original)
     result["rule"] = [BRANCH, "use-login-window-ui"]
+    # Apple's stock single-rule policy omits k-of-n (all one rule must pass).
+    # With two alternatives it must be explicit OR; keep the original for undo.
+    result["k-of-n"] = 1
     # RC_RULE ignores shared/timeout/timeout-right. Keep this delegation rule
     # intact; the mechanism uses an in-memory one-use grant and creates no UID
     # credential. Unsupported keys would fail authorizationdb read-back.
