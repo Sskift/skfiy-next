@@ -12,7 +12,11 @@ jobs:
       - name: Authorization and installation policy tests
         run: make test-locked-use
   test:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Build
