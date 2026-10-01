@@ -5,7 +5,7 @@ TEST_FLAGS := $(if $(wildcard $(TESTING_PLUGINS)),-Xswiftc -plugin-path -Xswiftc
 PREFIX ?= $(HOME)/.local
 EXTENSION_DIR := $(HOME)/Library/Application Support/skfiy/browser-extension
 
-.PHONY: build release test smoke smoke-fixture smoke-web smoke-browser install clean
+.PHONY: build release test test-locked-use test-locked-use-plugin locked-use smoke smoke-fixture smoke-web smoke-browser install clean
 
 build:
 	swift build
@@ -15,6 +15,23 @@ release:
 
 test:
 	swift test $(TEST_FLAGS)
+
+# Portable authorization and installer tests. Does not modify system policy.
+test-locked-use:
+	mkdir -p .build/locked-use-tests
+	$(CC) -std=c11 -Wall -Wextra -Werror -ISources/LockedUseCore/include Sources/LockedUseCore/Lease.c Tests/LockedUseCoreTests/lease_test.c -lm -o .build/locked-use-tests/lease-test
+	.build/locked-use-tests/lease-test
+	python3 -m unittest discover -s Tests/LockedUseCoreTests -p 'test_*.py' -v
+
+# Actual Apple plugin ABI, with mock identity/IPC; no system policy changes.
+test-locked-use-plugin:
+	mkdir -p .build/locked-use-tests
+	xcrun clang -std=c11 -Wall -Wextra -Werror -ISources/LockedUseCore/include Tests/LockedUseCoreTests/plugin_test.c -framework Security -o .build/locked-use-tests/plugin-test
+	.build/locked-use-tests/plugin-test
+
+# Build only. System installation requires an explicit, separate sudo command.
+locked-use:
+	bash scripts/build_locked_use.sh
 
 # Drives TextEdit in the background through the MCP server (TextEdit must not be running).
 smoke: build

@@ -7,7 +7,7 @@ let usage = """
 skfiy \(skfiyVersion) — macOS computer use for AI agents
 
 Usage:
-  skfiy mcp                      Run the MCP server on stdio (what Claude Code launches)
+  skfiy mcp [--locked-use]       Run MCP; locked use requires installed helper + local approval
   skfiy doctor                   Check (and request) Accessibility + Screen Recording access
   skfiy tools                    List the tools
   skfiy install-browser-bridge   Register the browser extension's native messaging host
@@ -47,6 +47,7 @@ func doctor() {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+signal(SIGPIPE, SIG_IGN)
 // The browser launches the native messaging host with the extension origin.
 if arguments.first?.hasPrefix("chrome-extension://") == true {
     BrowserBridge.runHost()
@@ -90,10 +91,15 @@ case "install-browser-bridge":
     }
 
 case "mcp":
+    guard arguments.dropFirst().isEmpty || Array(arguments.dropFirst()) == ["--locked-use"] else { fail(usage) }
     Instance.runFromOwnLink()
     atexit { Instance.removeOwnLink() }
-    MainActor.assumeIsolated {
+    Task { @MainActor in
         let computerUse = ComputerUse()
+        if arguments.contains("--locked-use") {
+            do { try await computerUse.enableLockedUse() }
+            catch { fail("Could not enable locked use: \(error)") }
+        }
         let server = MCPServer(executor: computerUse)
         computerUse.askUser = { [weak server] message in await server?.confirm(message) }
         computerUse.waitForUser = { [weak server] message in await server?.confirm(message, timeout: 1800) }

@@ -6,6 +6,8 @@ import Testing
 final class FakeExecutor: ToolExecutor {
     var calls: [(String, [String: Any])] = []
     var result = ToolResult(text: "ok")
+    var disconnected = false
+    func disconnect() { disconnected = true }
 
     func call(_ name: String, _ arguments: [String: Any]) async -> ToolResult {
         calls.append((name, arguments))
@@ -15,6 +17,19 @@ final class FakeExecutor: ToolExecutor {
 
 @MainActor
 struct MCPServerTests {
+    @Test func disconnectRevokesExecutorWhileConfirmationIsPending() async {
+        let executor = FakeExecutor()
+        var sent = false
+        let server = MCPServer(executor: executor, write: { _ in sent = true })
+        _ = await server.respond(to: ["id": 1, "method": "initialize",
+            "params": ["capabilities": ["elicitation": ["form": [:]]]]])
+        sent = false
+        let confirmation = Task { await server.confirm("Continue?", timeout: 60) }
+        while !sent { await Task.yield() }
+        server.disconnect()
+        #expect(executor.disconnected)
+        #expect(await confirmation.value == nil)
+    }
     @Test func initializeNegotiatesVersion() async throws {
         let server = MCPServer(executor: FakeExecutor(), write: { _ in })
         let response = try #require(await server.respond(to: [

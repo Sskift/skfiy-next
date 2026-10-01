@@ -6,7 +6,10 @@ public let skfiyVersion = "0.4.1"
 @MainActor
 public protocol ToolExecutor: AnyObject {
     func call(_ name: String, _ arguments: [String: Any]) async -> ToolResult
+    func disconnect()
 }
+
+extension ToolExecutor { public func disconnect() {} }
 
 extension ComputerUse: ToolExecutor {}
 
@@ -49,6 +52,9 @@ public final class MCPServer {
                         continuation.yield(line)
                     }
                 }
+                // EOF must revoke desktop authorization immediately, including
+                // while a tool or user-confirmation request is still awaiting.
+                Task { @MainActor in self.disconnect() }
                 continuation.finish()
             }
             thread.start()
@@ -59,6 +65,13 @@ public final class MCPServer {
             }
             exit(0)
         }
+    }
+
+    func disconnect() {
+        executor.disconnect()
+        let waiting = Array(pending.values)
+        pending.removeAll()
+        for continuation in waiting { continuation.resume(returning: nil) }
     }
 
     public func handle(line: String) async {
