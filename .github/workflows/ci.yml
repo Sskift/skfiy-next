@@ -23,5 +23,9 @@ jobs:
         run: make test-locked-use
       - name: Authorization plugin boundary tests (no system installation)
         run: make test-locked-use-plugin
+      - name: Installer authdb round-trip (temporary unreferenced test rules only)
+        run: sudo python3 Tests/LockedUseCoreTests/authdb_roundtrip.py
       - name: Build and verify native guardian and authorization bundle
         run: make locked-use
+      - name: Compile isolated manual smoke-test fixture
+        run: swiftc scripts/fixtures/LockedUseFixture.swift -o .build/locked-use-tests/fixture

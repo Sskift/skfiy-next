@@ -112,7 +112,7 @@ public final class ComputerUse {
         }
         do {
             if Self.inputTools.contains(name) || name == "scroll" {
-                try refuseProtectedTarget(args)
+                try refuseProtectedTarget(args, scrolling: name == "scroll")
             }
             switch name {
             case "list_apps": return listApps()
@@ -227,13 +227,15 @@ public final class ComputerUse {
     /// Typing into a terminal runs shell commands, sidestepping the MCP
     /// client's permission checks, and the app hosting the agent must never
     /// receive input from it.
-    private func refuseProtectedTarget(_ args: Arguments) throws {
+    private func refuseProtectedTarget(_ args: Arguments, scrolling: Bool = false) throws {
         guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return }
         let name = app.localizedName ?? query
         if ["com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.securityagent",
             "io.github.sskift.skfiy.locked-use"].contains(app.bundleIdentifier ?? "") {
             throw ToolError("\(name) is a system authentication or locked-use protection interface. skfiy never sends it agent-directed input; unlock manually if needed.")
         }
+        // Scrolling ordinary terminals/host windows has always been supported.
+        if scrolling { return }
         if hostProcesses.contains(app.processIdentifier) {
             throw ToolError("\(name) is hosting this agent, so skfiy never sends it input. Reading it with get_app_state still works.")
         }
