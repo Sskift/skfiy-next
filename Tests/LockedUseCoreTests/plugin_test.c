@@ -10,7 +10,7 @@ static int32_t creator_pid = 42;
 static bool apple_client = true, apple_creator = true, missing_provenance;
 static bool missing_right, bad_pid_length, signed_client = true;
 static bool console_present = true, grant = true, switch_user, password_present;
-static bool context_error;
+static bool context_error, context_missing;
 static int requests, console_reads;
 static AuthorizationResult outcome;
 
@@ -52,10 +52,12 @@ static OSStatus context(AuthorizationEngineRef engine, AuthorizationString key,
     (void)engine; (void)flags;
     assert(strcmp(key, kAuthorizationEnvironmentPassword) == 0);
     if (context_error) return errAuthorizationInternal;
+    if (context_missing) return errAuthorizationInvalidTag;
     // Invalid data pointer detects any accidental reading of password bytes.
     static AuthorizationValue value = {8, (void *)1};
-    *out = password_present ? &value : NULL;
-    return password_present ? errSecSuccess : errAuthorizationValueNotFound;
+    static AuthorizationValue empty = {0, NULL};
+    *out = password_present ? &value : &empty;
+    return errSecSuccess;
 }
 static OSStatus result(AuthorizationEngineRef engine, AuthorizationResult value) {
     (void)engine; outcome = value; return errSecSuccess;
@@ -94,6 +96,7 @@ int main(void) {
     signed_client = false; expect(mechanism, false, 0); signed_client = true;
     password_present = true; expect(mechanism, false, 0); password_present = false;
     context_error = true; expect(mechanism, false, 0); context_error = false;
+    context_missing = true; expect(mechanism, false, 0); context_missing = false;
     console_present = false; expect(mechanism, false, 0); console_present = true;
     grant = false; expect(mechanism, false, 1); grant = true;
     switch_user = true; expect(mechanism, false, 1); switch_user = false;

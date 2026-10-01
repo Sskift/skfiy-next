@@ -56,11 +56,9 @@ static bool authorize(Mechanism *m) {
     AuthorizationContextFlags flags;
     value = NULL;
     OSStatus context_status = m->plugin->callbacks->GetContextValue(m->engine, kAuthorizationEnvironmentPassword, &flags, &value);
-    if (context_status == errSecSuccess) {
-        if (!value || value->length > 0) return false;
-    } else if (context_status != errAuthorizationValueNotFound) {
-        return false; // An unknown password context is never an empty context.
-    }
+    // Require a positively known empty submission. Missing context or any
+    // callback error is not evidence of an empty password and must deny.
+    if (context_status != errSecSuccess || !value || value->length != 0) return false;
     // Normal password attempts have already returned to the system fallback,
     // without waiting for code-signature checks or the guardian's IPC.
     if (!skfiy_is_loginwindow(pid)) return false;
