@@ -23,7 +23,9 @@ APP = ROOT / "LockedUse.app"
 PLUGIN = Path("/Library/Security/SecurityAgentPlugins/SkfiyLockedUseAuthorization.bundle")
 STATE = ROOT / "locked-use-install.plist"
 RUNTIME = ROOT / "locked-use-runtime"
-TRANSIENT = {"created", "modified", "version"}
+# authd records the signing identity of the writing client, independently of
+# supplied plist data. These fields cannot be restored verbatim by RightSet.
+TRANSIENT = {"created", "modified", "version", "identifier", "requirement"}
 
 
 def comparable(rule):
@@ -69,8 +71,11 @@ def read_right(name):
 
 def write_right(name, value):
     run("/usr/bin/security", "authorizationdb", "write", name, data=plistlib.dumps(value))
-    if comparable(read_right(name)) != comparable(value):
-        raise RuntimeError(f"Read-back verification failed for {name}")
+    observed, expected = comparable(read_right(name)), comparable(value)
+    if observed != expected:
+        differences = {key: {"expected": expected.get(key), "observed": observed.get(key)}
+                       for key in observed.keys() | expected.keys() if observed.get(key) != expected.get(key)}
+        raise RuntimeError(f"Read-back verification failed for {name}: {differences}")
 
 
 def remove_branch():

@@ -76,7 +76,7 @@ python3 scripts/locked_use.py status
 sudo python3 scripts/locked_use.py uninstall
 ```
 
-卸载先恢复原 screensaver 规则，再移除插件与 guardian；如果管理员在安装后改过规则，会保留文件和备份并拒绝覆盖。更新组件也采用先停止、卸载，再重建、安装的流程，不能替换正在运行的已授权二进制。
+卸载先恢复原 screensaver 规则，再移除插件与 guardian；如果管理员在安装后改过规则，会保留文件和备份并拒绝覆盖。authd 自动生成的修改时间、版本和写入者签名标识不参与策略比较，也不能通过 plist 原样恢复。更新组件也采用先停止、卸载，再重建、安装的流程，不能替换正在运行的已授权二进制。
 
 恢复备份位于 `/Library/Application Support/skfiy/locked-use-install.plist`，成功卸载后保留为 `locked-use-install.last-uninstall.plist`。备份包含原始与安装时的规则，没有用户密码。若自动恢复拒绝，应由管理员比较当前规则与备份中的 `original`，通过 `security authorizationdb write system.login.screensaver` 恢复确认过的原始 plist，再移除自定义分支和组件。不要写入通用 `allow`、删除系统 auth.db，或先删除仍被规则引用的插件。
 
