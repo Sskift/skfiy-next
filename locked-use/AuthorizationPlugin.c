@@ -46,7 +46,6 @@ static bool authorize(Mechanism *m) {
     if (!hint(m, "client-pid", &value) || value->length != sizeof(int32_t)) return false;
     int32_t pid;
     memcpy(&pid, value->data, sizeof(pid));
-    if (!skfiy_is_loginwindow(pid)) return false;
     if (!hint(m, "creator-pid", &value) || value->length != sizeof(int32_t)) return false;
     int32_t creator;
     memcpy(&creator, value->data, sizeof(creator));
@@ -56,8 +55,15 @@ static bool authorize(Mechanism *m) {
     // Never read, change, save, inject or log password bytes.
     AuthorizationContextFlags flags;
     value = NULL;
-    if (m->plugin->callbacks->GetContextValue(m->engine, kAuthorizationEnvironmentPassword, &flags, &value) == errSecSuccess &&
-        value && value->length > 0) return false;
+    OSStatus context_status = m->plugin->callbacks->GetContextValue(m->engine, kAuthorizationEnvironmentPassword, &flags, &value);
+    if (context_status == errSecSuccess) {
+        if (!value || value->length > 0) return false;
+    } else if (context_status != errAuthorizationValueNotFound) {
+        return false; // An unknown password context is never an empty context.
+    }
+    // Normal password attempts have already returned to the system fallback,
+    // without waiting for code-signature checks or the guardian's IPC.
+    if (!skfiy_is_loginwindow(pid)) return false;
     uint32_t uid, after;
     return skfiy_console_user(&uid) && skfiy_authorization_request(uid) &&
            skfiy_console_user(&after) && uid == after;
