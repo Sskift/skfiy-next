@@ -37,9 +37,9 @@ def install_policy(original):
         raise ValueError("Refusing nonstandard screensaver policy (including other unlock plugins). Restore it through its owner before installing skfiy.")
     result = copy.deepcopy(original)
     result["rule"] = [BRANCH, "use-login-window-ui"]
-    # Never turn a temporary authorization into a reusable cached right.
-    result["shared"] = False
-    result["timeout-right"] = 0
+    # RC_RULE ignores shared/timeout/timeout-right. Keep this delegation rule
+    # intact; the mechanism uses an in-memory one-use grant and creates no UID
+    # credential. Unsupported keys would fail authorizationdb read-back.
     return result
 
 
@@ -51,7 +51,7 @@ def uninstall_policy(current, original, installed):
 
 def branch_policy():
     return {"class": "evaluate-mechanisms", "mechanisms": ["SkfiyLockedUseAuthorization:unlock,privileged"],
-            "tries": 1, "shared": False, "timeout": 0, "timeout-right": 0,
+            "tries": 1, "shared": False, "require-apple-signed": True,
             "comment": "One-use skfiy desktop grant; deny falls through to the original login-window UI."}
 
 

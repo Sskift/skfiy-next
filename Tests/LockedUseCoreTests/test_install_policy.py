@@ -23,8 +23,8 @@ class PolicyTests(unittest.TestCase):
         installed = policy.install_policy(self.original)
         self.assertEqual(self.original, before)
         self.assertEqual(installed["rule"], [policy.BRANCH, "use-login-window-ui"])
-        self.assertFalse(installed["shared"])
-        self.assertEqual(installed["timeout-right"], 0)
+        self.assertEqual(installed["shared"], before["shared"])
+        self.assertNotIn("timeout-right", installed)
         self.assertEqual(installed["comment"], "retain me")
         current = dict(installed, modified=30, version=2)
         self.assertEqual(policy.uninstall_policy(current, before, installed), before)
@@ -46,7 +46,9 @@ class PolicyTests(unittest.TestCase):
     def test_branch_does_not_cache_or_replace_password_mechanisms(self):
         rule = policy.branch_policy()
         self.assertEqual(rule["tries"], 1)
-        self.assertEqual(rule["timeout-right"], 0)
+        self.assertNotIn("timeout-right", rule)
+        self.assertNotIn("timeout", rule)
+        self.assertTrue(rule["require-apple-signed"])
         self.assertFalse(rule["shared"])
         self.assertEqual(rule["mechanisms"], ["SkfiyLockedUseAuthorization:unlock,privileged"])
 

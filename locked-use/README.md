@@ -83,5 +83,6 @@ sudo python3 scripts/locked_use.py uninstall
 ## 实现依据
 
 - Apple [Authorization Plug-ins](https://developer.apple.com/documentation/security/extending-authorization-services-with-plug-ins) 定义插件机制；安装与 callback 依赖原生 Security API。
+- Apple [authd engine](https://github.com/apple-oss-distributions/Security/blob/main/OSX/authd/engine.m) 的签名来源使用 immutable hints，PID/right 使用普通 hints；插件同时核对请求者与授权创建者来自 Apple，以及实际进程是 loginwindow。安装器只接受没有前置第三方机制的原规则。
 - OpenAI [Codex computer use 文档](https://developers.openai.com/codex/app/computer-use) 描述 locked use 的授权插件、临时解锁和遮屏设计。这里是独立实现，未取得或复用 Codex 私有组件。
 - `SACLockScreenImmediate`、CG session 锁定字段和 loginwindow 的 AX 行为存在私有/未承诺稳定的部分；不满足检查就拒绝继续。
