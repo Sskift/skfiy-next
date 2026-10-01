@@ -228,6 +228,22 @@ def main():
         # With an empty clipboard there is nothing to ask about.
         case("read_clipboard only with the user's approval", read_clipboard, r"^(cannot ask \| declined \| asked 1x|empty \| empty \| asked 0x)$")
 
+        # Handing a step to the user: nothing happens without them, and a
+        # confirmation is checked against the app.
+        def hand_over():
+            answers = []
+            for asker, label in ((client, "cannot ask"), (Client(can_ask=True), "declined"), (Client(can_ask=True, approve=True), "done")):
+                try:
+                    out = asker.call("hand_over", message="Sign in (smoke test)", app=APP, expect="skfiy fixture")
+                    answers.append("done, checked" if out.startswith('The user says it is done. "skfiy fixture" appeared') else out[:60])
+                except RuntimeError as error:
+                    text = str(error)
+                    answers.append("cannot ask" if "No answer came" in text else "declined" if "did not do it" in text else text[:60])
+                if asker is not client:
+                    asker.proc.stdin.close()
+            return " | ".join(answers)
+        case("hand_over waits for the user and checks the app", hand_over, r"^cannot ask \| declined \| done, checked$")
+
         # Context menus never open in the background; run_in_front does it with
         # the user's approval.
         def right_click():

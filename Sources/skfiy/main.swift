@@ -96,6 +96,7 @@ case "mcp":
         let computerUse = ComputerUse()
         let server = MCPServer(executor: computerUse)
         computerUse.askUser = { [weak server] message in await server?.confirm(message) }
+        computerUse.waitForUser = { [weak server] message in await server?.confirm(message, timeout: 1800) }
         server.start()
         // The emergency stop shortcut needs an event loop; another skfiy may
         // own it already, so keep trying until this one gets it.

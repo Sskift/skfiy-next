@@ -48,6 +48,9 @@ public final class ComputerUse {
     public var askUser: ((String) async -> Bool?)? {
         didSet { browser.askUser = askUser }
     }
+    /// Like askUser, but waits long enough for the user to do something
+    /// themselves (sign in, enter a code); nil when the client cannot ask.
+    public var waitForUser: ((String) async -> Bool?)?
     private let settleDelay: Double
 
     public init() {
@@ -57,7 +60,7 @@ public final class ComputerUse {
     nonisolated public static let toolNames = [
         "list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "file_dialog", "read_clipboard", "wait_for"
+        "file_dialog", "read_clipboard", "wait_for", "hand_over"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -103,6 +106,7 @@ public final class ComputerUse {
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
             case "read_clipboard": return try await readClipboard(args)
+            case "hand_over": return try await handOver(args)
             case "file_dialog": return try await keepingFront(args) { try await self.fileDialog(args) }
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)
             default: return ToolResult(text: "Unknown tool \(name).", isError: true)
@@ -1931,6 +1935,39 @@ public final class ComputerUse {
         }
         return "pasted \(contents.summary) from skfiy's own clipboard with the app's \(quote(item.title, limit: 30)) command; "
             + (putBack ? "the user's clipboard was lent for that moment and put back" : "the clipboard changed meanwhile (the user may have copied something), so it was left as it is")
+    }
+
+    // MARK: - hand_over
+
+    /// Hands a step to the user (signing in, a code, a confirmation) and
+    /// waits until they say it is done, then optionally checks the app.
+    func handOver(_ args: Arguments) async throws -> ToolResult {
+        let message = try args.requiredText("message").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            throw ToolError("\"message\" must say what the user should do.")
+        }
+        guard let waitForUser else {
+            throw ToolError("This client cannot ask the user. Tell them in the conversation what to do, and wait for their reply.")
+        }
+        switch await waitForUser("Your turn: \(message)\nConfirm when it is done, or decline if you cannot or do not want to.") {
+        case nil:
+            throw ToolError("No answer came from the user (or this client cannot ask). Tell them in the conversation what is left to do.")
+        case false?:
+            throw ToolError("The user did not do it. Do not try to do it yourself; stop and tell them what is left.")
+        case true?:
+            break
+        }
+        guard let app = args.string("app"), !app.isEmpty else {
+            return ToolResult(text: "The user says it is done.")
+        }
+        if let expect = args.string("expect"), !expect.isEmpty {
+            var result = try await waitFor(Arguments(["app": app, "text": expect, "timeout": 10]))
+            result.text = "The user says it is done. " + result.text
+            return result
+        }
+        var state = try await getAppState(Arguments(["app": app]))
+        state.text = "The user says it is done. The app now:\n" + state.text
+        return state
     }
 
     // MARK: - read_clipboard

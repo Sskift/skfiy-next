@@ -26,7 +26,7 @@ public struct ActionLog: Sendable {
     /// browser_state…) is not recorded.
     static let recordedTools: Set<String> = [
         "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text",
-        "open_file", "save_document", "run_in_front", "file_dialog", "read_clipboard",
+        "open_file", "save_document", "run_in_front", "file_dialog", "read_clipboard", "hand_over",
         "browser_open", "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll",
         "browser_navigate", "browser_close_tab", "browser_upload", "browser_hover"
     ]
