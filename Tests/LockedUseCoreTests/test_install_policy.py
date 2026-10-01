@@ -26,7 +26,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(installed["shared"], before["shared"])
         self.assertNotIn("timeout-right", installed)
         self.assertEqual(installed["comment"], "retain me")
-        current = dict(installed, modified=30, version=2)
+        current = dict(installed, modified=30, version=2, identifier="com.apple.security", requirement="writer identity")
         self.assertEqual(policy.uninstall_policy(current, before, installed), before)
 
     def test_refuses_unknown_policies(self):
