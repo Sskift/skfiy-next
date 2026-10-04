@@ -24,12 +24,16 @@
   <div id="popup">Popup: none</div>
   <div id="scrolled">Scrolled: 0</div>
   <div id="status">Status: ready</div>
+  <div id="fine7" style="font-size: 7px; color: #444">Fine7</div>
+  <div id="fine8" style="font-size: 8px; color: #444">Fine8</div>
+  <div id="fine9" style="font-size: 9px; color: #444">Fine9</div>
 </div>
 <div id="rows"></div>
 <script>
   // The harness verifies everything through these reports, never through skfiy.
   const run = new URLSearchParams(location.search).get('run') || 'none';
   document.title = 'skfiy compat ' + run;
+  for (const size of [7, 8, 9]) document.getElementById('fine' + size).textContent = 'Fine' + size + ' ' + run.slice(0, 8);
   const state = { run, clicks: 0, value: '', popup: 'none', scrollY: 0, maxScroll: 0, later: 'idle', events: 0 };
   function report(event) {
     state.events += 1;

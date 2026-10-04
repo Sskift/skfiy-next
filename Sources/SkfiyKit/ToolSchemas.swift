@@ -75,6 +75,7 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "element_index": ["type": "string", "description": "Element index to click"],
+                "zoom_id": ["type": "string", "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"],
                 "x": ["type": "number", "description": "X coordinate in screenshot pixel coordinates"],
                 "y": ["type": "number", "description": "Y coordinate in screenshot pixel coordinates"],
                 "click_count": ["type": "integer", "description": "Number of clicks (1-3). Defaults to 1"],
@@ -123,6 +124,7 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "element_index": ["type": "string", "description": "Element identifier"],
+                "zoom_id": ["type": "string", "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"],
                 "x": ["type": "number", "description": "X coordinate in screenshot pixels, when not using element_index"],
                 "y": ["type": "number", "description": "Y coordinate in screenshot pixels, when not using element_index"],
                 "direction": ["type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"],
@@ -135,6 +137,7 @@ enum ToolSchemas {
             "Drag with the left mouse button from one point to another, in pixel coordinates of the latest screenshot. Posted to the app in the background; some views only accept drags from a focused window.",
             properties: [
                 "app": app,
+                "zoom_id": ["type": "string", "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"],
                 "from_x": ["type": "number", "description": "Start X coordinate"],
                 "from_y": ["type": "number", "description": "Start Y coordinate"],
                 "to_x": ["type": "number", "description": "End X coordinate"],
@@ -190,13 +193,15 @@ enum ToolSchemas {
         ),
         tool(
             "zoom",
-            "See part of the latest screenshot of an app at the display's full resolution, to read small text. Pass a region in pixels of that screenshot. The result is for reading only: x/y arguments of other tools keep referring to the full screenshot.",
+            "See part of the latest screenshot of an app at the display's full resolution (or another scale), to read small text; also while macOS is locked. Pass a region in pixels of that screenshot. Returns the zoomed image, the formula mapping its pixels back to the screenshot, and a zoom_id: click, scroll and drag accept zoom_id with x/y read off the zoom. Refused once the screenshot is outdated (the window moved or changed size; while locked also after 30 s): call get_app_state again.",
             properties: [
                 "app": app,
                 "x": ["type": "number", "description": "Left edge, in pixels of the latest screenshot"],
                 "y": ["type": "number", "description": "Top edge, in pixels of the latest screenshot"],
                 "width": ["type": "number", "description": "Width in pixels of the latest screenshot"],
-                "height": ["type": "number", "description": "Height in pixels of the latest screenshot"]
+                "height": ["type": "number", "description": "Height in pixels of the latest screenshot"],
+                "scale": ["type": "number", "description": "Zoom pixels per screenshot pixel (1-8). Defaults to the display's full detail (2 on Retina); above it the image is enlarged without new detail. Kept within the model's image size"],
+                "ocr": ["type": "boolean", "description": "List the text recognized in the zoom with zoom and screenshot x/y. Defaults to true while locked, false otherwise"]
             ],
             required: ["app", "x", "y", "width", "height"],
             readOnly: true

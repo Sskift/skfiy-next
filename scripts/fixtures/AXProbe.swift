@@ -5,7 +5,11 @@
 //   AXProbe dump <pid>     windows (AX + CG), sheets with their buttons, focused element, selected rows
 //   AXProbe front          the frontmost app and the owner of the top normal window
 //   AXProbe session        whether the console session is locked, and the user's idle seconds
+//   AXProbe ocr <image>    text recognized in an image file (Vision, accurate)
+//   AXProbe red <image>    the centre of the image's strongly red pixels, in its pixels
 import AppKit
+import ImageIO
+import Vision
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -148,12 +152,47 @@ func session() -> [String: Any] {
             "accessibility": AXIsProcessTrusted(), "screenCapture": CGPreflightScreenCaptureAccess(), "timestamp": Date().timeIntervalSince1970]
 }
 
+func image(_ path: String) -> CGImage? {
+    guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+    return CGImageSourceCreateImageAtIndex(source, 0, nil)
+}
+
+func ocr(_ path: String) -> [String: Any] {
+    guard let image = image(path) else { return ["error": "cannot decode"] }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = false
+    try? VNImageRequestHandler(cgImage: image).perform([request])
+    return ["width": image.width, "height": image.height,
+            "lines": request.results?.compactMap { $0.topCandidates(1).first?.string } ?? []]
+}
+
+func red(_ path: String) -> [String: Any] {
+    guard let image = image(path) else { return ["error": "cannot decode"] }
+    let width = image.width, height = image.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return ["error": "context"] }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    var sx = 0.0, sy = 0.0, count = 0
+    for y in 0..<height {
+        for x in 0..<width {
+            let i = (y * width + x) * 4
+            if pixels[i] > 180, pixels[i + 1] < 110, pixels[i + 2] < 110 { sx += Double(x) + 0.5; sy += Double(y) + 0.5; count += 1 }
+        }
+    }
+    return count == 0 ? ["count": 0, "width": width, "height": height]
+        : ["count": count, "x": sx / Double(count), "y": sy / Double(count), "width": width, "height": height]
+}
+
 let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "dump" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(dump(pid_t(arguments[1])!))
 case "front": output(front())
 case "session": output(session())
+case "ocr" where arguments.count == 2: output(ocr(arguments[1]))
+case "red" where arguments.count == 2: output(red(arguments[1]))
 default:
-    FileHandle.standardError.write(Data("usage: AXProbe dump <pid> | front | session\n".utf8))
+    FileHandle.standardError.write(Data("usage: AXProbe dump <pid> | front | session | ocr <image> | red <image>\n".utf8))
     exit(2)
 }

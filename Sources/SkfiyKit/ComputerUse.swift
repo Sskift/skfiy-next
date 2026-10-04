@@ -20,9 +20,21 @@ public struct ToolResult {
 /// printed indices and the pixel↔point mapping of the latest screenshot.
 struct AppSession {
     var elements: [AXUIElement]
-    var geometry: CaptureGeometry?
+    var geometry: CaptureGeometry? {
+        didSet { if geometry != oldValue || geometry != nil { captured = geometry == nil ? nil : Date() } }
+    }
     /// The window get_app_state showed, when it was not the focused one.
     var window: AXUIElement?
+    /// When the latest screenshot was taken, and the latest zoom of it.
+    var captured: Date?
+    var zoom: ZoomMapping?
+
+    init(elements: [AXUIElement], geometry: CaptureGeometry?, window: AXUIElement?) {
+        self.elements = elements
+        self.geometry = geometry
+        self.window = window
+        captured = geometry == nil ? nil : Date()
+    }
 
     func element(_ index: Int) throws -> AXUIElement {
         guard elements.indices.contains(index) else {
@@ -38,6 +50,7 @@ struct AppSession {
 public final class ComputerUse {
     let directory = AppDirectory()
     private var sessions: [pid_t: AppSession] = [:]
+    private var zoomCount = 0
     private var accessibilityEnabled: Set<pid_t> = []
     /// Apps the user allowed brief focus for, this session.
     private var focusApproved: Set<pid_t> = []
@@ -353,27 +366,53 @@ public final class ComputerUse {
     /// small text. The coordinate system for x/y arguments does not change.
     func zoom(_ args: Arguments) async throws -> ToolResult {
         let (app, session) = try target(args)
-        guard let geometry = session.geometry else {
+        guard let geometry = session.geometry, let taken = session.captured else {
             throw ToolError("There is no screenshot to zoom into. Call get_app_state first.")
         }
-        guard let x = try args.double("x"), let y = try args.double("y"),
-              let width = try args.double("width"), let height = try args.double("height") else {
-            throw ToolError("Pass x, y, width and height: a region in pixels of the latest screenshot.")
+        let region = try zoomRegion(args, geometry: geometry)
+        let pid = app.processIdentifier
+        // The window may have moved since: then the screenshot's pixels no longer
+        // say where things are, and nothing should be mapped from them.
+        let window = session.window ?? AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
+        if let now = appRegion(pid: pid, focusedWindow: window?.frame), now != geometry.rect {
+            sessions[pid]?.zoom = nil
+            throw ToolError("The window moved or changed size since the latest screenshot (it showed \(geometry.rect), now \(now)). Call get_app_state again; its old coordinates are not used.")
         }
-        guard width >= 4, height >= 4, geometry.containsPixel(x: x, y: y), geometry.containsPixel(x: x + width, y: y + height) else {
-            throw ToolError("The region must be at least 4×4 px and inside the latest \(geometry.pixelWidth)×\(geometry.pixelHeight) screenshot.")
+        let backing = backingScale(for: geometry.rect)
+        let native = backing / geometry.scale
+        let requested = try args.double("scale")
+        if let requested, !requested.isFinite || requested < 1 || requested > 8 {
+            throw ToolError("scale must be between 1 and 8 (zoom pixels per screenshot pixel).")
         }
-        let topLeft = geometry.toScreen(x: x, y: y)
-        let bottomRight = geometry.toScreen(x: x + width, y: y + height)
+        let factor = ZoomMapping.factor(requested: requested, native: native, region: region.size)
+        let topLeft = geometry.toScreen(x: region.minX, y: region.minY)
+        let bottomRight = geometry.toScreen(x: region.maxX, y: region.maxY)
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
-        let backing = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-        let shot = try await captureApp(pid: app.processIdentifier, rect: rect, maxScale: Double(backing))
-        let detail = shot.geometry.scale / geometry.scale
-        return ToolResult(
-            text: "Zoomed into x=\(formatNumber(x)) y=\(formatNumber(y)) w=\(formatNumber(width)) h=\(formatNumber(height)) px of the latest screenshot: \(shot.geometry.pixelWidth)×\(shot.geometry.pixelHeight) px, \(formatNumber(detail))× its detail. For reading only; x/y arguments still refer to the full screenshot.",
-            image: shot.data,
-            imageMimeType: shot.mimeType
-        )
+        let shot = try await captureApp(pid: pid, rect: rect, maxScale: backing)
+        guard let capture = TextRecognition.decode(shot.data),
+              let cut = cutZoom(from: capture, captureGeometry: shot.geometry, screenshot: geometry, region: region, factor: factor) else {
+            throw ToolError("Could not cut that region from the window.")
+        }
+        zoomCount += 1
+        let mapping = ZoomMapping(id: "z\(zoomCount)", region: cut.shown, zoomWidth: cut.image.width, zoomHeight: cut.image.height,
+                                  screenshot: geometry, screenshotTaken: taken)
+        sessions[pid]?.zoom = mapping
+        let detail = factor > native + 0.01 ? "upscaled beyond the display's \(formatNumber(native))× detail" : "\(formatNumber((factor / native * 100).rounded()))% of the display's detail"
+        var lines = [
+            "Zoom \(mapping.id): x=\(formatNumber(cut.shown.minX.rounded())) y=\(formatNumber(cut.shown.minY.rounded())) w=\(formatNumber(cut.shown.width.rounded())) h=\(formatNumber(cut.shown.height.rounded())) px of the latest screenshot, as \(mapping.zoomWidth)×\(mapping.zoomHeight) px (\(formatNumber((factor * 100).rounded() / 100))×; \(detail)).",
+            "Coordinates: \(mapping.formula). Or pass zoom_id \"\(mapping.id)\" with x/y in this zoom's pixels to click, scroll or drag, until the next screenshot of this app."
+        ]
+        if (args.values["ocr"] as? Bool) ?? false {
+            // The zoom image itself: tiny glyphs read better enlarged.
+            let recognized = TextRecognition.sorted(try await TextRecognition.recognize(cut.image, showing: rect))
+            lines.append(recognized.isEmpty ? "Text recognized in the zoom: none." : "Text recognized in the zoom (zoom x/y, then the same point in the screenshot):")
+            for text in recognized.prefix(100) {
+                let pixel = geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY))
+                let zoomed = mapping.toZoom(pixel)
+                lines.append("  \(quote(text.text, limit: 100)) zoom x=\(Int(zoomed.x.rounded())) y=\(Int(zoomed.y.rounded())) → screenshot x=\(Int(pixel.x.rounded())) y=\(Int(pixel.y.rounded()))")
+            }
+        }
+        return ToolResult(text: lines.joined(separator: "\n"), image: try encode(cut.image, format: "png"), imageMimeType: "image/png")
     }
 
     // MARK: - wait_for
@@ -2149,6 +2188,18 @@ public final class ComputerUse {
     }
 
     private func screenPoint(_ args: Arguments, _ xKey: String, _ yKey: String, session: AppSession) throws -> CGPoint {
+        if let zoomID = args.string("zoom_id")?.trimmingCharacters(in: .whitespaces), !zoomID.isEmpty {
+            guard let mapping = session.zoom, mapping.id == zoomID else {
+                throw ToolError("zoom_id \(zoomID) is not the latest zoom of this app. Zoom again, or use x/y of the latest screenshot.")
+            }
+            guard mapping.screenshotTaken == session.captured, mapping.screenshot == session.geometry else {
+                throw ToolError("zoom_id \(zoomID) belongs to an older screenshot. Zoom again on the latest one; nothing was done.")
+            }
+            guard let x = try args.double(xKey), let y = try args.double(yKey), mapping.containsZoomPixel(x: x, y: y) else {
+                throw ToolError("\(xKey)/\(yKey) must be inside zoom \(zoomID) (\(mapping.zoomWidth)×\(mapping.zoomHeight) px).")
+            }
+            return mapping.toScreen(CGPoint(x: x, y: y))
+        }
         guard let x = try args.double(xKey), let y = try args.double(yKey) else {
             throw ToolError("Pass both \(xKey) and \(yKey) (or an element_index).")
         }

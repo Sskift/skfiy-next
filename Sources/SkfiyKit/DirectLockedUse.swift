@@ -47,10 +47,13 @@ final class DirectLockedUse {
     }
 
     /// Tools this mode serves while macOS is locked; everything else is refused.
-    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for"]
+    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom"]
 
     private let directory = AppDirectory()
     private var states: [pid_t: State] = [:]
+    /// The latest zoom per app; its coordinates hold while its screenshot does.
+    private var zooms: [pid_t: ZoomMapping] = [:]
+    private var zoomCount = 0
     private var transitions = TransitionTracker()
     private var ended = false
     private var generation: UInt64 = 0
@@ -205,6 +208,18 @@ final class DirectLockedUse {
     }
 
     private func point(_ args: Arguments, _ x: String, _ y: String, state: State) throws -> CGPoint {
+        if let zoomID = args.string("zoom_id")?.trimmingCharacters(in: .whitespaces), !zoomID.isEmpty {
+            guard let mapping = zooms[state.window.pid], mapping.id == zoomID else {
+                throw ToolError("zoom_id \(zoomID) is not the latest zoom of this app. Zoom again, or use x/y of the latest screenshot.")
+            }
+            guard mapping.screenshotTaken == state.captured, mapping.screenshot == state.geometry else {
+                throw ToolError("zoom_id \(zoomID) belongs to an older screenshot. Zoom again on the latest one; no input was sent.")
+            }
+            guard let px = try args.double(x), let py = try args.double(y), mapping.containsZoomPixel(x: px, y: py) else {
+                throw ToolError("\(x)/\(y) must be inside zoom \(zoomID) (\(mapping.zoomWidth)×\(mapping.zoomHeight) px).")
+            }
+            return mapping.toScreen(CGPoint(x: px, y: py))
+        }
         guard let px = try args.double(x), let py = try args.double(y), px.isFinite, py.isFinite,
               px >= 0, py >= 0, px < Double(state.geometry.pixelWidth), py < Double(state.geometry.pixelHeight) else {
             throw ToolError("\(x)/\(y) must be inside the latest screenshot in pixels.")
@@ -294,6 +309,72 @@ final class DirectLockedUse {
         guard valid(state) else { throw ToolError("The window changed while reading its screenshot. Refresh get_app_state.") }
         states[app.processIdentifier] = state
         return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
+    }
+
+    // MARK: zoom
+
+    /// A part of the latest screenshot at the display's full resolution (or
+    /// another factor), with how its pixels map back. Refused when the
+    /// screenshot is too old or the window moved or changed size since.
+    func zoom(_ args: Arguments) async throws -> ToolResult {
+        try check()
+        let app = try application(args)
+        let pid = app.processIdentifier
+        guard let state = states[pid] else {
+            throw ToolError("There is no screenshot to zoom into. Call get_app_state first.")
+        }
+        let age = Date().timeIntervalSince(state.captured)
+        guard age < 30 else {
+            states[pid] = nil
+            zooms[pid] = nil
+            throw ToolError("The latest screenshot is \(Int(age)) s old, too old to zoom into or map coordinates from. Call get_app_state again.")
+        }
+        if let problem = validationProblem(state) {
+            states[pid] = nil
+            zooms[pid] = nil
+            throw ToolError("The screenshot no longer matches the window (\(problem)). Call get_app_state again; its old coordinates are not used.")
+        }
+        let region = try zoomRegion(args, geometry: state.geometry)
+        let backing = backingScale(for: state.window.frame)
+        let native = backing / state.geometry.scale
+        let requested = try args.double("scale")
+        if let requested, !requested.isFinite || requested < 1 || requested > 8 {
+            throw ToolError("scale must be between 1 and 8 (zoom pixels per screenshot pixel).")
+        }
+        let factor = ZoomMapping.factor(requested: requested, native: native, region: region.size)
+        let (capture, captureGeometry) = try await captureDirectLockedImage(state.window, maxScale: backing)
+        try check(generation: state.generation)
+        guard captureGeometry.rect == state.geometry.rect else {
+            states[pid] = nil
+            zooms[pid] = nil
+            throw ToolError("The window moved or was resized since the latest screenshot (it was \(state.geometry.rect), now \(captureGeometry.rect)). Call get_app_state again; its old coordinates are not used.")
+        }
+        guard let cut = cutZoom(from: capture, captureGeometry: captureGeometry, screenshot: state.geometry, region: region, factor: factor) else {
+            throw ToolError("Could not cut that region from the window.")
+        }
+        zoomCount += 1
+        let mapping = ZoomMapping(id: "z\(zoomCount)", region: cut.shown, zoomWidth: cut.image.width, zoomHeight: cut.image.height,
+                                  screenshot: state.geometry, screenshotTaken: state.captured)
+        zooms[pid] = mapping
+        let shown = cut.shown
+        let detail = factor > native + 0.01 ? "upscaled beyond the display's \(formatNumber(native))× detail" : "\(formatNumber((factor / native * 100).rounded()))% of the display's detail"
+        var lines = [
+            "Zoom \(mapping.id) of window \(state.window.id): x=\(formatNumber(shown.minX.rounded())) y=\(formatNumber(shown.minY.rounded())) w=\(formatNumber(shown.width.rounded())) h=\(formatNumber(shown.height.rounded())) px of the latest screenshot, as \(mapping.zoomWidth)×\(mapping.zoomHeight) px (\(formatNumber((factor * 100).rounded() / 100))×; \(detail)).",
+            "Coordinates: \(mapping.formula). Or pass zoom_id \"\(mapping.id)\" with x/y in this zoom's pixels to click, scroll or drag; valid while the latest screenshot is (about \(Int(30 - age)) s more, same window position and size)."
+        ]
+        if (args.values["ocr"] as? Bool) ?? true {
+            let a = state.geometry.toScreen(x: shown.minX, y: shown.minY), b = state.geometry.toScreen(x: shown.maxX, y: shown.maxY)
+            // The zoom image itself: tiny glyphs read better enlarged.
+            let recognized = TextRecognition.sorted(try await TextRecognition.recognize(cut.image, showing: CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)))
+            lines.append(recognized.isEmpty ? "Text recognized in the zoom: none." : "Text recognized in the zoom (zoom x/y, then the same point in the screenshot):")
+            for text in recognized.prefix(100) {
+                let pixel = state.geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY))
+                let zoomed = mapping.toZoom(pixel)
+                lines.append("  \(quote(text.text, limit: 100)) zoom x=\(Int(zoomed.x.rounded())) y=\(Int(zoomed.y.rounded())) → screenshot x=\(Int(pixel.x.rounded())) y=\(Int(pixel.y.rounded()))")
+            }
+        }
+        try check(generation: state.generation)
+        return ToolResult(text: lines.joined(separator: "\n"), image: try encode(cut.image, format: "png"), imageMimeType: "image/png")
     }
 
     // MARK: wait_for
@@ -433,6 +514,7 @@ final class DirectLockedUse {
         try check()
         if name == "get_app_state" { return try await snapshot(args) }
         if name == "wait_for" { return try await waitFor(args) }
+        if name == "zoom" { return try await zoom(args) }
         guard Self.lockedTools.contains(name) else {
             throw ToolError("\(name) is unavailable while macOS remains locked. Use get_app_state and screenshot coordinates with click, scroll, drag, press_key or type_text; unlock manually for AX or foreground actions.")
         }
