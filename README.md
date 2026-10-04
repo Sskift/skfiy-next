@@ -1,7 +1,5 @@
 # skfiy
 
-新增实验性 [锁屏运行](locked-use/README.md)：`skfiy mcp --locked-use`，经本地身份验证后在原生桌面操作期间遮屏、短暂解锁、完成后重新锁定。默认关闭；M1 Pro / macOS Tahoe 26.6.1 的真机验收尚未完成，安装与恢复方法见专项文档。
-
 macOS 的 computer use 内核：一个 MCP server，让 Claude Code（或任何 MCP 客户端）看见并操作 Mac 上的应用，能力对标 Codex 的 Computer Use，并且**全程在后台进行**——不抢焦点、不改变窗口层级、不移动鼠标、不打断你正在进行的输入，你的剪贴板最多被借用一瞬间并原样放回。唯一的例外是 `run_in_front`：只有你在 Claude Code 里点了同意，它才会把应用提到前台一秒左右。
 
 单个 Swift 二进制，无运行时依赖；另有一个可选的 Chromium 浏览器插件，让 agent 在你真实的 Chrome（带登录态）里用**后台标签页**工作。
@@ -20,9 +18,23 @@ macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，
 
 之后在 Claude Code 里直接说「在备忘录里新建一条……」「把 Finder 里的……」即可。
 
+### 锁屏后继续操作（direct 模式）
+
+使用上面的普通安装即可，不需要 `sudo`、Apple 开发者证书或额外系统插件。给 MCP server 设置 `SKFIY_LOCKED_USE=direct`：
+
+```bash
+SKFIY_LOCKED_USE=direct ~/.local/bin/skfiy mcp
+```
+
+direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口，并向目标进程投递坐标点击、滚动、拖拽、按键和文字；不解锁系统，不启动 guardian，也不修改系统授权规则。MCP 可以在已经锁屏时启动，但目标应用须已运行，宿主须已获得辅助功能和屏幕录制权限。解锁状态仍走原有 AX 等功能。
+
+锁屏时先调用 `get_app_state` 获取新截图，再使用截图坐标操作。AX 元素编号、前台操作、文件面板和剪贴板功能不可用；多个窗口时拒绝键盘输入。`locked_use_end` 结束当前 MCP 会话的 direct 操作权限，不改变系统锁定状态。不同应用是否接受后台输入仍须逐个验证。
+
+2026-10-04：合并前的 direct release 版本已安装并通过真实锁屏 MCP 测试，覆盖截图、文字输入、点击提交、按键、滚动、拖动及拒绝路径；518 个锁态采样保持锁定。另通过双窗口键盘拒绝回归，当时 72 项自动测试通过。验收范围是本机专用 fixture，不表示所有第三方应用都兼容。配置、限制和验证记录见 [locked-use/README.md](locked-use/README.md)。另保留独立的实验性 `skfiy mcp --locked-use` guardian 路径，其短暂解锁方案尚未完成真机验收，见 [guardian 文档](locked-use/GUARDIAN.md)；不要与 direct 同时启用。
+
 ## 工具
 
-前 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；`zoom`、`open_file`、`save_document`、`run_in_front`、`file_dialog`、`wait_for` 是 skfiy 额外加的。
+前 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；`zoom`、`open_file`、`save_document`、`run_in_front`、`file_dialog`、`wait_for` 是 skfiy 额外加的。下表中 AX、前台和文件操作的完整功能用于解锁状态；锁屏 direct 模式的可用范围见上文。
 
 | 工具 | 作用 |
 | --- | --- |
@@ -44,6 +56,9 @@ macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，
 | `read_clipboard` | 经你同意，把你复制的内容取进 skfiy 的剪贴板（之后 cmd+v 可粘贴到任何应用），有文字时一并返回；密码管理器标成机密的内容不读 |
 | `hand_over` | 把一步交给你：登录、验证码、付款确认、系统权限弹窗、输密码。Claude Code 里显示要你做什么，你做完点确认（最多等 30 分钟）再继续；给了 `app` 和 `expect` 时，还会在 10 秒内核对应用里是否真的出现了预期的文字。你拒绝时，agent 被告知不要自己去做 |
 | `wait_for` | 不发送任何输入，等某段文字在窗口里出现（或 `gone` 时消失；不公开辅助功能的窗口也匹配截图里识别出的文字），不给文字则等窗口停止变化；满足后返回新状态，超时报错并附当前状态。用来代替反复调 `get_app_state` |
+| `get_desktop_status` | 查看桌面锁定、实验性 guardian 授权和急停状态，不触发解锁 |
+| `locked_use_status` | direct 模式下查看当前 MCP 会话是否启用、系统是否锁定及锁态是否已知，不触发解锁 |
+| `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
 浏览器插件连上后多出 13 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
@@ -79,7 +94,7 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 
 ## 后台是怎么做到的
 
-优先走辅助功能（AX），做不到才向目标**进程**投递事件，任何时候都不经过你的光标和前台：
+下面说明解锁状态下的后台路径：优先走辅助功能（AX），做不到才向目标**进程**投递事件，任何时候都不经过你的光标和前台。锁屏 direct 模式只使用独立窗口截图和 PID 定向输入，不进入 AX、前台或剪贴板路径。
 
 - **点击**：先按坐标命中测试出元素，再按语义执行——按钮/链接用 AXPress，文本框聚焦并用 `AXRangeForPosition` 把光标放到点击处，表格行设为选中，双击用 AXOpen，右键用 AXShowMenu。都不适用时才把带窗口路由字段的鼠标事件投递给进程（SkyLight `SLEventPostToPid`，缺失时退回公开的 `CGEvent.postToPid`），鼠标不动。
 - **键盘**：事件直接投递给目标进程。后台应用不走你的输入法，所以中文输入法开着也不会把 `,` 变成 `，`。带 cmd/ctrl 的快捷键若对应一个可用菜单项，就直接执行该菜单项；全选/关闭窗口/最小化这些依赖前台状态的快捷键用 AX 等价实现。
@@ -121,7 +136,7 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
   - 名字栏里的 `/` 会被存成 `:`，所以位置一定靠导航，不靠在名字里写路径；
   - 文档类应用的"存储…"在后台是禁用的，这时要先用 `run_in_front`（经你同意）把存储面板打开，再用 `file_dialog` 在后台填完。
 - ScreenCaptureKit 同一时间只服务同一路径的一个进程，所以每个 `skfiy mcp` 进程都从 `~/Library/Caches/skfiy/instances/` 下自己的硬链接运行，多个 Claude Code 会话可以同时截图；截图不会卡住工具：
-  - 屏幕锁定、屏保运行或显示器睡眠时，截图服务会拒绝（报"用户拒绝"）或不回应，skfiy 直接说明原因，元素树照常返回；
+  - 未启用 direct 模式时，skfiy 会拒绝锁定状态下的普通窗口读取和输入；启用后改走独立窗口截图和坐标输入。屏保运行或显示器睡眠也可能使截图拒绝或不回应，工具说明具体原因。不能将锁屏前的元素树当作锁屏后的状态；
   - 截图服务偶尔会停止回应，有时持续一分钟左右。3 秒没回应就先不带截图返回，之后改由一个临时的子进程截图（进程内的截图服务卡住后不会恢复，新进程往往正常）；
   - 截图只用到可截图应用列表里的应用和显示器对象，所以这张列表只在缺少目标应用时才重新获取，获取被拒时沿用上一份；
   - 目标应用没有可见窗口时直接说明，不转述系统那条误导性的报错；
@@ -149,6 +164,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | `SKFIY_SETTLE_SECONDS` | `0.4` | 动作后等待界面稳定再截图的时间 |
 | `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` 可得到无损截图 |
 | `SKFIY_ACTION_LOG` | `~/Library/Logs/skfiy/actions.jsonl` | 操作日志的路径；`off` 不记录 |
+| `SKFIY_LOCKED_USE` | 关 | `direct`：启用保持系统锁定的单窗口截图和 PID 定向输入；与实验性 guardian 参数 `--locked-use` 互斥，旧值 `1` 不再支持 |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1`：所有指针点击都用上文的空闲时短暂应用内聚焦，不再逐个应用询问 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
 | `SKFIY_UPLOAD_WITHOUT_ASKING` | 关 | `1` 让 `browser_upload` 不再逐次征求同意（只适合无人值守的测试） |

@@ -36,8 +36,8 @@ public struct ActionLog: Sendable {
     static func recordedArguments(_ arguments: [String: Any], secret: Bool) -> [String: Any] {
         var recorded: [String: Any] = [:]
         for (key, value) in arguments {
-            if ["text", "value"].contains(key), let text = value as? String {
-                recorded[key] = secret ? "(\(text.count) characters, password field)" : String(text.prefix(500))
+            if (["text", "value"].contains(key) || secret && key == "key"), let text = value as? String {
+                recorded[key] = secret ? "(\(text.count) characters, redacted)" : String(text.prefix(500))
             } else if value is String || value is NSNumber || value is Bool {
                 recorded[key] = value
             }
@@ -52,7 +52,9 @@ public struct ActionLog: Sendable {
             "session": Int(getpid()),
             "tool": tool,
             "arguments": Self.recordedArguments(arguments, secret: secret),
-            "result": String((result.text.split(separator: "\n").first ?? "").prefix(300)),
+            // Validation errors can echo a secret argument, so the result
+            // follows the same privacy flag as the input fields.
+            "result": secret ? "(redacted)" : String((result.text.split(separator: "\n").first ?? "").prefix(300)),
             "error": result.isError
         ]
         guard var line = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]) else { return }

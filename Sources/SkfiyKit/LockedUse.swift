@@ -14,7 +14,7 @@ final class LockedUseClient {
 
     func start() async throws {
         guard skfiy_guardian_installed() else {
-            throw ToolError("Locked use is not installed or its signature/ownership is invalid. See locked-use/README.md; normal computer use remains available without --locked-use.")
+            throw ToolError("Locked use is not installed or its signature/ownership is invalid. See locked-use/GUARDIAN.md; normal computer use remains available without --locked-use.")
         }
         let task = Process(), stdin = Pipe(), stdout = Pipe()
         task.executableURL = URL(fileURLWithPath: SKFIY_GUARDIAN)

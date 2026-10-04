@@ -4,6 +4,12 @@ import Testing
 @testable import SkfiyKit
 
 struct GeometryTests {
+    @Test func independentlyRoundedImageDimensionsMapEachAxis() {
+        let geometry = CaptureGeometry(rect: CGRect(x: -40, y: 20, width: 1001, height: 667), pixelWidth: 500, pixelHeight: 333)
+        let point = geometry.toScreen(x: 250, y: 166.5)
+        #expect(point == CGPoint(x: 460.5, y: 353.5))
+        #expect(geometry.toPixels(point) == CGPoint(x: 250, y: 166.5))
+    }
     @Test func pointResolutionMapsOneToOne() {
         let geometry = CaptureGeometry(rect: CGRect(x: 100, y: 50, width: 800, height: 600), pixelWidth: 800, pixelHeight: 600)
         #expect(geometry.scale == 1)

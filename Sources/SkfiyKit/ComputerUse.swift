@@ -53,15 +53,25 @@ public final class ComputerUse {
     public var waitForUser: ((String) async -> Bool?)?
     private let settleDelay: Double
     private var lockedUse: LockedUseClient?
+    private let directLockedUse = DirectLockedUse()
 
     public func enableLockedUse() async throws {
+        guard !DirectLockedUse.enabled else {
+            throw ToolError("SKFIY_LOCKED_USE=direct cannot be combined with --locked-use. Choose direct mode to keep macOS locked.")
+        }
         let client = LockedUseClient()
         try await client.start()
         lockedUse = client
         Input.lockedUseIsValid = { [weak client] in client != nil && client?.failure == nil }
     }
 
-    public func disconnect() { lockedUse?.disconnect() }
+    public func disconnect() {
+        lockedUse?.disconnect()
+        _ = directLockedUse.status(end: true)
+        sessions.removeAll()
+        accessibilityEnabled.removeAll()
+        focusApproved.removeAll()
+    }
 
     public init() {
         settleDelay = Double(ProcessInfo.processInfo.environment["SKFIY_SETTLE_SECONDS"] ?? "") ?? 0.4
@@ -70,13 +80,26 @@ public final class ComputerUse {
     nonisolated public static let toolNames = [
         "list_apps", "get_desktop_status", "get_app_state", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "file_dialog", "read_clipboard", "wait_for", "hand_over"
+        "file_dialog", "read_clipboard", "wait_for", "hand_over", "locked_use_status", "locked_use_end"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
 
     /// Runs a tool and records what it changed in the action log.
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
+        if DirectLockedUse.enabled {
+            if directLockedUse.observeTransition() {
+                sessions.removeAll()
+                accessibilityEnabled.removeAll()
+                focusApproved.removeAll()
+            }
+            if name == "locked_use_status" { return directLockedUse.status() }
+            if name == "locked_use_end" { return directLockedUse.status(end: true) }
+        }
+        if name == "locked_use_status" || name == "locked_use_end" {
+            if name == "locked_use_end" { lockedUse?.disconnect() }
+            return ToolResult(text: lockedUse?.status ?? "Locked use is disabled. Start a new MCP session with SKFIY_LOCKED_USE=direct to keep macOS locked, or --locked-use for the experimental guardian.")
+        }
         lastInputWasSecret = false
         browser.lastInputWasSecret = false
         let needsDesktop = Self.toolNames.contains(name) && !name.hasPrefix("browser_") &&
@@ -104,19 +127,36 @@ public final class ComputerUse {
 
     /// Typing or a value went into a password field, so the log keeps only its length.
     private var lastInputWasSecret = false
+    private static let nativeSessionTools: Set<String> = [
+        "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag",
+        "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for"
+    ]
 
     private func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
+        if DirectLockedUse.enabled, DirectLockedUse.lockState != .unlocked,
+           name == "type_text" || name == "press_key" || name == "set_value" {
+            lastInputWasSecret = true
+        }
         if EmergencyStop.isStopped, !["list_apps", "get_desktop_status"].contains(name) {
             return ToolResult(text: EmergencyStop.refusal, isError: true)
         }
         do {
+            if Self.nativeSessionTools.contains(name) { try lockedUse?.check() }
             if Self.inputTools.contains(name) || name == "scroll" {
                 try refuseProtectedTarget(args, scrolling: name == "scroll")
+            }
+            if DirectLockedUse.enabled, Self.nativeSessionTools.contains(name) || name == "read_clipboard",
+               DirectLockedUse.lockState != .unlocked {
+                // No foreground preservation, AX fallback, menu emulation, or
+                // clipboard logic is entered by this strictly scoped path.
+                if name == "scroll" { try refuseProtectedTarget(args) }
+                return try await directLockedUse.perform(name, args)
             }
             switch name {
             case "list_apps": return listApps()
             case "get_desktop_status":
+                if DirectLockedUse.enabled { return directLockedUse.status() }
                 return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: \(lockedUse?.status ?? "disabled; start skfiy mcp --locked-use to opt in").\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
             case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
             case "click": return try await keepingFront(args) { try await self.click(args) }
@@ -192,7 +232,7 @@ public final class ComputerUse {
         if !userMayHaveSwitched(since: started) {
             if let userTop, let top = topWindow(), top.id != userTop, intruders.contains(top.pid),
                let window = AXUIElementCreateApplication(before).elements(kAXWindowsAttribute).first(where: { windowID(of: $0) == userTop }) {
-                _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                _ = guardedAXPerformAction(window, kAXRaiseAction as CFString)
                 let name = NSRunningApplication(processIdentifier: top.pid)?.localizedName ?? "The app"
                 notes.append("\(name) put a window over the user's; skfiy put \(user)'s window back on top.")
             }
@@ -201,7 +241,7 @@ public final class ComputerUse {
                 if !popped.isEmpty {
                     let appElement = AXUIElementCreateApplication(target.processIdentifier)
                     for menu in appElement.elements(kAXChildrenAttribute) where menu.string(kAXRoleAttribute) == kAXMenuRole {
-                        _ = AXUIElementPerformAction(menu, kAXCancelAction as CFString)
+                        _ = guardedAXPerformAction(menu, kAXCancelAction as CFString)
                     }
                     let still = overlayWindows(of: target.processIdentifier).filter { !overlaysBefore.contains($0) }
                     notes.append(still.isEmpty
@@ -533,7 +573,7 @@ public final class ComputerUse {
             }
             if let userTop, topWindow()?.id != userTop,
                let window = AXUIElementCreateApplication(userApp).elements(kAXWindowsAttribute).first(where: { windowID(of: $0) == userTop }) {
-                _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                _ = guardedAXPerformAction(window, kAXRaiseAction as CFString)
             }
         }
         // Since macOS 14 a background process's activate() may be ignored;
@@ -581,7 +621,7 @@ public final class ComputerUse {
                 throw error
             }
         } else if let chord, let item = menuItem(for: chord, pid: pid), item.enabled {
-            _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+            _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
             how = "ran the menu item \(quote(item.title, limit: 60))"
         } else if let chord, front() == pid {
             // It is the front app now, so a keystroke like a real one reaches it.
@@ -617,7 +657,7 @@ public final class ComputerUse {
     private func chooseFromMenu(of element: AXUIElement, path: [String], pid: pid_t) async throws -> String {
         let appElement = AXUIElementCreateApplication(pid)
         let opener = ["AXMenuButton", "AXPopUpButton"].contains(element.string(kAXRoleAttribute) ?? "") ? kAXPressAction : kAXShowMenuAction
-        let status = AXUIElementPerformAction(element, opener as CFString)
+        let status = guardedAXPerformAction(element, opener as CFString)
         guard status == .success || status == .cannotComplete else {
             throw ToolError("\(describe(element)) has no menu to open.")
         }
@@ -634,7 +674,7 @@ public final class ComputerUse {
         guard let menu else {
             throw ToolError("No menu opened for \(describe(element)).")
         }
-        let close = { _ = AXUIElementPerformAction(menu, kAXCancelAction as CFString) }
+        let close = { _ = guardedAXPerformAction(menu, kAXCancelAction as CFString) }
         var current = menu
         for (depth, title) in path.enumerated() {
             let items = current.elements(kAXChildrenAttribute)
@@ -652,7 +692,7 @@ public final class ComputerUse {
                     close()
                     throw ToolError("\(quote(titles[index], limit: 60)) is disabled in that menu, so nothing was chosen.")
                 }
-                _ = AXUIElementPerformAction(item, kAXPressAction as CFString)
+                _ = guardedAXPerformAction(item, kAXPressAction as CFString)
                 return "chose \(quote(path.dropLast().map { $0 + " › " }.joined() + titles[index], limit: 80)) from the menu of \(describe(element))"
             }
             guard let submenu = item.elements(kAXChildrenAttribute).first(where: { $0.string(kAXRoleAttribute) == kAXMenuRole }) else {
@@ -728,7 +768,7 @@ public final class ComputerUse {
                     ? "\(why) It has no Save menu item that opens a Save panel. Tell the user what is left to do."
                     : "\(why) Its \(quote(candidates[0].title, limit: 40)) menu item is disabled while it is in the background. Open the Save panel with run_in_front (key \"\(shortcut)\", which asks the user), then call file_dialog with this path.")
             }
-            _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+            _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
             for _ in 0..<20 where FilePanel.find(in: appElement) == nil {
                 await Input.pause(0.15)
             }
@@ -1245,7 +1285,7 @@ public final class ComputerUse {
                 Self.pressRoles.contains($0.string(kAXRoleAttribute) ?? "") && $0.actionNames().contains(kAXPressAction)
             }) ?? (element.actionNames().contains(kAXPressAction) && !isInWebContent(element) ? element : nil) {
                 let name = describe(pressable)
-                let status = AXUIElementPerformAction(pressable, kAXPressAction as CFString)
+                let status = guardedAXPerformAction(pressable, kAXPressAction as CFString)
                 // Menus and pop-ups run a tracking loop, so AXPress often times out while one opens.
                 if status == .success || status == .cannotComplete {
                     return "pressed \(name) (accessibility)"
@@ -1266,7 +1306,7 @@ public final class ComputerUse {
         case (.right, 1):
             if let target = ancestor(of: element, levels: exact ? 0 : 2, where: { $0.actionNames().contains(kAXShowMenuAction) }) {
                 let name = describe(target)
-                let status = AXUIElementPerformAction(target, kAXShowMenuAction as CFString)
+                let status = guardedAXPerformAction(target, kAXShowMenuAction as CFString)
                 if status == .success || status == .cannotComplete {
                     return "opened the context menu of \(name) (accessibility)"
                 }
@@ -1365,7 +1405,7 @@ public final class ComputerUse {
         if action == kAXShowMenuAction, frontmostProcessID() != app.processIdentifier {
             throw ToolError(Self.backgroundMenuRefusal)
         }
-        let status = AXUIElementPerformAction(element, action as CFString)
+        let status = guardedAXPerformAction(element, action as CFString)
         if status != .success, status != .cannotComplete {
             try check(status, "\(action) on element \(index)")
         }
@@ -1549,7 +1589,7 @@ public final class ComputerUse {
                 if item.enabled {
                     var pressed = 0
                     for _ in 0..<count {
-                        let status = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+                        let status = guardedAXPerformAction(item.element, kAXPressAction as CFString)
                         guard status == .success || status == .cannotComplete else { break }
                         pressed += 1
                     }
@@ -1770,9 +1810,9 @@ public final class ComputerUse {
         let pid = app.processIdentifier
         guard !accessibilityEnabled.contains(pid) else { return }
         accessibilityEnabled.insert(pid)
-        var enabled = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success
+        var enabled = guardedAXSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success
         if isChromium(app) {
-            enabled = AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) == .success || enabled
+            enabled = guardedAXSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) == .success || enabled
         }
         guard enabled else { return }
         // The web tree is built lazily after the first request; wait for it.
@@ -1944,7 +1984,7 @@ public final class ComputerUse {
         let system = SystemClipboard()
         let saved = system.read()
         let before = system.changeCount
-        _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
         guard await system.waitForChange(from: before) else {
             throw ToolError("Pressed \(quote(item.title, limit: 30)), but the app copied nothing (is something selected?). The user's clipboard was not touched.")
         }
@@ -1968,7 +2008,7 @@ public final class ComputerUse {
         let saved = system.read()
         system.write(contents)
         let lent = system.changeCount
-        _ = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
         await Input.pause(0.5)  // the app reads the clipboard while pasting
         let putBack = system.changeCount == lent
         if putBack {

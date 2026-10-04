@@ -27,11 +27,13 @@ public struct CaptureGeometry: Equatable, Sendable {
     }
 
     public func toScreen(x: Double, y: Double) -> CGPoint {
-        CGPoint(x: rect.minX + x / scale, y: rect.minY + y / scale)
+        let verticalScale = rect.height > 0 ? Double(pixelHeight) / rect.height : 1
+        return CGPoint(x: rect.minX + x / scale, y: rect.minY + y / verticalScale)
     }
 
     public func toPixels(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: (point.x - rect.minX) * scale, y: (point.y - rect.minY) * scale)
+        let verticalScale = rect.height > 0 ? Double(pixelHeight) / rect.height : 1
+        return CGPoint(x: (point.x - rect.minX) * scale, y: (point.y - rect.minY) * verticalScale)
     }
 }
 

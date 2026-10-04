@@ -1,6 +1,22 @@
 import ApplicationServices
 import Foundation
 
+// Shared by synchronous AX actions and async helpers (file panels, selects).
+// Check immediately before IPC so interruption cannot resume via a fallback.
+private func lockedUseAllowsMutation() -> Bool {
+    !isScreenLocked() && !EmergencyStop.isStopped && !Task.isCancelled
+}
+
+func guardedAXPerformAction(_ element: AXUIElement, _ action: CFString) -> AXError {
+    guard lockedUseAllowsMutation() else { return .cannotComplete }
+    return AXUIElementPerformAction(element, action)
+}
+
+func guardedAXSetAttributeValue(_ element: AXUIElement, _ attribute: CFString, _ value: CFTypeRef) -> AXError {
+    guard lockedUseAllowsMutation() else { return .cannotComplete }
+    return AXUIElementSetAttributeValue(element, attribute, value)
+}
+
 /// Thin, failure-tolerant wrappers over the AXUIElement C API.
 extension AXUIElement {
     func value(_ attribute: String) -> CFTypeRef? {
@@ -85,11 +101,11 @@ extension AXUIElement {
     }
 
     func perform(_ action: String) throws {
-        try check(AXUIElementPerformAction(self, action as CFString), "perform \(action)")
+        try check(guardedAXPerformAction(self, action as CFString), "perform \(action)")
     }
 
     func set(_ attribute: String, _ value: CFTypeRef) throws {
-        try check(AXUIElementSetAttributeValue(self, attribute as CFString, value), "set \(attribute)")
+        try check(guardedAXSetAttributeValue(self, attribute as CFString, value), "set \(attribute)")
     }
 }
 

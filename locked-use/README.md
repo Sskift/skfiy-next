@@ -1,88 +1,88 @@
-# 实验性锁屏运行
+# 锁屏期间继续使用 skfiy
 
-目标环境是 **Apple Silicon（M1 Pro）、macOS Tahoe 26.6.1**。目前提供原生实现、可回滚安装器和测试入口，**尚未完成该环境的真机验收**。CI 编译、签名验证、策略单元测试都不能证明锁屏后能够操作应用。普通 `make install` 和 `skfiy mcp` 不启用此功能。
+direct 模式通过 ScreenCaptureKit 的独立窗口捕获和按 PID 投递的键鼠事件，在 macOS 会话保持锁定时操作已经运行的应用。它使用普通 skfiy MCP 二进制，不解锁系统，不需要 guardian、系统授权插件、管理员安装或 Apple 开发者签名身份，也不读取或保存登录密码。
 
-macOS 锁屏会阻断部分 AX、输入和 ScreenCaptureKit 操作。这里使用 Authorization Plug-in 为已有本地登录会话提供短暂解锁授权，操作期间遮住显示器，结束后重新锁定。它不是在休眠中运行，也不是一个隔离的虚拟桌面；Mac 必须保持开机，CLI agent 还需要网络。没有开机登录、FileVault 解锁、合盖运行的承诺。
+## 当前验收状态
 
-## 构建与安装
+**2026-10-04：合并前的 direct release 版本已安装并通过真实锁屏 MCP 端到端测试，当时 72 项自动测试通过。** 安装版本测试覆盖实时截图、按截图 OCR 坐标点击、输入随机文本、提交、按键、滚动和拖动，并由 fixture 的真实事件日志和独立截图 OCR 核验。518 个独立锁态采样以及 fixture 操作记录均保持锁定；20 项不支持或非法请求和会话结束后的访问均被拒绝。测试全过程未安装或调用 skfiy 授权插件。
 
-先在可恢复的测试账户/测试机上运行。Tahoe 的登录窗口接口和授权后的钥匙串状态都需要核实；不能仅凭一次按钮点击成功就用于日常无人值守任务。已有人报告同类授权插件在 macOS 26 上影响钥匙串，见 [Codex issue 40226](https://github.com/openai/codex/issues/40226)。本实现不写密码或 keychain 上下文，但这不能证明系统的后续处理没有影响。
+双窗口回归还验证了同一进程的两个真实窗口（一个标题为空）均可截图，但键盘输入因目标不唯一而被拒绝，实际收到的键事件为零。测试从已锁定状态启动 MCP；有限采样不能证明未采样的每个瞬间，也没有替代所有第三方应用、多显示器或解锁切换场景的兼容性验证。
 
-在 Mac 上安装 Xcode Command Line Tools、Swift 6 和 Python 3，然后执行：
+合并至 `main` 后，71 项 Swift 测试、9 项安装策略测试、C lease 与插件边界测试、release 及 guardian 构建均通过。合并后的真机重测在前置检查时发现会话已再次解锁，因此该轮未完成；上面的完整锁屏验收结果来自合并前的 direct release。
+
+原始截图、日志和结果保存在执行测试的本机 `eval/results/` 中，不随代码发布。本次记录为 `locked-direct-mcp-20261004-201554-01360e619bb8/summary.json` 和 `locked-direct-multiwindow-20261004-201753-f9d30551aefa/summary.json`；可按下方“验证”步骤生成自己的记录。
+
+## 安装与启用
+
+在仓库执行普通安装，随后检查宿主的辅助功能和屏幕录制权限：
+
+```bash
+make install
+~/.local/bin/skfiy doctor
+```
+
+这些命令不需要 `sudo` 或 Apple 开发者证书。macOS 权限仍由机主在系统设置中授予；授权后需重启启动 skfiy 的宿主与 MCP 会话。
+
+启动 MCP 时显式选择 direct 模式：
+
+```bash
+SKFIY_LOCKED_USE=direct ~/.local/bin/skfiy mcp
+```
+
+在 MCP 客户端配置中，`command` 使用普通 `skfiy` 二进制的绝对路径，`args` 为 `["mcp"]`，给该 server 的 `env` 添加 `"SKFIY_LOCKED_USE": "direct"`。更新二进制或环境变量后重新启动 MCP 会话。不需要安装 guardian 或系统授权插件；不要同时添加 `--locked-use` 参数。
+
+可以先启动 MCP 再锁屏，也可以在已经锁屏时启动 MCP。目标应用必须已经运行，所需系统权限必须事先授予。direct 模式不会为工具调用解锁、启动新的应用或操作系统登录窗口。Mac 解锁时，普通应用操作继续使用原有 AX、文件、前台确认等功能；锁定状态变化后需要重新获取 app state，旧元素编号和截图坐标不再有效。
+
+## 锁屏时的操作
+
+先调用 `get_app_state`，指定应用名、路径或 bundle ID。它返回单个窗口的实时截图、窗口 ID、截图像素与屏幕坐标的对应关系，以及默认开启的截图文字识别；多个窗口时可用 `window` 指定标题或窗口 ID。
+
+| 工具 | direct 锁屏模式行为 |
+| --- | --- |
+| `get_app_state` | 读取目标进程的单个窗口截图及 OCR 文字坐标，不使用 AX 元素树 |
+| `click` | 使用最新截图内的 `x` / `y`，可选左右中键、双击或三击和修饰键 |
+| `scroll` | 在最新截图的 `x` / `y` 处按方向和页数滚动 |
+| `drag` | 在同一窗口内按截图像素坐标拖动 |
+| `press_key` | 把按键投递给目标应用；须只有一个可确认的窗口 |
+| `type_text` | 向目标应用发送 Unicode 键盘事件；须只有一个可确认的窗口 |
+| `locked_use_status` | 查看 direct 会话阶段、锁态是否已知及系统是否仍锁定 |
+| `locked_use_end` | 结束当前 MCP 会话的 direct 操作权限并清除坐标；不锁屏、不解锁 |
+
+每个操作都需要近期截图及仍匹配的应用进程、窗口和几何位置。窗口移动、关闭、进程变化、系统锁态未知或锁态改变会使旧状态失效；重新调用 `get_app_state` 后才能操作。坐标必须位于最新截图内。操作后的截图用于确认效果，事件投递成功本身不代表应用已完成操作。
+
+`locked_use_end` 之后若需再次使用锁屏能力，要新建 MCP 会话。关闭 MCP 也不会改变系统锁定状态。`skfiy stop` 仍可中止操作。
+
+## 当前限制
+
+- 锁屏 direct 模式不支持 `element_index`、`set_value`、`select_text` 或其他 AX 动作，也不把锁屏前的元素树当作当前状态。
+- 不支持 `run_in_front`、`focus: true`、文件打开/保存面板、剪贴板操作、剪贴板快捷键、`zoom` 或 `wait_for`。需要这些功能的步骤应在手动解锁后执行。
+- 多窗口应用可以按窗口选择截图和坐标操作，但键盘目标无法可靠确认时会拒绝 `press_key` 和 `type_text`。单窗口也仍受应用是否接受后台事件的限制。
+- 不读取或控制系统登录、认证窗口。终端与承载 skfiy 的宿主仍受原有目标保护规则约束。
+- 未承诺对所有 AppKit、Chromium、WebKit、自绘应用、文件面板、多显示器、全屏或其他桌面空间都有效。独立 fixture 成功只证明该测试覆盖的窗口和操作。
+- 屏幕录制被拒绝、截图超时或窗口不可捕获会明确报错；不会退回整桌面截图、切换前台或临时解锁。
+- 浏览器扩展继续使用独立通道；浏览器 DOM 操作成功不代替原生应用锁屏验收。
+
+## 验证
 
 ```bash
 make test
-make test-locked-use
-make test-locked-use-plugin
-make locked-use
-sudo python3 scripts/locked_use.py install --experimental --uid "$(id -u)"
-make install
+python3 scripts/diagnose_locked_direct.py --prepare
+python3 scripts/smoke_locked_direct.py ~/.local/bin/skfiy --prepare
 ```
 
-`make locked-use` 在当前架构上构建 guardian app 和授权插件，启用 hardened runtime，默认本地 ad-hoc 签名。可用 `SKFIY_SIGN_IDENTITY='Developer ID Application: …' make locked-use` 指定自己的身份。插件在目标系统能否加载必须实测；不要通过关闭 SIP、AMFI 或系统库验证解决加载失败。分发给其他机器还需要独立处理正式签名、公证和系统兼容性。
-
-安装器只接受原始 `system.login.screensaver` 的 `use-login-window-ui` 规则。存在 Codex、MDM 或其他自定义解锁规则时会拒绝覆盖，先通过原组件自己的卸载流程恢复。安装器备份完整原规则，并在文件与新分支准备好后最后接入系统规则；失败则尝试恢复原规则并保留恢复记录。
-
-随后在 **Mac 已解锁时**启动：
+后两行只准备专用 fixture 与测试程序，不进行 GUI 操作。Mac 已真正锁定、宿主已有所需权限时，可执行产品 MCP 测试：
 
 ```bash
-skfiy mcp --locked-use
+python3 scripts/smoke_locked_direct.py ~/.local/bin/skfiy --run
+python3 scripts/smoke_locked_direct_multiwindow.py ~/.local/bin/skfiy --run
 ```
 
-也可以把 MCP 客户端配置中的参数改为 `["mcp", "--locked-use"]`。首次需要在系统设置中为 **Skfiy Locked Use** 授予辅助功能权限，然后重新启动 MCP；skfiy 原有的辅助功能和屏幕录制权限也必须具备。启动会弹出本地确认并调用 Touch ID / 系统身份验证。客户端的 MCP 启动超时应留够本地确认时间（最多 90 秒）。模型不能通过工具自行安装或批准这项授权。
+此测试只操作自己创建的 fixture，通过真实 MCP 工具获取截图及坐标，再发送输入；fixture 独立记录收到的事件，另一个采样器记录系统锁态。它不请求解锁，运行结束仍保持原有锁定状态。单窗口结果保存在 `eval/results/locked-direct-mcp-*`，双窗口拒绝回归结果保存在 `eval/results/locked-direct-multiwindow-*`。`diagnose_locked_direct.py --already-locked` 则只用于底层 API 能力诊断，不是产品 MCP 的验收替代品。
 
-授权绑定当前 MCP 进程，最长一小时；断开后必须重新启动、重新批准。不支持后台续期或持久化令牌。每个用户同一时间只有一个锁屏运行会话。
+## 独立的实验性 guardian 方案
 
-## 运行约束
+仓库另保留 `skfiy mcp --locked-use` 路径：经本地身份验证后，由授权插件和 guardian 在桌面操作期间遮屏、短暂解锁，完成后重新锁定。其安装器、签名配置、测试和恢复流程见 [GUARDIAN.md](GUARDIAN.md)。该路径仍未完成 M1 Pro / macOS Tahoe 26.6.1 真机验收；上面的 direct 测试不能用于证明它可用。
 
-- `get_desktop_status` 返回桌面、授权和急停状态；不解锁屏幕。
-- 原生桌面调用开始时若已锁屏，两个独立 guardian 进程先遮盖全部显示器并启用输入监视，再发出最长三秒、只能消费一次的解锁许可。授权插件只接受系统签名 loginwindow 发起的 screensaver right，检查 root 所有的已签名 guardian 的进程身份和代码哈希。
-- 自动触发仅尝试唯一、空的系统密码框所公开的 `AXConfirm` 动作。没有输入密码、模拟回车、坐标猜测或重试兜底。系统不提供该动作、授权失败、无法确认解锁都会停止，要求手动解锁。
-- 工具完成后先撤销解锁许可，再锁屏。只有读到明确的锁定状态才撤下遮盖；状态未知时继续遮盖并尝试锁定。
-- 保护期间检测到本地键鼠输入、显示器变化、失去事件监视、连接断开、急停、心跳超时或授权到期都会撤销会话。独立 watchdog 在主 guardian 卡住/退出时尝试重新锁屏。恢复需要手动解锁并重新批准，不自动重放可能已部分执行的操作。
-- 锁屏保护期间只用后台操作，`run_in_front` 被拒绝。Chrome 扩展的 `browser_*` DOM 通道不经过原生解锁流程。
-- 不向 loginwindow、SecurityAgent 或 guardian 发送模型指定的输入。不改变系统登录、sudo、FileVault、钥匙串授权策略，也不读取或存储登录密码。
+`SKFIY_LOCKED_USE=direct` 与 `--locked-use` 是互斥的启用方式。direct 的安装与使用不依赖 guardian；停止 direct MCP 会话或移除环境变量即可停用，不需要管理员卸载。
 
-遮盖窗口和事件监视依赖系统图形会话正常运行。它们不等价于硬件安全边界，也不能承诺抵御管理员、系统崩溃或两个保护进程同时被强制终止。自动化权限本身可以改动用户数据，授权应只交给可信的本地 agent。
-
-## 验收
-
-```bash
-# 不安装、不锁屏的测试
-make test-locked-use          # Linux / macOS：租约、单次消费、超时、撤销、安装回滚
-make test-locked-use-plugin   # macOS：真实插件 ABI，模拟系统身份/IPC，检查拒绝路径
-
-# 真机：弹出本地授权，随后等待你手动锁屏；只操作独立测试窗口
-python3 scripts/smoke_locked_use.py ~/.local/bin/skfiy --allow-lock
-```
-
-真机脚本不会安装插件或接管授权弹窗。脚本在锁屏前启动独立测试 app；你批准 guardian 后手动锁屏。脚本检查锁屏状态、窗口截图、后台按钮动作和每次操作后的重新锁屏。失败输出是验收失败，不等同于“降级成功”。记录 `sw_vers`、`uname -m`、签名身份和错误文本，不提供密码或私人应用截图。
-
-在 M1 Pro / Tahoe 26.6.1 上发布为可用功能前，还要人工验证以下情况：
-
-1. 插件已安装但 guardian 未运行/未批准时，正常密码与 Touch ID 解锁仍可用；批准过期后也一样。
-2. 连续锁屏操作至少 20 次，单屏、外接屏、全屏空间下所有可见显示器均被覆盖；键鼠事件能中止，用户需手动解锁后接管。
-3. 操作中关闭 MCP 客户端、`skfiy stop`、终止主 guardian：不再向应用输入，watchdog 重新锁屏；操作可能部分完成的错误清楚可见。
-4. 拔插显示器、切换用户、睡眠/唤醒、权限撤销：停止会话，不能自动恢复旧授权。
-5. 单独检查钥匙串：自动解锁前后访问自己新建的测试项，随后手动解锁、注销登录、重启后仍可访问，Safari/系统密码功能无异常。不用真实密码做测试。发现钥匙串异常立即停用并保留系统诊断，不尝试重置钥匙串。
-6. 卸载后普通解锁、skfiy 原有后台输入与截图、Chrome 插件均正常。
-
-## 停用、卸载与恢复
-
-先停止 `mcp --locked-use` 会话并手动解锁，再执行：
-
-```bash
-python3 scripts/locked_use.py status
-sudo python3 scripts/locked_use.py uninstall
-```
-
-卸载先恢复原 screensaver 规则，再移除插件与 guardian；如果管理员在安装后改过规则，会保留文件和备份并拒绝覆盖。authd 自动生成的修改时间、版本和写入者签名标识不参与策略比较，也不能通过 plist 原样恢复。更新组件也采用先停止、卸载，再重建、安装的流程，不能替换正在运行的已授权二进制。
-
-恢复备份位于 `/Library/Application Support/skfiy/locked-use-install.plist`，成功卸载后保留为 `locked-use-install.last-uninstall.plist`。备份包含原始与安装时的规则，没有用户密码。若自动恢复拒绝，应由管理员比较当前规则与备份中的 `original`，通过 `security authorizationdb write system.login.screensaver` 恢复确认过的原始 plist，再移除自定义分支和组件。不要写入通用 `allow`、删除系统 auth.db，或先删除仍被规则引用的插件。
-
-## 实现依据
-
-- Apple [Authorization Plug-ins](https://developer.apple.com/documentation/security/extending-authorization-services-with-plug-ins) 定义插件机制；安装与 callback 依赖原生 Security API。
-- Apple [authd engine](https://github.com/apple-oss-distributions/Security/blob/main/OSX/authd/engine.m) 的签名来源使用 immutable hints，PID/right 使用普通 hints；插件同时核对请求者与授权创建者来自 Apple，以及实际进程是 loginwindow。安装器只接受没有前置第三方机制的原规则。
-- OpenAI [Codex computer use 文档](https://developers.openai.com/codex/app/computer-use) 描述 locked use 的授权插件、临时解锁和遮屏设计。这里是独立实现，未取得或复用 Codex 私有组件。
-- `SACLockScreenImmediate`、CG session 锁定字段和 loginwindow 的 AX 行为存在私有/未承诺稳定的部分；不满足检查就拒绝继续。
+早期开发分支还曾使用 `SKFIY_LOCKED_USE=1` 和另一套插件/guardian。该版本已从当前代码移除，旧安装命令不适用于此版本。其 ad-hoc 插件曾被系统宿主拒绝加载，本机实验组件随后已撤回；这一历史结果既不是 direct 的前提，也不是当前 `--locked-use` guardian 的真机验收结果。相关本机记录保留在 `eval/results/locked-use-20261004-193856-10f0c0e4fe6b/` 与 `eval/results/locked-use-audit-20261004-194734/summary.json`，不随代码发布。

@@ -7,7 +7,7 @@ let usage = """
 skfiy \(skfiyVersion) — macOS computer use for AI agents
 
 Usage:
-  skfiy mcp [--locked-use]       Run MCP; locked use requires installed helper + local approval
+  skfiy mcp [--locked-use]       Run MCP; --locked-use selects the experimental guardian
   skfiy doctor                   Check (and request) Accessibility + Screen Recording access
   skfiy tools                    List the tools
   skfiy install-browser-bridge   Register the browser extension's native messaging host
@@ -15,6 +15,10 @@ Usage:
   skfiy log [N]                  The last N actions skfiy took (~/Library/Logs/skfiy/actions.jsonl)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
                                  is saved to $SKFIY_SCREENSHOT_OUT (default /tmp/skfiy-screenshot.<ext>)
+
+Locked computer use without an authorization plugin:
+  SKFIY_LOCKED_USE=direct skfiy mcp
+  Do not combine direct mode with --locked-use.
 
 Register with Claude Code:
   claude mcp add --scope user skfiy -- \(CommandLine.arguments[0].hasPrefix("/") ? CommandLine.arguments[0] : "/path/to/skfiy") mcp
@@ -92,6 +96,9 @@ case "install-browser-bridge":
 
 case "mcp":
     guard arguments.dropFirst().isEmpty || Array(arguments.dropFirst()) == ["--locked-use"] else { fail(usage) }
+    if arguments.contains("--locked-use"), ProcessInfo.processInfo.environment["SKFIY_LOCKED_USE"] == "direct" {
+        fail("SKFIY_LOCKED_USE=direct cannot be combined with --locked-use. Choose one locked-use mode.")
+    }
     Instance.runFromOwnLink()
     atexit { Instance.removeOwnLink() }
     Task { @MainActor in
