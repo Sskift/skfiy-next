@@ -391,69 +391,54 @@ public final class ComputerUse {
         guard (0.5...60).contains(timeout) else {
             throw ToolError("timeout must be between 0.5 and 60 seconds.")
         }
-        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let stableFor = try args.double("stable_for") ?? 1
+        guard (0.3...10).contains(stableFor) else {
+            throw ToolError("stable_for must be between 0.3 and 10 seconds.")
+        }
+        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gone = (args.values["gone"] as? Bool) ?? false
         if gone, text.isEmpty {
             throw ToolError("gone needs a text to wait for the disappearance of.")
+        }
+        if args.values["region"] != nil {
+            throw ToolError("region applies while macOS is locked (pixels); unlocked waits watch the accessibility tree. Use find or a text instead.")
         }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 2)
         await enableAccessibility(app, appElement)
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
         let name = app.localizedName ?? query
-        let what = text.isEmpty ? "the window to stop changing" : "\(quote(text, limit: 60)) to \(gone ? "disappear" : "appear")"
-        let outcome = { (met: Bool, seconds: String) -> String in
-            let subject = quote(text, limit: 60)
-            switch (text.isEmpty, gone, met) {
-            case (true, _, true): return "The window stopped changing after \(seconds) s."
-            case (true, _, false): return "The window was still changing after \(seconds) s."
-            case (false, false, true): return "\(subject) appeared after \(seconds) s."
-            case (false, false, false): return "\(subject) did not appear within \(seconds) s."
-            case (false, true, true): return "\(subject) was gone after \(seconds) s."
-            case (false, true, false): return "\(subject) was still there after \(seconds) s."
-            }
-        }
+        let engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
         let started = Date()
-        var last: String?
-        var unchangedSince = started
-        var met = false
-        while !met {
-            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
-            // While locked, accessibility answers for the lock screen, not the app.
-            guard !isScreenLocked() else {
-                throw ToolError("The screen locked while waiting for \(what). Try again after it is unlocked.")
-            }
-            guard !app.isTerminated else {
-                sessions[app.processIdentifier] = nil
-                throw ToolError("\(name) quit while waiting for \(what).")
-            }
-            // A window that is not there (yet) proves nothing either way.
-            if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil) {
-                var current = snapshot.text.lowercased()
+        let result = await engine.run(
+            now: { Date().timeIntervalSince(started) },
+            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+            check: {
+                if EmergencyStop.isStopped { throw WaitStopped("emergency stop is on.") }
+                // While locked, accessibility answers for the lock screen, not the app.
+                if isScreenLocked() { throw WaitStopped("the screen locked, and accessibility no longer describes the app.") }
+                if app.isTerminated { throw WaitStopped("\(name) quit.") }
+            },
+            observe: {
+                // A window that is not there (yet) proves nothing either way.
+                guard let snapshot = try? self.buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil) else {
+                    return WaitObservation(text: nil, textFingerprint: UUID().uuidString)
+                }
+                var current = snapshot.text
                 if (args.values["ocr"] as? Bool) ?? snapshot.opaque,
                    let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
-                   let lines = try? await recognizeText(pid: app.processIdentifier, region: region) {
-                    current += "\n" + lines.map(\.text).joined(separator: "\n").lowercased()
+                   let lines = try? await self.recognizeText(pid: app.processIdentifier, region: region) {
+                    current += "\n" + lines.map(\.text).joined(separator: "\n")
                 }
-                if text.isEmpty {
-                    if current != last {
-                        last = current
-                        unchangedSince = Date()
-                    }
-                    met = Date().timeIntervalSince(unchangedSince) >= 1
-                } else {
-                    met = current.contains(text) != gone
-                }
-            }
-            if !met {
-                if Date().timeIntervalSince(started) >= timeout { break }
-                await Input.pause(0.3)
-            }
-        }
-        let waited = formatNumber((Date().timeIntervalSince(started) * 10).rounded() / 10)
+                return WaitObservation(text: current, textFingerprint: current)
+            })
+        if case .cancelled = result { throw CancellationError() }
+        if app.isTerminated { sessions[app.processIdentifier] = nil }
+        let outcome = engine.describe(result)
+        if case .stopped = result { throw ToolError(outcome) }
         var state = try await getAppState(args)
-        state.text = outcome(met, waited) + "\n" + state.text
-        state.isError = !met
+        state.text = outcome + "\n" + state.text
+        if case .timedOut = result { state.isError = true }
         return state
     }
 

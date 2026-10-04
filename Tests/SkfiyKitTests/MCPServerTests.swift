@@ -159,3 +159,37 @@ struct ArgumentsTests {
         #expect(throws: ToolError.self) { try Arguments(["app": "  "]).requiredString("app") }
     }
 }
+
+@MainActor
+final class SlowExecutor: ToolExecutor {
+    var sawCancellation = false
+    func call(_ name: String, _ arguments: [String: Any]) async -> ToolResult {
+        for _ in 0..<500 {
+            if Task.isCancelled { sawCancellation = true; return ToolResult(text: "cancelled", isError: true) }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return ToolResult(text: "finished")
+    }
+}
+
+@MainActor
+struct MCPCancellationTests {
+    @Test func cancelledCallStopsAndGetsNoResponse() async throws {
+        let executor = SlowExecutor()
+        let server = MCPServer(executor: executor, write: { _ in })
+        let started = Date()
+        let call = Task { await server.respond(to: ["jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                                                    "params": ["name": "wait_for", "arguments": ["app": "X"]]]) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let line = #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7,"reason":"user"}}"#
+        let id = try #require(MCPServer.cancellation(line))
+        server.cancel(id)
+        let response = await call.value
+        #expect(response == nil)
+        #expect(executor.sawCancellation)
+        #expect(Date().timeIntervalSince(started) < 2)
+        // Other lines are not cancellations; unknown ids are ignored.
+        #expect(MCPServer.cancellation(#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#) == nil)
+        server.cancel("12345")
+    }
+}

@@ -27,6 +27,9 @@ public final class MCPServer {
     /// Requests this server sent to the client, waiting for their responses.
     private var pending: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var nextRequest = 0
+    /// Tool calls in progress, by request id, so the client can cancel them.
+    private var running: [String: Task<ToolResult, Never>] = [:]
+    private var cancelled: Set<String> = []
 
     public init(executor: ToolExecutor, write: @escaping (Data) -> Void = MCPServer.writeToStdout) {
         self.executor = executor
@@ -48,6 +51,9 @@ public final class MCPServer {
                     // while a tool call is still running, so they skip the queue.
                     if let response = Self.clientResponse(line) {
                         Task { @MainActor in self.deliver(response) }
+                    } else if let cancelled = Self.cancellation(line) {
+                        // Requests run one at a time, so this cannot wait its turn.
+                        Task { @MainActor in self.cancel(cancelled) }
                     } else {
                         continuation.yield(line)
                     }
@@ -141,7 +147,14 @@ public final class MCPServer {
                 return failure(-32602, "Unknown tool: \(name)")
             }
             let arguments = params["arguments"] as? [String: Any] ?? [:]
-            let outcome = await executor.call(name, arguments)
+            let key = "\(id)"
+            let executor = self.executor
+            let task = Task { @MainActor in await executor.call(name, arguments) }
+            running[key] = task
+            let outcome = await task.value
+            running[key] = nil
+            // A cancelled request gets no response (MCP cancellation).
+            if cancelled.remove(key) != nil { return nil }
             var content: [[String: Any]] = [["type": "text", "text": outcome.text]]
             if let image = outcome.image {
                 content.append([
@@ -199,6 +212,23 @@ public final class MCPServer {
     private func deliver(_ response: [String: Any]) {
         guard let id = response["id"].map({ "\($0)" }) else { return }
         pending.removeValue(forKey: id)?.resume(returning: response)
+    }
+
+    /// Stops a tool call the client no longer wants: waits end at once, and
+    /// input stops before its next event.
+    func cancel(_ requestID: String) {
+        guard let task = running[requestID] else { return }
+        cancelled.insert(requestID)
+        task.cancel()
+    }
+
+    /// The request id of a notifications/cancelled line, if it is one.
+    nonisolated static func cancellation(_ line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["method"] as? String == "notifications/cancelled", object["id"] == nil,
+              let params = object["params"] as? [String: Any], let id = params["requestId"] else { return nil }
+        return "\(id)"
     }
 
     nonisolated static func clientResponse(_ line: String) -> [String: Any]? {

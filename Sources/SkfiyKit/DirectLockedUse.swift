@@ -41,10 +41,13 @@ final class DirectLockedUse {
         let geometry: CaptureGeometry
         let captured: Date
         let generation: UInt64
+        /// The capture at display resolution, and the text recognized on it.
+        var hires: CGImage?
+        var recognized: [RecognizedText] = []
     }
 
     /// Tools this mode serves while macOS is locked; everything else is refused.
-    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text"]
+    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for"]
 
     private let directory = AppDirectory()
     private var states: [pid_t: State] = [:]
@@ -209,36 +212,69 @@ final class DirectLockedUse {
         return state.geometry.toScreen(x: px, y: py)
     }
 
+    /// One capture at the display's full resolution serves both: text is
+    /// recognized on it (at 1×, OCR splits and misreads words), and the model
+    /// gets it resized to the usual point-sized screenshot of the same frame.
+    private struct Capture {
+        let shot: Screenshot
+        let hires: CGImage
+        let recognized: [RecognizedText]?
+    }
+
+    private func capture(_ window: DirectLockedWindow, recognize: Bool) async throws -> Capture {
+        let (hires, hiresGeometry) = try await captureDirectLockedImage(window, maxScale: backingScale(for: window.frame))
+        let scale = captureScale(for: hiresGeometry.rect.size, maxScale: 1)
+        let width = max(1, Int((hiresGeometry.rect.width * scale).rounded()))
+        let height = max(1, Int((hiresGeometry.rect.height * scale).rounded()))
+        guard let image = resized(hires, width: width, height: height) else { throw ToolError("Could not prepare the screenshot.") }
+        let geometry = CaptureGeometry(rect: hiresGeometry.rect, pixelWidth: width, pixelHeight: height)
+        let recognized = recognize ? TextRecognition.sorted(try await TextRecognition.recognize(hires, showing: geometry.rect)) : nil
+        return Capture(shot: try encodeScreenshot(image, geometry: geometry), hires: hires, recognized: recognized)
+    }
+
+    /// The app's capturable windows, titled ones first, then by size.
+    private func windows(of app: NSRunningApplication) async throws -> [DirectLockedWindow] {
+        try await directLockedWindows(pid: app.processIdentifier).sorted {
+            if $0.title.isEmpty != $1.title.isEmpty { return !$0.title.isEmpty }
+            return $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height
+        }
+    }
+
+    /// The window named by `window` (title or id), the selected one, or the first.
+    private func choose(_ windows: [DirectLockedWindow], query: String, selected: DirectLockedWindow?) throws -> DirectLockedWindow {
+        if let selected {
+            guard let existing = windows.first(where: { $0.id == selected.id }) else {
+                throw ToolError("The selected window closed. Call get_app_state to choose a current window.")
+            }
+            return existing
+        }
+        if !query.isEmpty {
+            let matches = windows.filter { $0.title.localizedCaseInsensitiveContains(query) || String($0.id) == query }
+            guard matches.count == 1, let match = matches.first else {
+                throw ToolError("Window selection is absent or ambiguous. Available windows: \(windows.map { "\($0.id): \($0.title)" }.joined(separator: "; "))")
+            }
+            return match
+        }
+        guard let first = windows.first else { throw ToolError("This app has no capturable window in the locked session.") }
+        return first
+    }
+
     private func snapshot(_ args: Arguments, selected: DirectLockedWindow? = nil, message: String? = nil) async throws -> ToolResult {
         try check()
         let captureGeneration = generation
         let app = try application(args)
         states[app.processIdentifier] = nil
-        let windows = try await directLockedWindows(pid: app.processIdentifier).sorted {
-            if $0.title.isEmpty != $1.title.isEmpty { return !$0.title.isEmpty }
-            return $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height
-        }
+        let windows = try await windows(of: app)
         let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let window: DirectLockedWindow
-        if let selected {
-            guard let existing = windows.first(where: { $0.id == selected.id }) else {
-                states[app.processIdentifier] = nil
-                throw ToolError("The selected window closed. Call get_app_state to choose a current window.")
-            }
-            window = existing
-        } else if !query.isEmpty {
-            let matches = windows.filter { $0.title.localizedCaseInsensitiveContains(query) || String($0.id) == query }
-            guard matches.count == 1, let match = matches.first else {
-                throw ToolError("Window selection is absent or ambiguous. Available windows: \(windows.map { "\($0.id): \($0.title)" }.joined(separator: "; "))")
-            }
-            window = match
-        } else if let first = windows.first { window = first }
-        else { throw ToolError("This app has no capturable window in the locked session.") }
-        let shot = try await captureDirectLockedWindow(window)
+        let window = try choose(windows, query: query, selected: selected)
+        let recognize = (args.values["ocr"] as? Bool) ?? true
+        let captured = try await capture(window, recognize: recognize)
+        let shot = captured.shot
         try check(generation: captureGeneration)
         guard shot.geometry.rect == window.frame else { throw ToolError("The selected window changed before capture. Refresh get_app_state.") }
         let state = State(app: app, executable: app.executableURL, launched: app.launchDate,
-                          window: window, geometry: shot.geometry, captured: Date(), generation: captureGeneration)
+                          window: window, geometry: shot.geometry, captured: Date(), generation: captureGeneration,
+                          hires: captured.hires, recognized: captured.recognized ?? [])
         if let problem = validationProblem(state) { throw ToolError("The target window changed while capturing it (\(problem)). Refresh get_app_state.") }
         var lines = [message, "App: \(app.localizedName ?? "?") — \(app.bundleIdentifier ?? "") (pid \(app.processIdentifier))",
                      "Direct locked use: macOS remains locked. This is a live window screenshot; use x/y, press_key and type_text. AX element indices and foreground actions are unavailable.",
@@ -247,8 +283,7 @@ final class DirectLockedUse {
         if windows.count > 1 {
             lines.append("Other windows (pass window title or id to get_app_state): " + windows.filter { $0.id != window.id }.map { "\($0.id): \($0.title)" }.joined(separator: "; "))
         }
-        if (args.values["ocr"] as? Bool) ?? true, let image = TextRecognition.decode(shot.data) {
-            let recognized = TextRecognition.sorted(try await TextRecognition.recognize(image, showing: shot.geometry.rect))
+        if let recognized = captured.recognized {
             lines.append("Text recognized in the screenshot (use x/y):")
             for text in recognized.prefix(200) {
                 let middle = shot.geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY))
@@ -261,9 +296,143 @@ final class DirectLockedUse {
         return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
     }
 
+    // MARK: wait_for
+
+    /// Watches one window without sending anything: until a text shows up
+    /// (or goes away) in the recognized text, or its pixels (optionally a
+    /// region of the latest screenshot) stop changing. Stops at once, with
+    /// the reason, when the lock state, the app process or the window changes.
+    func waitFor(_ args: Arguments) async throws -> ToolResult {
+        try check()
+        let startGeneration = generation
+        let app = try application(args)
+        let pid = app.processIdentifier
+        let executable = app.executableURL, launched = app.launchDate
+        let timeout = try args.double("timeout") ?? 10
+        guard timeout.isFinite, (0.5...60).contains(timeout) else { throw ToolError("timeout must be between 0.5 and 60 seconds.") }
+        let stableFor = try args.double("stable_for") ?? 1
+        guard stableFor.isFinite, (0.3...10).contains(stableFor) else { throw ToolError("stable_for must be between 0.3 and 10 seconds.") }
+        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let gone = (args.values["gone"] as? Bool) ?? false
+        if gone, text.isEmpty { throw ToolError("gone needs a text to wait for the disappearance of.") }
+        let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let previous = states[pid].flatMap { valid($0) ? $0 : nil }
+        let window = try choose(try await windows(of: app), query: query, selected: query.isEmpty ? previous?.window : nil)
+
+        // A region is given in pixels of the latest screenshot of this window.
+        var region: CGRect?
+        if args.values["region"] != nil || args.values["x"] != nil {
+            guard let previous, previous.window.id == window.id else {
+                throw ToolError("region needs a current get_app_state screenshot of this window (its pixels define the region). Call get_app_state first.")
+            }
+            region = try pixelRegion(args, geometry: previous.geometry)
+        }
+        var lastPixels: PixelFingerprint?
+        var lastText: String?
+        var engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
+        engine.interval = text.isEmpty ? 0.25 : 0.4
+        let clock = ContinuousClock()
+        let origin = clock.now
+        let result = await engine.run(
+            now: { let d = clock.now - origin; return Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18 },
+            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+            check: { [self] in try self.waitCheck(startGeneration, pid: pid, executable: executable, launched: launched) },
+            observe: { [self] in
+                let current = try await directLockedWindows(pid: pid)
+                guard let now = current.first(where: { $0.id == window.id }) else {
+                    throw WaitStopped("the window closed.")
+                }
+                if region != nil, now.frame != window.frame {
+                    throw WaitStopped("the window moved or was resized, so the region no longer covers the same content.")
+                }
+                let image: CGImage, geometry: CaptureGeometry
+                do {
+                    (image, geometry) = try await captureDirectLockedImage(now, maxScale: text.isEmpty ? 1 : backingScale(for: now.frame))
+                } catch let error as ToolError {
+                    // Say what happened to the window rather than how the capture failed.
+                    let after = try? await directLockedWindows(pid: pid)
+                    if let after, !after.contains(where: { $0.id == window.id }) { throw WaitStopped("the window closed.") }
+                    throw WaitStopped("the window could not be captured (\(error.description))")
+                }
+                let pixelRegion = region.map { rect -> CGRect in
+                    let scale = Double(geometry.pixelWidth) / Double(previous?.geometry.pixelWidth ?? geometry.pixelWidth)
+                    return CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale)
+                }
+                let pixels = PixelFingerprint(image, region: pixelRegion)
+                var observation = WaitObservation(fingerprint: pixels)
+                if !text.isEmpty {
+                    // Recognize again only when the pixels changed: controlled, not constant, OCR.
+                    if let lastPixels, let pixels, pixels.changedFraction(from: lastPixels) <= PixelFingerprint.stillThreshold, let lastText {
+                        observation.text = lastText
+                    } else {
+                        let lines = try await TextRecognition.recognize(image, showing: geometry.rect)
+                        let inside = pixelRegion == nil ? lines : lines.filter { line in
+                            region.map { _ in self.regionContains(line.frame, region: region!, geometry: previous!.geometry) } ?? true
+                        }
+                        observation.text = TextRecognition.sorted(inside).map(\.text).joined(separator: "\n")
+                        lastText = observation.text
+                    }
+                }
+                lastPixels = pixels
+                return observation
+            })
+        if case .cancelled = result { throw CancellationError() }
+        let outcome = engine.describe(result)
+        if case .stopped = result {
+            states[pid] = nil
+            throw ToolError(outcome + " Call get_app_state again before acting.")
+        }
+        var state = try await snapshot(args, selected: window, message: outcome)
+        if case .timedOut = result { state.isError = true }
+        return state
+    }
+
+    private func waitCheck(_ expected: UInt64, pid: pid_t, executable: URL?, launched: Date?) throws {
+        if EmergencyStop.isStopped { throw WaitStopped("emergency stop is on.") }
+        if ended { throw WaitStopped("direct locked use ended for this MCP session.") }
+        switch Self.lockState {
+        case .unlocked: throw WaitStopped("macOS was unlocked, so direct screenshots no longer apply (get_app_state now reads the accessibility tree).")
+        case .unavailable: throw WaitStopped("the lock state became unknown (another session or the login window).")
+        case .locked: break
+        }
+        if expected != generation { throw WaitStopped("the lock state changed (unlocked and locked again).") }
+        guard let current = NSRunningApplication(processIdentifier: pid), !current.isTerminated,
+              current.executableURL == executable, current.launchDate == launched else {
+            throw WaitStopped("the app quit or was restarted.")
+        }
+        guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else {
+            throw WaitStopped("Accessibility or Screen Recording permission was withdrawn.")
+        }
+    }
+
+    /// x/y/width/height (or region [x, y, w, h]) in pixels of the latest screenshot.
+    private func pixelRegion(_ args: Arguments, geometry: CaptureGeometry) throws -> CGRect {
+        var values: [Double] = []
+        if let array = args.values["region"] as? [Any] {
+            values = array.compactMap { ($0 as? NSNumber)?.doubleValue }
+        } else if let x = try args.double("x"), let y = try args.double("y"), let w = try args.double("width"), let h = try args.double("height") {
+            values = [x, y, w, h]
+        }
+        guard values.count == 4, values.allSatisfy(\.isFinite) else {
+            throw ToolError("region is [x, y, width, height] in pixels of the latest screenshot.")
+        }
+        let rect = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        guard rect.width >= 4, rect.height >= 4, rect.minX >= 0, rect.minY >= 0,
+              rect.maxX <= Double(geometry.pixelWidth), rect.maxY <= Double(geometry.pixelHeight) else {
+            throw ToolError("The region must be at least 4×4 px and inside the latest \(geometry.pixelWidth)×\(geometry.pixelHeight) screenshot.")
+        }
+        return rect
+    }
+
+    private func regionContains(_ frame: CGRect, region: CGRect, geometry: CaptureGeometry) -> Bool {
+        let middle = geometry.toPixels(CGPoint(x: frame.midX, y: frame.midY))
+        return region.contains(middle)
+    }
+
     func perform(_ name: String, _ args: Arguments) async throws -> ToolResult {
         try check()
         if name == "get_app_state" { return try await snapshot(args) }
+        if name == "wait_for" { return try await waitFor(args) }
         guard Self.lockedTools.contains(name) else {
             throw ToolError("\(name) is unavailable while macOS remains locked. Use get_app_state and screenshot coordinates with click, scroll, drag, press_key or type_text; unlock manually for AX or foreground actions.")
         }

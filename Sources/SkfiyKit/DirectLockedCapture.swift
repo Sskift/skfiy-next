@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
@@ -52,11 +53,45 @@ func directLockedActiveWindowIDs(pid: pid_t) async throws -> Set<CGWindowID> {
     return ids
 }
 
+/// Captures exactly the selected window, encoded for the model.
+@MainActor
+func captureDirectLockedWindow(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> Screenshot {
+    let (image, geometry) = try await captureDirectLockedImage(window, maxScale: maxScale)
+    return try encodeScreenshot(image, geometry: geometry)
+}
+
+func encodeScreenshot(_ image: CGImage, geometry: CaptureGeometry) throws -> Screenshot {
+    let format = ProcessInfo.processInfo.environment["SKFIY_SCREENSHOT_FORMAT"]?.lowercased() == "png" ? "png" : "jpeg"
+    return Screenshot(geometry: geometry, data: try encode(image, format: format), mimeType: format == "png" ? "image/png" : "image/jpeg")
+}
+
+/// The display's pixels per point where `rect` mostly is (2 on Retina).
+func backingScale(for rect: CGRect) -> Double {
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    let top = NSScreen.screens.first?.frame.maxY ?? 0
+    // NSScreen frames have a bottom-left origin; skfiy rects a top-left one.
+    let screen = NSScreen.screens.first { screen in
+        let frame = screen.frame
+        return CGRect(x: frame.minX, y: top - frame.maxY, width: frame.width, height: frame.height).contains(center)
+    }
+    return Double(screen?.backingScaleFactor ?? NSScreen.screens.map(\.backingScaleFactor).max() ?? 2)
+}
+
+/// `image` resized to exactly width × height pixels.
+func resized(_ image: CGImage, width: Int, height: Int) -> CGImage? {
+    if image.width == width && image.height == height { return image }
+    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+    context.interpolationQuality = .high
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
+}
+
 /// Captures exactly the selected window, without switching desktops,
 /// unlocking the session, or falling back to a display capture. Fresh SCK
 /// objects and matching ownership are required for each screenshot.
 @MainActor
-func captureDirectLockedWindow(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> Screenshot {
+func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> (CGImage, CaptureGeometry) {
     try Task.checkCancellation()
     try directLockedCapturePermission()
     guard window.pid > 0, window.id != kCGNullWindowID,
@@ -107,12 +142,7 @@ func captureDirectLockedWindow(_ window: DirectLockedWindow, maxScale: Double = 
             throw ToolError("The selected app window changed during capture. Get fresh app state before continuing.")
         }
 
-        let format = ProcessInfo.processInfo.environment["SKFIY_SCREENSHOT_FORMAT"]?.lowercased() == "png" ? "png" : "jpeg"
-        return Screenshot(
-            geometry: CaptureGeometry(rect: current.frame, pixelWidth: image.width, pixelHeight: image.height),
-            data: try encode(image, format: format),
-            mimeType: format == "png" ? "image/png" : "image/jpeg"
-        )
+        return (image, CaptureGeometry(rect: current.frame, pixelWidth: image.width, pixelHeight: image.height))
     }) else {
         throw ToolError("No screenshot: independent window capture did not answer within 4 s.")
     }

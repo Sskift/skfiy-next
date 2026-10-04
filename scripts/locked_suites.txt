@@ -2,3 +2,4 @@
 python3 scripts/compat_baseline.py {bin} --mode locked
 python3 scripts/smoke_locked_direct.py {bin} --run
 python3 scripts/test_capabilities.py {bin} --browser
+python3 scripts/test_wait.py {bin} --chrome

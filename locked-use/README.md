@@ -45,6 +45,7 @@ SKFIY_LOCKED_USE=direct ~/.local/bin/skfiy mcp
 | `drag` | 在同一窗口内按截图像素坐标拖动 |
 | `press_key` | 把按键投递给目标应用；须只有一个可确认的窗口 |
 | `type_text` | 向目标应用发送 Unicode 键盘事件；须只有一个可确认的窗口 |
+| `wait_for` | 不发送输入，等截图识别文字中某段文字出现或消失，或等窗口（或 `region` 指定的一部分）画面稳定；锁态变化、窗口关闭、应用退出时停止并说明原因 |
 | `locked_use_status` | 查看 direct 会话阶段、锁态是否已知及系统是否仍锁定 |
 | `locked_use_end` | 结束当前 MCP 会话的 direct 操作权限并清除坐标；不锁屏、不解锁 |
 
@@ -55,7 +56,7 @@ SKFIY_LOCKED_USE=direct ~/.local/bin/skfiy mcp
 ## 当前限制
 
 - 锁屏 direct 模式不支持 `element_index`、`set_value`、`select_text` 或其他 AX 动作，也不把锁屏前的元素树当作当前状态。
-- 不支持 `run_in_front`、`focus: true`、文件打开/保存面板、剪贴板操作、剪贴板快捷键、`zoom` 或 `wait_for`。需要这些功能的步骤应在手动解锁后执行。
+- 不支持 `run_in_front`、`focus: true`、文件打开/保存面板、剪贴板操作、剪贴板快捷键或 `zoom`。需要这些功能的步骤应在手动解锁后执行。
 - 多窗口应用可以按窗口选择截图和坐标操作，但键盘目标无法可靠确认时会拒绝 `press_key` 和 `type_text`。单窗口也仍受应用是否接受后台事件的限制。
 - 不读取或控制系统登录、认证窗口。终端与承载 skfiy 的宿主仍受原有目标保护规则约束。
 - 未承诺对所有 AppKit、Chromium、WebKit、自绘应用、文件面板、多显示器、全屏或其他桌面空间都有效。独立 fixture 成功只证明该测试覆盖的窗口和操作。

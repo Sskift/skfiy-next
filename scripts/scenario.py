@@ -175,9 +175,9 @@ class Session:
                 self.samples.append({'known': False, 'error': str(error)})
             time.sleep(0.25)
 
-    def call(self, tool_name, timeout=60, **arguments):
-        result = self.client.call(tool_name, allow_error=True, rpc_timeout=timeout, **arguments)
-        return result
+    def call(self, tool_name, rpc_timeout=90, **arguments):
+        # Not `timeout`: wait_for and others take a timeout argument of their own.
+        return self.client.call(tool_name, allow_error=True, rpc_timeout=rpc_timeout, **arguments)
 
     def check(self, name, condition, detail=''):
         row = {'check': name, 'ok': bool(condition), 'detail': str(detail)[:800]}

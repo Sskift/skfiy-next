@@ -236,14 +236,16 @@ enum ToolSchemas {
         ),
         tool(
             "wait_for",
-            "Wait, without sending any input, until a text appears in an app's window (its accessibility tree, including window titles, menus and field values), or disappears with gone: true; without a text, until the window has stopped changing for a second (loading finished, an animation settled). Use it instead of calling get_app_state again and again. Returns the fresh state like get_app_state, or an error with the current state after timeout.",
+            "Wait, without sending any input, until a text appears in an app's window (its accessibility tree, including window titles, menus and field values; while macOS is locked, the text recognized in the window's screenshot), or disappears with gone: true; without a text, until the window has stopped changing for stable_for seconds (loading finished, an animation settled; while locked, judged from its pixels, optionally only inside region). Use it instead of calling get_app_state again and again. Returns the fresh state like get_app_state, or an error with the current state after timeout. Stops early, saying why, if the lock state changes, the window closes or the app quits; the client can cancel it.",
             properties: [
                 "app": app,
                 "text": ["type": "string", "description": "Text to wait for, case-insensitive"],
                 "gone": ["type": "boolean", "description": "Wait until the text is gone instead. Defaults to false"],
-                "window": ["type": "string", "description": "Optional window title (or part of it) to watch instead of the focused window"],
+                "window": ["type": "string", "description": "Optional window title (or part of it; while locked also the window id) to watch instead of the focused window"],
                 "timeout": ["type": "number", "description": "Seconds to wait at most (0.5-60). Defaults to 10"],
-                "ocr": ["type": "boolean", "description": "Also match text recognized in the screenshot. On by default for windows that publish no accessibility"]
+                "stable_for": ["type": "number", "description": "Without text: how long the window must stay unchanged (0.3-10 s). Defaults to 1"],
+                "region": ["type": "array", "items": ["type": "number"], "description": "While locked: [x, y, width, height] in pixels of the latest screenshot; only this part is watched (ignore a clock or spinner elsewhere)"],
+                "ocr": ["type": "boolean", "description": "Also match text recognized in the screenshot. On by default for windows that publish no accessibility, and always while locked"]
             ],
             required: ["app"],
             readOnly: true
@@ -394,7 +396,7 @@ enum ToolSchemas {
     - Commands that act on the current selection or document (formatting, Undo, Find) only work in the frontmost app; when a task needs one, use run_in_front, which asks the user first, or say so. Do not retry them with press_key. Terminals and the app hosting you never receive input.
     - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
     - Copy and paste (cmd+c, cmd+x, cmd+v in press_key) use skfiy's own clipboard: text through accessibility; files, cells and images through the app's own Copy/Paste command, with the user's clipboard lent for that moment and put back. read_clipboard takes what the user copied, with their approval.
-    - With SKFIY_LOCKED_USE=direct, macOS stays locked. get_app_state returns a live single-window screenshot and OCR coordinates; use x/y click, scroll, drag, press_key and type_text. AX element_index, foreground actions, file-dialog helpers and clipboard are unavailable while locked. Keyboard input requires an unambiguous app window. Refresh get_app_state after a lock transition or window change. locked_use_end ends this MCP session's direct access without changing the OS lock. locked_use_status reports the mode and lock state. The experimental mcp --locked-use guardian mode is separate and cannot be combined with direct mode; locked_use_end revokes its grant.
+    - With SKFIY_LOCKED_USE=direct, macOS stays locked. get_app_state returns a live single-window screenshot and OCR coordinates; use x/y click, scroll, drag, press_key and type_text, and wait_for to wait for text or for the window to settle. AX element_index, foreground actions, file-dialog helpers and clipboard are unavailable while locked. Keyboard input requires an unambiguous app window. Refresh get_app_state after a lock transition or window change. locked_use_end ends this MCP session's direct access without changing the OS lock. locked_use_status reports the mode and lock state. The experimental mcp --locked-use guardian mode is separate and cannot be combined with direct mode; locked_use_end revokes its grant.
     - Everything runs in the background: the user keeps their front app, window order, cursor, clipboard and keyboard focus, and can keep typing. Hidden or minimized apps are not brought forward (no screenshot, but element actions still work).
     - A background mouse click reaches most controls; if a view ignores it (the screenshot shows no change), use an element_index, set_value/select_text, or keyboard shortcuts instead.
     - Web pages in Chrome/Edge/Brave: when the skfiy browser bridge extension is connected, prefer the browser_* tools. They work in background tabs by element index; open your own tab with browser_open instead of taking over the tab the user is looking at.

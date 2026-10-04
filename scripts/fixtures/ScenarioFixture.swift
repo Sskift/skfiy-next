@@ -260,7 +260,9 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                         self?.message.stringValue = "message: animation done"
                         self?.record("animation_done")
                     } else {
-                        self?.canvas.phase = (elapsed * 2).truncatingRemainder(dividingBy: 1)
+                        // One sweep across, never repeating: a periodic animation
+                        // sampled at its own period would look still.
+                        self?.canvas.phase = elapsed / seconds
                     }
                 }
             }
