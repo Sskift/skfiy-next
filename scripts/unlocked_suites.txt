@@ -1,0 +1,13 @@
+# Unlocked (background) suites for scripts/run_when_unlocked.py: one shell command per line, {bin} = skfiy binary snapshot.
+# Each starts only after the user has been idle for a while; none brings an app forward.
+python3 scripts/test_capabilities.py {bin} --browser
+python3 scripts/test_wait.py {bin} --chrome
+python3 scripts/test_zoom.py {bin} --chrome
+python3 scripts/test_verify.py {bin} --textedit
+python3 scripts/test_windows.py {bin} --textedit
+python3 scripts/test_locate.py {bin} --textedit --chrome
+python3 scripts/test_downloads.py {bin}
+python3 scripts/test_flow.py {bin} --textedit
+python3 scripts/bench_reads.py {bin} --rounds 2
+python3 scripts/bench_reads.py {bin} --rounds 2 --textedit
+python3 scripts/compat_baseline.py {bin} --mode background

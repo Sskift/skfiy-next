@@ -2,7 +2,7 @@
 """Flows with checkpoints, resumed after interruptions, in a real browser
 (Chrome for Testing with the extension, so it runs locked or unlocked):
 
-    python3 scripts/test_flow.py .build/debug/skfiy [--restart-chrome]
+    python3 scripts/test_flow.py .build/debug/skfiy [--restart-chrome] [--textedit]
 
 The task is download -> open -> process: download a data file, open it in a
 processing page (upload by download id), count its words and submit the
@@ -19,7 +19,9 @@ loaded it, how often a count was submitted.
   says which steps no longer hold and to redo from the download;
 - unconfirmed: the submit was recorded pending but never sent; the status
   says it is not confirmed, the agent looks, then submits exactly once;
-- a checkpoint whose proof does not hold is refused.
+- a checkpoint whose proof does not hold is refused;
+- with --textedit (unlocked): download -> open in TextEdit -> a counted,
+  saved copy, interrupted after the open; the document is opened once.
 """
 import json
 from pathlib import Path
@@ -175,6 +177,54 @@ def app_flow(flows):
                 result['text'][:700])
 
 
+def textedit_flow(flows, browser):
+    """Unlocked only: download -> open in TextEdit -> process (a summary line
+    typed in, saved as a new file), interrupted after the open."""
+    if subprocess.run(['pgrep', '-x', 'TextEdit'], capture_output=True).returncode == 0:
+        print('  skipped: TextEdit is running (maybe with the user\'s documents)')
+        return
+    try:
+        with session('flow-textedit-1', flows, None) as s:
+            if s.locked:
+                s.check('TextEdit flow needs the Mac unlocked (open_file, save_document)', True, 'skipped while locked')
+                return
+            run = s.nonce
+            flow, file_name = f'notes {run}', f'notes-{run}.txt'
+            agent = Agent(s, browser, flow, run, file_name)
+            agent.call('flow_start', name=flow, steps=[{'id': 'download', 'title': 'Download the notes'},
+                                                       {'id': 'open', 'title': 'Open them in TextEdit'},
+                                                       {'id': 'process', 'title': 'Add a word count and save a copy'}])
+            agent.download()
+            window = {'app': 'TextEdit', 'window': file_name}
+            agent.record('open', 'pending', window)
+            opened = agent.call('open_file', path=agent.memory['path'], app='TextEdit')
+            time.sleep(1.5)
+            recorded = agent.record('open', 'done', window)
+            s.check('TextEdit: the opened document is recorded by its window', not opened['is_error'] and not recorded['is_error'], recorded['text'][:200])
+            path = agent.memory['path']
+        with session('flow-textedit-2', flows, None) as s:
+            agent = Agent(s, browser, flow, run, file_name)
+            result, data = agent.status()
+            s.check('TextEdit: after reconnecting, the window still holds; next is process', data['next'].startswith('3.') and not data['replan'],
+                    result['text'][:400])
+            words = len(Path(path).read_text().split())
+            output = Path(path).with_name(f'processed-{run}.txt')
+            proof = {'file': str(output), 'contains': f'Words: {words}'}
+            agent.record('process', 'pending', proof)
+            agent.call('type_text', app='TextEdit', text=f'Words: {words}\n')
+            saved = agent.call('save_document', app='TextEdit', path=str(output), document=file_name)
+            time.sleep(1)
+            done = agent.record('process', 'done', proof)
+            result, data = agent.status()
+            windows = subprocess.run(['osascript', '-e', f'tell application "TextEdit" to count (documents whose name contains "{run}")'],
+                                     capture_output=True, text=True).stdout.strip()
+            s.check('TextEdit: processed copy saved with the count, flow complete, the document opened once',
+                    not saved['is_error'] and not done['is_error'] and data['complete'] and stats(file_name, run)['served'] == 1 and windows == '1',
+                    f"{saved['text'][:120]} | documents={windows} | {stats(file_name, run)}")
+    finally:
+        subprocess.run(['pkill', '-x', 'TextEdit'])
+
+
 def session(name, flows, binary):
     return Session(name, fixture=False, environment={'SKFIY_FLOW_DIR': str(flows), 'SKFIY_UPLOAD_WITHOUT_ASKING': '1'})
 
@@ -303,6 +353,8 @@ def main():
         result, data = agent.status()
         s.check('then submitted exactly once, flow complete', data['complete'] and stats(file_name, run)['submits'] == 1, stats(file_name, run))
         agent.call('browser_close_tab', tab_id=agent.tab())
+    if '--textedit' in sys.argv:
+        textedit_flow(flows, browser)
     shutil.rmtree(flows, ignore_errors=True)
 
 

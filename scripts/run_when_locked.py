@@ -11,6 +11,7 @@ Results: each suite writes its own evidence under eval/results; this script
 appends one JSON line per suite to eval/results/locked-runs.jsonl.
 """
 import argparse
+import fcntl
 import json
 from pathlib import Path
 import shutil
@@ -20,6 +21,16 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 PROBE = Path('/tmp/skfiy-compat/bin/AXProbe')
+SUITE_LOCK = Path('/tmp/skfiy-compat/suite.lock')
+
+
+def one_at_a_time():
+    """The locked and unlocked runners share Chrome for Testing and the test
+    apps: only one suite runs at a time."""
+    SUITE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    handle = SUITE_LOCK.open('w')
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
 
 
 def session():
@@ -59,9 +70,13 @@ def main():
             if not session()['locked']:
                 print('unlocked: remaining suites not started', flush=True)
                 break
-            started = time.time()
-            completed = subprocess.run(command.replace('{bin}', str(snapshot)), shell=True, cwd=ROOT,
-                                       capture_output=True, text=True, timeout=1800)
+            with one_at_a_time():
+                if not session()['locked']:
+                    print('unlocked: remaining suites not started', flush=True)
+                    break
+                started = time.time()
+                completed = subprocess.run(command.replace('{bin}', str(snapshot)), shell=True, cwd=ROOT,
+                                           capture_output=True, text=True, timeout=1800)
             row = {'command': command, 'started': started, 'seconds': round(time.time() - started, 1),
                    'exit': completed.returncode, 'lockedAtEnd': session()['locked'],
                    'tail': (completed.stdout + completed.stderr)[-3000:]}
