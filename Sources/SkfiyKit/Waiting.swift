@@ -9,7 +9,8 @@ struct PixelFingerprint: Equatable, Sendable {
     let pixels: [UInt8]
 
     /// `region` is in the image's own pixel space (top-left origin); nil is the whole image.
-    init?(_ image: CGImage, region: CGRect? = nil, width: Int = 160) {
+    /// 640 px wide keeps a one-word change of small text visible.
+    init?(_ image: CGImage, region: CGRect? = nil, width: Int = 640) {
         var source = image
         if let region {
             let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
@@ -49,9 +50,21 @@ struct PixelFingerprint: Equatable, Sendable {
         return Double(changed) / Double(pixels.count)
     }
 
-    /// Below this share a frame counts as unchanged: a blinking caret or a
-    /// cursor-sized redraw does not keep a window "changing".
-    static let stillThreshold = 0.002
+    /// Whether anything visibly changed. A blinking text caret is not a
+    /// change: its pixels form a thin vertical line. Anything else counts,
+    /// down to a few pixels, so a small label changing one word is seen.
+    func changed(from other: PixelFingerprint, tolerance: UInt8 = 24) -> Bool {
+        guard width == other.width, height == other.height, !pixels.isEmpty else { return true }
+        var count = 0, minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
+        for index in pixels.indices where abs(Int(pixels[index]) - Int(other.pixels[index])) > Int(tolerance) {
+            count += 1
+            let x = index % width, y = index / width
+            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+        }
+        guard count >= 4 else { return false }
+        let caret = maxX - minX <= 3 && maxY - minY <= max(48, height / 10)
+        return !caret
+    }
 }
 
 /// Text matching that survives OCR's habits: case, line breaks, and words
@@ -152,7 +165,7 @@ struct WaitEngine {
 
     private func changed(_ a: WaitObservation, _ b: WaitObservation) -> Bool {
         if let x = a.fingerprint, let y = b.fingerprint {
-            return x.changedFraction(from: y) > PixelFingerprint.stillThreshold
+            return y.changed(from: x)
         }
         return a.textFingerprint != b.textFingerprint
     }

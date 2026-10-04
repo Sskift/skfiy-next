@@ -311,6 +311,64 @@ final class DirectLockedUse {
         return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
     }
 
+    // MARK: verification support
+
+    /// The captured window an action will go to, and the recognized text at
+    /// its x/y (what a click there is about), without sending anything.
+    func actionTarget(_ args: Arguments, tool: String) -> (pid: pid_t, window: CGWindowID, signature: String, label: String?)? {
+        guard let app = try? application(args), let state = states[app.processIdentifier], valid(state) else { return nil }
+        var signature = "\(tool)|window \(state.window.id)"
+        var label: String?
+        if tool == "press_key" {
+            signature += "|\(args.string("key")?.lowercased() ?? "")"
+        } else if tool == "type_text" {
+            signature += "|\(args.string("text") ?? "")"
+        } else if let at = try? point(args, tool == "drag" ? "from_x" : "x", tool == "drag" ? "from_y" : "y", state: state) {
+            // Within about a button's width, the same target.
+            signature += "|\(Int((at.x / 12).rounded())),\(Int((at.y / 12).rounded()))"
+            let nearest = state.recognized.min { a, b in
+                hypot(a.frame.midX - at.x, a.frame.midY - at.y) < hypot(b.frame.midX - at.x, b.frame.midY - at.y)
+            }
+            if let nearest, nearest.frame.insetBy(dx: -12, dy: -10).contains(at) { label = nearest.text }
+        }
+        return (app.processIdentifier, state.window.id, signature, label)
+    }
+
+    /// One look at the app for verifying an action: its windows, and the
+    /// target window's pixels and (when asked) recognized text. OCR is
+    /// repeated only when the pixels changed since `previous`.
+    func verificationObservation(pid: pid_t, window: CGWindowID, wantText: Bool,
+                                 previous: (PixelFingerprint, String)?) async -> (VerifyObservation, (PixelFingerprint, String)?) {
+        var observation = VerifyObservation(text: "", windows: [:], targetPresent: false)
+        if ended { observation.interruption = "direct locked use ended"; return (observation, previous) }
+        switch Self.lockState {
+        case .unlocked: observation.interruption = "macOS was unlocked, so the locked screenshot no longer applies"; return (observation, previous)
+        case .unavailable: observation.interruption = "the lock state became unknown"; return (observation, previous)
+        case .locked: break
+        }
+        guard NSRunningApplication(processIdentifier: pid)?.isTerminated == false else {
+            observation.interruption = "the app quit"
+            return (observation, previous)
+        }
+        guard let windows = try? await directLockedWindows(pid: pid) else { return (observation, previous) }
+        observation.windows = Dictionary(windows.map { (String($0.id), $0.title) }, uniquingKeysWith: { a, _ in a })
+        guard let target = windows.first(where: { $0.id == window }) else { return (observation, previous) }
+        observation.targetPresent = true
+        guard let (image, geometry) = try? await captureDirectLockedImage(target, maxScale: wantText ? backingScale(for: target.frame) : 1),
+              let pixels = PixelFingerprint(image) else { return (observation, previous) }
+        observation.pixels = pixels
+        var cache = previous
+        if wantText {
+            if let previous, !pixels.changed(from: previous.0) {
+                observation.text = previous.1
+            } else if let lines = try? await TextRecognition.recognize(image, showing: geometry.rect) {
+                observation.text = TextRecognition.sorted(lines).map(\.text).joined(separator: "\n")
+                cache = (pixels, observation.text)
+            }
+        }
+        return (observation, cache)
+    }
+
     // MARK: zoom
 
     /// A part of the latest screenshot at the display's full resolution (or
@@ -443,7 +501,7 @@ final class DirectLockedUse {
                 var observation = WaitObservation(fingerprint: pixels)
                 if !text.isEmpty {
                     // Recognize again only when the pixels changed: controlled, not constant, OCR.
-                    if let lastPixels, let pixels, pixels.changedFraction(from: lastPixels) <= PixelFingerprint.stillThreshold, let lastText {
+                    if let lastPixels, let pixels, !pixels.changed(from: lastPixels), let lastText {
                         observation.text = lastText
                     } else {
                         let lines = try await TextRecognition.recognize(image, showing: geometry.rect)
@@ -604,6 +662,17 @@ final class DirectLockedUse {
         try check(generation: state.generation)
         await Input.pause(settle)
         try check(generation: state.generation)
+        // The input may close the window it went to (a dialog's Done): then
+        // show what is left rather than failing an action that happened.
+        if let current = try? await directLockedWindows(pid: pid), !current.contains(where: { $0.id == state.window.id }) {
+            var rest = args.values
+            rest["window"] = nil
+            guard !current.isEmpty else {
+                states[pid] = nil
+                return ToolResult(text: message + " The window it went to closed, and the app has no other capturable window.")
+            }
+            return try await snapshot(Arguments(rest), message: message + " The window it went to closed; showing the app's remaining window.")
+        }
         return try await snapshot(args, selected: state.window, message: message)
     }
 }

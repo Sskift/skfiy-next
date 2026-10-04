@@ -73,7 +73,8 @@ final class Canvas: NSView {
         NSColor.black.setStroke()
         NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5)).stroke()
         ("CANVAS" as NSString).draw(at: NSPoint(x: 10, y: 8), withAttributes: [.font: NSFont.boldSystemFont(ofSize: 18)])
-        (tiny as NSString).draw(at: NSPoint(x: 10, y: 40), withAttributes: [.font: NSFont.systemFont(ofSize: 6), .foregroundColor: NSColor.darkGray])
+        (tiny.replacingOccurrences(of: "tiny", with: "tiny6") as NSString).draw(at: NSPoint(x: 10, y: 40), withAttributes: [.font: NSFont.systemFont(ofSize: 6), .foregroundColor: NSColor.darkGray])
+        (tiny.replacingOccurrences(of: "tiny", with: "tiny7") as NSString).draw(at: NSPoint(x: 10, y: 52), withAttributes: [.font: NSFont.systemFont(ofSize: 7), .foregroundColor: NSColor.darkGray])
         NSColor.systemRed.setFill()
         target.fill()
         if let phase {

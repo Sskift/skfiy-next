@@ -49,7 +49,7 @@ struct AppSession {
 @MainActor
 public final class ComputerUse {
     let directory = AppDirectory()
-    private var sessions: [pid_t: AppSession] = [:]
+    var sessions: [pid_t: AppSession] = [:]
     private var zoomCount = 0
     private var accessibilityEnabled: Set<pid_t> = []
     /// Apps the user allowed brief focus for, this session.
@@ -67,6 +67,8 @@ public final class ComputerUse {
     private let settleDelay: Double
     var lockedUse: LockedUseClient?
     let directLockedUse = DirectLockedUse()
+    /// Refuses repeating a risky action whose effect was not verified.
+    var repeatGuard = RepeatGuard()
     /// The last capability report per app, to say what changed since.
     var capabilityHistory: [String: CapabilityReport] = [:]
     /// Whether the client can ask the user (MCP elicitation); nil when unknown.
@@ -125,7 +127,7 @@ public final class ComputerUse {
         if let lockedUse, needsDesktop, !EmergencyStop.isStopped {
             do {
                 try await lockedUse.begin()
-                result = await perform(name, raw)
+                result = await act(name, raw)
                 // End also verifies relock. An interrupted/partial operation is
                 // an error, even when the app's action itself already succeeded.
                 try await lockedUse.end()
@@ -133,10 +135,15 @@ public final class ComputerUse {
                 result = ToolResult(text: "Locked use stopped: \(error). The last action may be partial; inspect the app after manual unlock before retrying.", isError: true)
             }
         } else {
-            result = await perform(name, raw)
+            result = await act(name, raw)
         }
+        if ["get_app_state", "wait_for"].contains(name), !result.isError { noteLooked(raw) }
         actionLog?.record(tool: name, arguments: raw, result: result, secret: lastInputWasSecret || browser.lastInputWasSecret)
         return result
+    }
+
+    private func act(_ name: String, _ raw: [String: Any]) async -> ToolResult {
+        Self.verifiableTools.contains(name) ? await performVerified(name, raw) : await perform(name, raw)
     }
 
     /// Where actions are recorded; nil records nothing.
@@ -149,7 +156,7 @@ public final class ComputerUse {
         "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for"
     ]
 
-    private func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
+    func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
         if DirectLockedUse.enabled, DirectLockedUse.lockState != .unlocked,
            name == "type_text" || name == "press_key" || name == "set_value" {
@@ -943,7 +950,7 @@ public final class ComputerUse {
 
     /// Recognizes the text shown in `region` of an app, from a capture at the
     /// display's full resolution (small text reads better).
-    private func recognizeText(pid: pid_t, region: CGRect) async throws -> [RecognizedText] {
+    func recognizeText(pid: pid_t, region: CGRect) async throws -> [RecognizedText] {
         let backing = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
         let shot = try await captureApp(pid: pid, rect: region, maxScale: Double(backing))
         guard let image = TextRecognition.decode(shot.data) else { return [] }
@@ -978,7 +985,7 @@ public final class ComputerUse {
         var text: String { (header.filter { !$0.isEmpty } + [""] + body).joined(separator: "\n") }
     }
 
-    private func buildSnapshot(app: NSRunningApplication, appElement: AXUIElement, windowQuery: String?) throws -> Snapshot {
+    func buildSnapshot(app: NSRunningApplication, appElement: AXUIElement, windowQuery: String?) throws -> Snapshot {
         let pid = app.processIdentifier
         let builder = AXTreeBuilder()
         let values = appElement.multipleValues([
@@ -1896,7 +1903,7 @@ public final class ComputerUse {
     }
 
     /// The app's own element under a screen point; works for covered windows.
-    private func hitTest(pid: pid_t, at point: CGPoint) -> AXUIElement? {
+    func hitTest(pid: pid_t, at point: CGPoint) -> AXUIElement? {
         var element: AXUIElement?
         let status = AXUIElementCopyElementAtPosition(
             AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &element
@@ -2187,7 +2194,7 @@ public final class ComputerUse {
         return disabled
     }
 
-    private func screenPoint(_ args: Arguments, _ xKey: String, _ yKey: String, session: AppSession) throws -> CGPoint {
+    func screenPoint(_ args: Arguments, _ xKey: String, _ yKey: String, session: AppSession) throws -> CGPoint {
         if let zoomID = args.string("zoom_id")?.trimmingCharacters(in: .whitespaces), !zoomID.isEmpty {
             guard let mapping = session.zoom, mapping.id == zoomID else {
                 throw ToolError("zoom_id \(zoomID) is not the latest zoom of this app. Zoom again, or use x/y of the latest screenshot.")
@@ -2227,7 +2234,7 @@ public final class ComputerUse {
         return CGPoint(x: area.midX, y: area.midY)
     }
 
-    private func describe(_ element: AXUIElement) -> String {
+    func describe(_ element: AXUIElement) -> String {
         let values = element.multipleValues([kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute])
         let role = values[kAXRoleAttribute].flatMap(axString).map { $0.hasPrefix("AX") ? String($0.dropFirst(2)) : $0 } ?? "element"
         let label = nonEmpty(values[kAXTitleAttribute].flatMap(axString)) ?? nonEmpty(values[kAXDescriptionAttribute].flatMap(axString))

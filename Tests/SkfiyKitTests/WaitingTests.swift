@@ -109,6 +109,22 @@ struct WaitingTests {
         #expect(seconds < 2)
     }
 
+    @Test func smallTextChangeCountsButACaretDoesNot() {
+        let width = 640, height = 480
+        let base = PixelFingerprint(width: width, height: height, pixels: [UInt8](repeating: 230, count: width * height))
+        var label = base.pixels
+        // "ready" becoming "apply 1" in a small status label: a few dozen pixels.
+        for y in 20..<27 { for x in 40..<52 where (x + y) % 3 == 0 { label[y * width + x] = 20 } }
+        #expect(PixelFingerprint(width: width, height: height, pixels: label).changed(from: base))
+        var caret = base.pixels
+        for y in 100..<118 { caret[y * width + 300] = 0; caret[y * width + 301] = 60 }
+        #expect(!PixelFingerprint(width: width, height: height, pixels: caret).changed(from: base))
+        var both = caret
+        for y in 20..<27 { for x in 40..<52 { both[y * width + x] = 20 } }
+        #expect(PixelFingerprint(width: width, height: height, pixels: both).changed(from: base))
+        #expect(!base.changed(from: base))
+    }
+
     @Test func fingerprintsOfImages() throws {
         func image(_ color: CGFloat, square: CGRect? = nil) throws -> CGImage {
             let context = try #require(CGContext(data: nil, width: 200, height: 100, bitsPerComponent: 8, bytesPerRow: 0,

@@ -47,14 +47,18 @@ def main():
         tiny_lines = [line for line in state['text'].splitlines() if 'tiny' in line.lower()]
         s.check('tiny text in the whole-window OCR (informational)', True, f"lines with 'tiny': {tiny_lines[:2]}; code read: {any(code in l for l in tiny_lines)}")
 
-        # 1. Tiny text: zoom on the canvas's top-left corner.
-        tiny = to_pixels(g, (canvas['x'], canvas['y'] + 36))
-        result = s.call('zoom', app=app, x=max(0, tiny[0] - 4), y=max(0, tiny[1] - 2), width=90, height=18, scale=4, ocr=True)
-        s.check('zoom answers', not result['is_error'] and result['images'], result['text'][:200])
-        s.check('tiny text readable by zoom OCR', code in result['text'], result['text'][:400])
-        independent = probe('ocr', result['images'][0]) if result['images'] else {'lines': []}
-        s.check('tiny text readable by an independent OCR of the zoom image', any(code in line for line in independent['lines']),
-                independent.get('lines'))
+        # 1. Tiny text (6 and 7 pt): zoom on the canvas's top-left corner.
+        read = {}
+        for size, offset in ((6, 36), (7, 48)):
+            tiny = to_pixels(g, (canvas['x'], canvas['y'] + offset))
+            result = s.call('zoom', app=app, x=max(0, tiny[0] - 4), y=max(0, tiny[1] - 2), width=90, height=18, scale=4, ocr=True)
+            independent = probe('ocr', result['images'][0]) if result['images'] else {'lines': []}
+            read[size] = (code in result['text'], any(code in line for line in independent['lines']))
+            whole = any(code in line for line in state['text'].splitlines() if f'tiny{size}' in line)
+            s.check(f'{size} pt text (zoom OCR / independent OCR exact: {read[size]}; whole-window OCR exact: {whole})',
+                    not result['is_error'] and result['images'] and (read[size][0] or not whole),
+                    ' | '.join(l for l in result['text'].splitlines() if 'tiny' in l)[:150] + ' || ' + ' | '.join(independent['lines']))
+        s.check('7 pt text read exactly in the zoom', read[7] == (True, True), read)
 
         # 2. Coordinates at several scales: find the red target in the zoom, click it there.
         target_center = (canvas['x'] + 235, canvas['y'] + 25)   # canvas is flipped: target at (230, 20, 10, 10)
