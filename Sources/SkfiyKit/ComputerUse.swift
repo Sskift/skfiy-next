@@ -105,6 +105,7 @@ public final class ComputerUse {
         lockedUse?.disconnect()
         _ = directLockedUse.status(end: true)
         sessions.removeAll()
+        stateHistory.removeAll()
         accessibilityEnabled.removeAll()
         focusApproved.removeAll()
     }
@@ -127,6 +128,7 @@ public final class ComputerUse {
         if DirectLockedUse.enabled {
             if directLockedUse.observeTransition() {
                 sessions.removeAll()
+                stateHistory.removeAll()
                 accessibilityEnabled.removeAll()
                 focusApproved.removeAll()
             }
@@ -507,8 +509,13 @@ public final class ComputerUse {
             now: { Date().timeIntervalSince(started) },
             sleep: { seconds in
                 if let events {
+                    // An app announcing changes all the time (a progress bar)
+                    // is still read no more often than polling would.
+                    let began = Date()
                     await events.wait(upTo: seconds)
                     try Task.checkCancellation()
+                    let spacing = min(0.25, seconds) - Date().timeIntervalSince(began)
+                    if spacing > 0 { try await Task.sleep(nanoseconds: UInt64(spacing * 1_000_000_000)) }
                 } else {
                     try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                 }

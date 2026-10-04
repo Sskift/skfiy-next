@@ -29,8 +29,6 @@ def main():
     log = ROOT / 'eval/results/unlocked-runs.jsonl'
     snapshot = Path('/tmp/skfiy-compat/bin/skfiy-unlocked-run')
     snapshot.parent.mkdir(parents=True, exist_ok=True)
-    snapshot.unlink(missing_ok=True)
-    shutil.copy2(args.binary, snapshot)
     suites = [line.strip() for line in (ROOT / 'scripts/unlocked_suites.txt').read_text().splitlines()
               if line.strip() and not line.startswith('#')]
     print(f'{len(suites)} suite(s); waiting for an unlocked, idle Mac', flush=True)
@@ -41,6 +39,9 @@ def main():
                 with one_at_a_time():
                     state = session()
                     if state['known'] and not state['locked'] and state['idleSeconds'] >= args.idle:
+                        # The binary as built now, not as it was when this runner started.
+                        snapshot.unlink(missing_ok=True)
+                        shutil.copy2(args.binary, snapshot)
                         started = time.time()
                         completed = subprocess.run(command.replace('{bin}', str(snapshot)), shell=True, cwd=ROOT,
                                                    capture_output=True, text=True, timeout=1800)
