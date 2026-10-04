@@ -10,6 +10,7 @@ window, a newer screenshot, or (while locked) a screenshot older than 30 s
 make zoom and zoom coordinates refuse, without sending anything.
 """
 import json
+import random
 import re
 import subprocess
 import sys
@@ -34,11 +35,19 @@ def to_pixels(g, point):
     return ((point[0] - g['x']) * g['sx'], (point[1] - g['y']) * g['sy'])
 
 
+def readable_code(length):
+    """A random marker without the characters text recognition commonly
+    confuses at small sizes (0/O, 1/l/I/f, c/o/e, 5/S, 8/B, 6/b, 2/Z, 9/g), so a
+    misread tells about readability, not about which pair the nonce drew."""
+    return ''.join(random.SystemRandom().choice('adhkmnprtwxy347') for _ in range(length))
+
+
 def main():
     main_binary()
     with Session('zoom') as s:
         app = s.app
-        code = s.nonce[:6]
+        code = readable_code(6)
+        s.fixture.command('tiny', code=code)
         state = s.call('get_app_state', app=app, ocr=True)
         g = geometry(state['text'])
         fixture = s.fixture.state()
@@ -131,7 +140,7 @@ def chrome(s):
     browser = pids[0]
     tabs = s.call('browser_tabs', browser=browser)
     front = re.search(r'tab (\d+) \[(?:front tab of its window|shown)\]', tabs['text'])
-    run = f'{s.nonce[:8]}'
+    run = readable_code(8)
     s.call('browser_open', browser=browser, tab_id=int(front[1]), url=f'http://127.0.0.1:{PORT}/compat.html?run={run}')
     app = 'Google Chrome for Testing'
     state = s.call('get_app_state', app=app, ocr=True)

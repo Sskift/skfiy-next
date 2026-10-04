@@ -62,6 +62,7 @@
 - 真实应用：Chrome for Testing 中的测试页（锁屏）。先放大一大块定位，再对小字所在行 4 倍放大：9 px 的随机十六进制串 2/2 次被准确读出（整窗 OCR 1/2 次），8 px 1/2 次，7 px 0/2 次（差 1 个字符）——7 px 在 Retina 上约 14 个设备像素，已到显示器精度的边界，放大不增加细节。放大图中文字换算回截图的位置与整窗 OCR 的位置相差 ≤ 4 px。
 - 限制：Chromium 窗口在锁屏时不接受指针事件（见兼容表），所以真实应用只验证了读取与坐标换算，按放大图坐标点击在测试应用中验证；解锁状态的 `zoom` 实测待用户解锁后补跑。
 
+- 2026-10-05 03:18 补充：最终版本的全套锁屏复测中，小字标记恰好抽到 “dadcd00d”“bedb0a”“f3xytaya” 这类字符，独立 OCR 与 skfiy 同样读错（0 读成 O、c 读成 o、f 读成 1），测的成了运气而不是可读性。测试标记改为只用识别时不易混淆的字符（adhkmnprtwxy347），之后测试应用 27/27、Chrome 9/9 连续两轮通过。
 ## 6. 操作结果验证 `expect`
 
 - `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag`、`perform_secondary_action`、`select_text` 新增可选参数 `expect`：`text`（出现）、`text_gone`（消失）、`value_changes` / `value`（元素或焦点字段的值，需辅助功能，锁屏时直接拒绝且不发送）、`window_closed`、`window_opened`、`changed`，可设 `timeout`（默认 5 s）。
