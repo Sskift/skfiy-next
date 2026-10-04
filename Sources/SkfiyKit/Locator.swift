@@ -208,6 +208,33 @@ extension Locator {
         }.min { cost($0.frame) < cost($1.frame) }?.label
     }
 
+    /// Recognized text sometimes comes back in pieces ("item:" and "apple"):
+    /// neighbouring pieces on one row are offered joined as well, up to three.
+    static func joiningRows(_ pieces: [LocatorCandidate]) -> [LocatorCandidate] {
+        let text = pieces.filter { !$0.roleKnown }
+        var rows: [[LocatorCandidate]] = []
+        for piece in text.sorted(by: { $0.frame.midY < $1.frame.midY }) {
+            if let first = rows.last?.first, abs(piece.frame.midY - first.frame.midY) <= first.frame.height / 2 {
+                rows[rows.count - 1].append(piece)
+            } else {
+                rows.append([piece])
+            }
+        }
+        var joined: [LocatorCandidate] = []
+        for row in rows.map({ $0.sorted { $0.frame.minX < $1.frame.minX } }) where row.count > 1 {
+            for start in row.indices {
+                var run = [row[start]]
+                for next in row[(start + 1)...] {
+                    guard run.count < 3, next.frame.minX - run.last!.frame.maxX <= 2 * max(next.frame.height, run.last!.frame.height) else { break }
+                    run.append(next)
+                    joined.append(LocatorCandidate(label: run.map(\.label).joined(separator: " "), role: "text",
+                                                   frame: run.dropFirst().reduce(run[0].frame) { $0.union($1.frame) }, roleKnown: false))
+                }
+            }
+        }
+        return pieces + joined
+    }
+
     /// The candidates this locator describes, best first. `bounds` is the
     /// window (or viewport) the areas refer to; `pixelArea` converts a
     /// screenshot-pixel region into the candidates' space.

@@ -9,3 +9,5 @@ python3 scripts/test_windows.py {bin} --textedit
 python3 scripts/experiment_locked_keyboard.py --trials 12
 python3 scripts/test_downloads.py {bin}
 python3 scripts/test_locate.py {bin} --textedit --chrome
+python3 scripts/bench_reads.py {bin} --rounds 2
+python3 scripts/bench_reads.py {bin} --rounds 2 --textedit

@@ -115,7 +115,7 @@ extension ComputerUse {
             }
         }
         return LocateView(window: "\(quote(title, limit: 80))" + (windowID(of: window).map { " (id \($0))" } ?? ""), bounds: bounds,
-                          items: items, geometry: geometry, recognized: recognized)
+                          items: Self.joiningText(items, pixel: pixel), geometry: geometry, recognized: recognized)
     }
 
     private func requireAccessibilityForLocate() throws {
@@ -125,6 +125,14 @@ extension ComputerUse {
         guard !isScreenLocked() else {
             throw ToolError("The screen is locked, so app windows cannot be read. Try again after it is unlocked.")
         }
+    }
+
+    /// Recognized text, plus neighbouring pieces on a row joined.
+    static func joiningText(_ items: [Located], pixel: (CGRect) -> CGPoint?) -> [Located] {
+        let joined = Locator.joiningRows(items.filter { !$0.candidate.roleKnown }.map(\.candidate)).filter { candidate in
+            !items.contains { $0.candidate == candidate }
+        }
+        return items + joined.map { Located(candidate: $0, element: nil, pixel: pixel($0.frame)) }
     }
 
     // MARK: - Matching

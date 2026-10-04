@@ -85,7 +85,8 @@ enum ToolSchemas {
                 "app": app,
                 "window": ["type": "string", "description": "Optional window id (as shown in the state) or title (or part of it) to inspect instead of the focused window; it is not raised. Windows sharing a title need the id"],
                 "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"],
-                "ocr": ["type": "boolean", "description": "Also list the text recognized in the screenshot, with x/y to click it. On by default for windows that publish no accessibility (custom-drawn apps such as WeChat); pass true for text drawn in a canvas or image elsewhere"]
+                "ocr": ["type": "boolean", "description": "Also list the text recognized in the screenshot, with x/y to click it. On by default for windows that publish no accessibility (custom-drawn apps such as WeChat); pass true for text drawn in a canvas or image elsewhere"],
+                "since": ["type": "string", "description": "The State version of an earlier get_app_state or wait_for of this app (e.g. \"v12\"): return only what changed since — lines changed, added or removed, windows opened or closed — keeping that look's element indices; \"unchanged\" without a screenshot when nothing changed. Falls back to the full state when the version is unknown or most of the window changed"]
             ],
             required: ["app"],
             readOnly: true
@@ -272,7 +273,7 @@ enum ToolSchemas {
         ),
         tool(
             "wait_for",
-            "Wait, without sending any input, until a text appears in an app's window (its accessibility tree, including window titles, menus and field values; while macOS is locked, the text recognized in the window's screenshot), or disappears with gone: true; without a text, until the window has stopped changing for stable_for seconds (loading finished, an animation settled; while locked, judged from its pixels, optionally only inside region). Use it instead of calling get_app_state again and again. Returns the fresh state like get_app_state, or an error with the current state after timeout. Stops early, saying why, if the lock state changes, the window closes or the app quits; the client can cancel it.",
+            "Wait, without sending any input, until a text appears in an app's window (its accessibility tree, including window titles, menus and field values; while macOS is locked, the text recognized in the window's screenshot), or disappears with gone: true; without a text, until the window has stopped changing for stable_for seconds (loading finished, an animation settled; while locked, judged from its pixels, optionally only inside region). Use it instead of calling get_app_state again and again: unlocked it looks when the app announces a change (accessibility notifications) and once a second otherwise; locked it compares small screenshots, less often while nothing changes, and recognizes text only after the pixels changed. Returns the fresh state like get_app_state (only the changes with since), or an error with the current state after timeout. Stops early, saying why, if the lock state changes, the window closes or the app quits; the client can cancel it.",
             properties: [
                 "app": app,
                 "text": ["type": "string", "description": "Text to wait for, case-insensitive"],
@@ -281,7 +282,8 @@ enum ToolSchemas {
                 "timeout": ["type": "number", "description": "Seconds to wait at most (0.5-60). Defaults to 10"],
                 "stable_for": ["type": "number", "description": "Without text: how long the window must stay unchanged (0.3-10 s). Defaults to 1"],
                 "region": ["type": "array", "items": ["type": "number"], "description": "While locked: [x, y, width, height] in pixels of the latest screenshot; only this part is watched (ignore a clock or spinner elsewhere)"],
-                "ocr": ["type": "boolean", "description": "Also match text recognized in the screenshot. On by default for windows that publish no accessibility, and always while locked"]
+                "ocr": ["type": "boolean", "description": "Also match text recognized in the screenshot. On by default for windows that publish no accessibility, and always while locked"],
+                "since": ["type": "string", "description": "Return the state at the end as changes since this State version (as get_app_state since)"]
             ],
             required: ["app"],
             readOnly: true
@@ -456,7 +458,7 @@ enum ToolSchemas {
     ]
 
     static let instructions = """
-    Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_capabilities(app) when the app or the situation is new (locked, several windows, a browser) → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
+    Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_capabilities(app) when the app or the situation is new (locked, several windows, a browser) → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices. To look again at an app you already read, pass since: "<its State version>" to get only what changed (and nothing but "unchanged" when nothing did).
     - get_desktop_status diagnoses lock state without unlocking. The experimental guardian is available only when the user started mcp --locked-use and approved the local system prompt. Direct mode is separately enabled with SKFIY_LOCKED_USE=direct and keeps macOS locked. Never enable it yourself, operate loginwindow, type an unlock password, or retry a failed automatic unlock. On revocation or a partially completed action, ask for manual unlock and inspect state before retrying. run_in_front is unavailable under locked-use protection.
     - Prefer element_index over x/y: it is exact and survives window moves. When you know what a control is but the UI may have changed (or several look alike), pass target instead ({"name": "Save", "role": "button", "region": "bottom-right"}, within/near/below/right_of): it is resolved when the action runs, and when several match nothing is done and the candidates are listed. locate does the same without acting. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.

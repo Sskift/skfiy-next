@@ -56,6 +56,8 @@ final class DirectLockedUse {
     /// The window each app's latest screenshot showed, kept after the
     /// screenshot expires: locating looks there again.
     private var shownWindows: [pid_t: CGWindowID] = [:]
+    /// The last looks per app, with what was recognized, for since.
+    private var history: [pid_t: [(record: StateRecord, recognized: [RecognizedText])]] = [:]
     private var zoomCount = 0
     private var transitions = TransitionTracker()
     private var ended = false
@@ -73,6 +75,7 @@ final class DirectLockedUse {
                     self?.transitions.receivedNotification()
                     self?.generation &+= 1
                     self?.states.removeAll()
+                    self?.history.removeAll()
                 }
             })
         }
@@ -258,6 +261,12 @@ final class DirectLockedUse {
 
     private func capture(_ window: DirectLockedWindow, recognize: Bool) async throws -> Capture {
         let (hires, hiresGeometry) = try await captureDirectLockedImage(window, maxScale: backingScale(for: window.frame))
+        return try await prepare(hires, hiresGeometry, recognize: recognize)
+    }
+
+    /// The model's screenshot (and optionally the text) from a capture at
+    /// display resolution.
+    private func prepare(_ hires: CGImage, _ hiresGeometry: CaptureGeometry, recognize: Bool) async throws -> Capture {
         let scale = captureScale(for: hiresGeometry.rect.size, maxScale: 1)
         let width = max(1, Int((hiresGeometry.rect.width * scale).rounded()))
         let height = max(1, Int((hiresGeometry.rect.height * scale).rounded()))
@@ -295,42 +304,106 @@ final class DirectLockedUse {
         return first
     }
 
-    private func snapshot(_ args: Arguments, selected: DirectLockedWindow? = nil, message: String? = nil) async throws -> ToolResult {
+    /// A capture (at display resolution) and its text that were just taken
+    /// of the window, e.g. by the look that ended a wait.
+    private struct Fresh {
+        let hires: CGImage
+        let geometry: CaptureGeometry
+        let recognized: [RecognizedText]
+    }
+
+    private func snapshot(_ args: Arguments, selected: DirectLockedWindow? = nil, message: String? = nil, fresh: Fresh? = nil) async throws -> ToolResult {
         try check()
         let captureGeneration = generation
         let app = try application(args)
-        states[app.processIdentifier] = nil
+        let pid = app.processIdentifier
+        states[pid] = nil
         let windows = try await windows(of: app)
         let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let window = try choose(windows, query: query, selected: selected)
         let recognize = (args.values["ocr"] as? Bool) ?? true
-        let captured = try await capture(window, recognize: recognize)
+        let since = nonEmpty(args.string("since")?.trimmingCharacters(in: .whitespaces))
+        let base = since.flatMap { version in history[pid]?.last { $0.record.version == version } }
+        let reusing = fresh.flatMap { $0.geometry.rect == window.frame ? $0 : nil }
+        let captured: Capture
+        if let reusing {
+            captured = try await prepare(reusing.hires, reusing.geometry, recognize: false)
+        } else {
+            captured = try await capture(window, recognize: false)
+        }
         let shot = captured.shot
         try check(generation: captureGeneration)
         guard shot.geometry.rect == window.frame else { throw ToolError("The selected window changed before capture. Refresh get_app_state.") }
+        // The same window at the same place with the same pixels reads the
+        // same: the last recognition is reused instead of running again.
+        let windowKey = "\(window.id)@\(window.frame.minX),\(window.frame.minY),\(window.frame.width),\(window.frame.height)"
+        let fingerprint = PixelFingerprint(captured.hires, region: nil)
+        let comparable = base?.record.window == windowKey
+        let pixelsSame: Bool = {
+            guard comparable, let then = base?.record.fingerprint, let now = fingerprint else { return false }
+            return !now.changed(from: then)
+        }()
+        var recognized: [RecognizedText]?
+        if recognize {
+            if let reusing {
+                recognized = reusing.recognized
+            } else if pixelsSame, let reused = base?.recognized {
+                recognized = reused
+            } else {
+                recognized = TextRecognition.sorted(try await TextRecognition.recognizeBoth(captured.hires, showing: shot.geometry.rect))
+            }
+            try check(generation: captureGeneration)
+        }
         let state = State(app: app, executable: app.executableURL, launched: app.launchDate,
                           window: window, geometry: shot.geometry, captured: Date(), generation: captureGeneration,
-                          hires: captured.hires, recognized: captured.recognized ?? [])
+                          hires: captured.hires, recognized: recognized ?? [])
         if let problem = validationProblem(state) { throw ToolError("The target window changed while capturing it (\(problem)). Refresh get_app_state.") }
-        var lines = [message, "App: \(app.localizedName ?? "?") — \(app.bundleIdentifier ?? "") (pid \(app.processIdentifier))",
-                     "Direct locked use: macOS remains locked. This is a live window screenshot; use x/y, press_key and type_text. AX element indices and foreground actions are unavailable.",
-                     "Window: \(quote(window.title, limit: 100)) (id \(window.id))",
-                     "Screenshot: \(shot.geometry.pixelWidth)×\(shot.geometry.pixelHeight) px showing screen region x=\(window.frame.minX) y=\(window.frame.minY) w=\(window.frame.width) h=\(window.frame.height) pt. x/y arguments are pixels in this latest screenshot."].compactMap { $0 }
+        var header = [message, "App: \(app.localizedName ?? "?") — \(app.bundleIdentifier ?? "") (pid \(pid))",
+                      "Direct locked use: macOS remains locked. This is a live window screenshot; use x/y, press_key and type_text. AX element indices and foreground actions are unavailable.",
+                      "Window: \(quote(window.title, limit: 100)) (id \(window.id))"].compactMap { $0 }
+        let shotLine = "Screenshot: \(shot.geometry.pixelWidth)×\(shot.geometry.pixelHeight) px showing screen region x=\(window.frame.minX) y=\(window.frame.minY) w=\(window.frame.width) h=\(window.frame.height) pt. x/y arguments are pixels in this latest screenshot."
         if windows.count > 1 {
-            lines.append("Other windows (pass window title or id to get_app_state): " + windows.filter { $0.id != window.id }.map { "\($0.id): \($0.title)" }.joined(separator: "; "))
+            header.append("Other windows (pass window title or id to get_app_state): " + windows.filter { $0.id != window.id }.map { "\($0.id): \($0.title)" }.joined(separator: "; "))
         }
-        if let recognized = captured.recognized {
-            lines.append("Text recognized in the screenshot (use x/y):")
+        var textLines: [String] = []
+        if let recognized {
             for text in recognized.prefix(200) {
                 let middle = shot.geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY))
-                lines.append("  \(quote(text.text, limit: 100)) x=\(Int(middle.x.rounded())) y=\(Int(middle.y.rounded()))")
+                textLines.append("  \(quote(text.text, limit: 100)) x=\(Int(middle.x.rounded())) y=\(Int(middle.y.rounded()))")
             }
         }
         try check(generation: captureGeneration)
         guard valid(state) else { throw ToolError("The window changed while reading its screenshot. Refresh get_app_state.") }
-        states[app.processIdentifier] = state
-        shownWindows[app.processIdentifier] = window.id
-        return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
+        states[pid] = state
+        shownWindows[pid] = window.id
+        let version = StateVersions.next()
+        let windowTitles = Dictionary(windows.map { (String($0.id), $0.title) }, uniquingKeysWith: { first, _ in first })
+        history[pid] = Array(((history[pid] ?? []) + [(StateRecord(version: version, epoch: 0, window: windowKey, lines: textLines, textLines: textLines,
+                                                                     windows: windowTitles, fingerprint: fingerprint), recognized ?? [])]).suffix(StateRecord.kept))
+        header.append("State: \(version)" + (since.map { " (compared with \($0))" } ?? "") + ". Pass since: \"\(version)\" next time to get only what changed.")
+
+        let full = { (note: String?) -> ToolResult in
+            var lines = header + [shotLine] + (note.map { [$0] } ?? [])
+            if recognized != nil { lines += ["Text recognized in the screenshot (use x/y):"] + textLines }
+            return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
+        }
+        guard let since else { return full(nil) }
+        guard let base else {
+            return full("\(since) is not known for this window (only the last \(StateRecord.kept) looks are kept, and a lock change forgets them); the full state follows.")
+        }
+        guard comparable else { return full("Cannot compare with \(since): it showed another window, or this one moved or changed size; the full state follows.") }
+        let diff = StateDiff.compare(old: base.record.lines, new: textLines, oldWindows: base.record.windows, newWindows: windowTitles)
+        if pixelsSame, diff.isEmpty {
+            let lines = header + ["Unchanged since \(since): the same window at the same place with the same pixels (and windows), so no screenshot is attached; x/y of its screenshot still hold."]
+            return ToolResult(text: lines.joined(separator: "\n"))
+        }
+        if diff.isLarge(comparedTo: textLines.count) {
+            return full("Most of the window changed since \(since) (\(diff.summary)); the full state follows.")
+        }
+        let lines = header + [pixelsSame ? "The pixels are the same as in \(since); no screenshot is attached, and its x/y still hold." : shotLine,
+                              "Changes since \(since) in the recognized text: \(diff.summary)." + (pixelsSame ? "" : " x/y are pixels of the screenshot attached now; text not listed is unchanged.")]
+            + diff.render()
+        return ToolResult(text: lines.joined(separator: "\n"), image: pixelsSame ? nil : shot.data, imageMimeType: shot.mimeType)
     }
 
     // MARK: locating
@@ -360,8 +433,10 @@ final class DirectLockedUse {
             ComputerUse.Located(candidate: LocatorCandidate(label: text.text, role: "text", frame: text.frame, roleKnown: false), element: nil,
                                 pixel: state.geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY)))
         }
+        let geometry = state.geometry
         return (ComputerUse.LocateView(window: "\(quote(state.window.title, limit: 80)) (id \(state.window.id))", bounds: state.window.frame,
-                                       items: items, geometry: state.geometry, recognized: true, screenshot: shot), pid)
+                                       items: ComputerUse.joiningText(items) { geometry.toPixels(CGPoint(x: $0.midX, y: $0.midY)) },
+                                       geometry: geometry, recognized: true, screenshot: shot), pid)
     }
 
     // MARK: verification support
@@ -521,8 +596,19 @@ final class DirectLockedUse {
         }
         var lastPixels: PixelFingerprint?
         var lastText: String?
+        var lastFresh: Fresh?
         var engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
-        engine.interval = text.isEmpty ? 0.25 : 0.4
+        // Controlled screenshot differences: a small capture each look, more
+        // seldom while nothing changes, and text recognized (on a full
+        // resolution capture) only after the pixels changed.
+        // SKFIY_WAIT_EVENTS=0 keeps the earlier fixed pace, with every look
+        // at full resolution (for comparison).
+        let paced = ProcessInfo.processInfo.environment["SKFIY_WAIT_EVENTS"] != "0"
+        engine.interval = paced || text.isEmpty ? 0.25 : 0.4
+        // A text should be seen soon after it appears; stability is judged
+        // at the end anyway, so stable waits may slow down more.
+        engine.maxInterval = paced ? (text.isEmpty ? 1 : 0.6) : nil
+        var looks = 0, recognitions = 0
         let clock = ContinuousClock()
         let origin = clock.now
         let result = await engine.run(
@@ -537,13 +623,19 @@ final class DirectLockedUse {
                 if region != nil, now.frame != window.frame {
                     throw WaitStopped("the window moved or was resized, so the region no longer covers the same content.")
                 }
+                looks += 1
                 let image: CGImage, geometry: CaptureGeometry
                 do {
-                    (image, geometry) = try await captureDirectLockedImage(now, maxScale: text.isEmpty ? 1 : backingScale(for: now.frame))
+                    (image, geometry) = try await captureDirectLockedImage(now, maxScale: paced || text.isEmpty ? 1 : backingScale(for: now.frame))
                 } catch let error as ToolError {
-                    // Say what happened to the window rather than how the capture failed.
-                    let after = try? await directLockedWindows(pid: pid)
-                    if let after, !after.contains(where: { $0.id == window.id }) { throw WaitStopped("the window closed.") }
+                    // Say what happened to the window rather than how the capture
+                    // failed. A closed window stays listed for up to about a second.
+                    for attempt in 0..<6 {
+                        if attempt > 0 { try await Task.sleep(nanoseconds: 250_000_000) }
+                        if let after = try? await directLockedWindows(pid: pid), !after.contains(where: { $0.id == window.id }) {
+                            throw WaitStopped("the window closed.")
+                        }
+                    }
                     throw WaitStopped("the window could not be captured (\(error.description))")
                 }
                 let pixelRegion = region.map { rect -> CGRect in
@@ -557,7 +649,10 @@ final class DirectLockedUse {
                     if let lastPixels, let pixels, !pixels.changed(from: lastPixels), let lastText {
                         observation.text = lastText
                     } else {
-                        let lines = try await TextRecognition.recognizeBoth(image, showing: geometry.rect)
+                        recognitions += 1
+                        let full = paced ? (try? await captureDirectLockedImage(now, maxScale: backingScale(for: now.frame))) ?? (image, geometry) : (image, geometry)
+                        let lines = try await TextRecognition.recognizeBoth(full.0, showing: geometry.rect)
+                        if paced { lastFresh = Fresh(hires: full.0, geometry: full.1, recognized: TextRecognition.sorted(lines)) }
                         let inside = pixelRegion == nil ? lines : lines.filter { line in
                             region.map { _ in self.regionContains(line.frame, region: region!, geometry: previous!.geometry) } ?? true
                         }
@@ -569,12 +664,14 @@ final class DirectLockedUse {
                 return observation
             })
         if case .cancelled = result { throw CancellationError() }
-        let outcome = engine.describe(result)
+        let outcome = engine.describe(result) + " (\(looks) look\(looks == 1 ? "" : "s")" + (text.isEmpty ? "" : ", text recognized \(recognitions) time\(recognitions == 1 ? "" : "s")") + ")"
         if case .stopped = result {
             states[pid] = nil
             throw ToolError(outcome + " Call get_app_state again before acting.")
         }
-        var state = try await snapshot(args, selected: window, message: outcome)
+        // The look that found the text was just taken: it is the state now.
+        let fresh: Fresh? = { if case .met = result, !text.isEmpty { return lastFresh } else { return nil } }()
+        var state = try await snapshot(args, selected: window, message: outcome, fresh: fresh)
         if case .timedOut = result { state.isError = true }
         return state
     }

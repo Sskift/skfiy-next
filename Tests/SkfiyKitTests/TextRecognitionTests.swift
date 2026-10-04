@@ -47,4 +47,23 @@ struct TextRecognitionTests {
         #expect(merged.map(\.text) == ["twin.txt", "Alpha line 001"])
         #expect(TextRecognition.merged([], with: [line]).map(\.text) == ["Alpha line 001"])
     }
+
+    @Test func aFullerLineReplacesFragments() {
+        // At full resolution the glued word was dropped; at 1x the line reads whole.
+        let fragments = [RecognizedText(text: "line", frame: CGRect(x: 60, y: 30, width: 28, height: 13)),
+                         RecognizedText(text: "Ø01", frame: CGRect(x: 92, y: 30, width: 22, height: 13))]
+        let whole = RecognizedText(text: "MARK07AC5Bench line 001", frame: CGRect(x: 8, y: 30, width: 108, height: 13))
+        let next = RecognizedText(text: "Bench line 002", frame: CGRect(x: 8, y: 44, width: 100, height: 13))
+        #expect(TextRecognition.merged(fragments + [next], with: [whole]).map(\.text) == ["Bench line 002", "MARK07AC5Bench line 001"])
+        // The same text with a stray mark is not "more".
+        let title = RecognizedText(text: "twin.txt", frame: CGRect(x: 100, y: 5, width: 60, height: 14))
+        #expect(TextRecognition.merged([title], with: [RecognizedText(text: "twin.txt —", frame: title.frame)]).map(\.text) == ["twin.txt"])
+        #expect(TextMatch.contains("MARKØD65EBench line 001", "MARK0D65E"))
+        // Fragments with a word missing between them.
+        let gappy = [RecognizedText(text: "Bench", frame: CGRect(x: 8, y: 60, width: 36, height: 13)),
+                     RecognizedText(text: "002", frame: CGRect(x: 90, y: 60, width: 22, height: 13))]
+        let line = RecognizedText(text: "Bench line 002", frame: CGRect(x: 8, y: 60, width: 104, height: 13))
+        #expect(TextRecognition.merged(gappy, with: [line]).map(\.text) == ["Bench line 002"])
+        #expect(TextRecognition.isSubsequence("bench002", of: "benchline002") && !TextRecognition.isSubsequence("bench003", of: "benchline002"))
+    }
 }

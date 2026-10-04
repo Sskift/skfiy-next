@@ -70,8 +70,11 @@ struct PixelFingerprint: Equatable, Sendable {
 /// Text matching that survives OCR's habits: case, line breaks, and words
 /// split or joined by spacing.
 enum TextMatch {
+    /// Lowercased with runs of whitespace as one space. A slashed zero
+    /// (monospaced fonts such as Menlo) is read as "Ø" by text recognition:
+    /// it counts as 0.
     static func normalized(_ text: String) -> String {
-        text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        text.lowercased().replacingOccurrences(of: "ø", with: "0").split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     static func contains(_ haystack: String, _ needle: String) -> Bool {
@@ -80,7 +83,20 @@ enum TextMatch {
         let text = normalized(haystack)
         if text.contains(wanted) { return true }
         let squeeze = { (value: String) in value.filter { !$0.isWhitespace } }
-        return squeeze(text).contains(squeeze(wanted))
+        if squeeze(text).contains(squeeze(wanted)) { return true }
+        // Text recognition confuses 0 with O and 1 with l or I, especially in
+        // monospaced fonts: "MARK7DC0E" comes back as "MARK7DCOE".
+        return confusable(squeeze(text)).contains(confusable(squeeze(wanted)))
+    }
+
+    private static func confusable(_ text: String) -> String {
+        String(text.map { character -> Character in
+            switch character {
+            case "o": return "0"
+            case "l", "i", "|", "!": return "1"
+            default: return character
+            }
+        })
     }
 }
 
@@ -122,6 +138,10 @@ struct WaitEngine {
     var stableFor: Double = 1
     var timeout: Double
     var interval: Double = 0.3
+    /// When set, looks back off while nothing changes (×1.5 per look, up to
+    /// this) and return to `interval` after a change: fewer captures while
+    /// the window is idle.
+    var maxInterval: Double?
 
     func run(
         now: () -> Double,
@@ -130,8 +150,10 @@ struct WaitEngine {
         observe: () async throws -> WaitObservation
     ) async -> WaitResult {
         let started = now()
-        var last: WaitObservation?
+        var previous: WaitObservation?
         var unchangedSince = started
+        var delay = interval
+        let waitingForText = !(text ?? "").isEmpty
         while true {
             let elapsed = now() - started
             do {
@@ -139,20 +161,28 @@ struct WaitEngine {
                 try check()
                 let current = try await observe()
                 try check()
-                if let text, !text.isEmpty {
+                let moved = previous.map { changed($0, current) } ?? true
+                if moved {
+                    unchangedSince = now()
+                    delay = interval
+                } else if let maxInterval {
+                    delay = min(maxInterval, delay * 1.5)
+                }
+                previous = current
+                if waitingForText, let text {
                     if let seen = current.text, TextMatch.contains(seen, text) != gone {
                         return .met(seconds: now() - started)
                     }
-                } else {
-                    if let last, !changed(last, current) {
-                        if now() - unchangedSince >= stableFor { return .met(seconds: now() - started) }
-                    } else {
-                        unchangedSince = now()
-                    }
-                    last = current
+                } else if !moved, now() - unchangedSince >= stableFor {
+                    return .met(seconds: now() - started)
                 }
                 if now() - started >= timeout { return .timedOut(seconds: now() - started) }
-                try await sleep(interval)
+                // Look again when it can matter: no later than when the window
+                // would have been stable long enough, or the time is up.
+                var wait = delay
+                if !waitingForText { wait = min(wait, max(0.05, stableFor - (now() - unchangedSince))) }
+                wait = min(wait, max(0.05, timeout - (now() - started)))
+                try await sleep(wait)
             } catch let stop as WaitStopped {
                 return .stopped(seconds: now() - started, reason: stop.description)
             } catch is CancellationError {

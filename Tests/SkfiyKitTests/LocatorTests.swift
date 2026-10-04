@@ -155,4 +155,18 @@ struct LocatorTests {
         #expect(try locator(["name": "Save", "region": "bottom"]).matches(scrolledAway, bounds: window).isEmpty)
         #expect(try locator(["name": "Save"]).matches(scrolledAway, bounds: window).count == 1)
     }
+
+    @Test func piecesOfALineAreAlsoTriedJoined() throws {
+        // Recognition split "item: apple" into two pieces on one row.
+        let pieces = [text("item:", 40, 100, 34), text("apple", 80, 100, 36), text("item: banana", 40, 116, 80), text("Far away", 400, 100, 60)]
+        let all = Locator.joiningRows(pieces)
+        #expect(all.map(\.label).contains("item: apple"))
+        #expect(!all.map(\.label).contains("apple Far away"))
+        let apple = try locator(["name": "item: apple"])
+        let match = try #require(apple.unique(apple.matches(all, bounds: window)))
+        #expect(match.candidate.frame == pieces[0].frame.union(pieces[1].frame))
+        // A single word still matches its own piece exactly.
+        let word = try locator(["name": "apple"])
+        #expect(word.unique(word.matches(all, bounds: window))?.candidate.label == "apple")
+    }
 }

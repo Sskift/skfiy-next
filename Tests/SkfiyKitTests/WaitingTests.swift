@@ -43,6 +43,9 @@ struct WaitingTests {
         #expect(TextMatch.contains("TextEdit line 010\n6a93 44d055", "6a9344d055"))
         #expect(TextMatch.contains("SavedAll", "saved all"))
         #expect(!TextMatch.contains("Saved", "unsaved"))
+        #expect(TextMatch.contains("MARK7DCOEBench line 001", "MARK7DC0E"))
+        #expect(TextMatch.contains("Total: l0", "total: 10"))
+        #expect(!TextMatch.contains("Total: 18", "total: 10"))
     }
 
     @Test func stableAfterAnimationIgnoringACaret() async {

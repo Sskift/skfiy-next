@@ -113,10 +113,18 @@ public struct TreeRenderer {
         lines.count >= maxLines || characters >= maxCharacters
     }
 
+    /// Chooses the printed index of a ref, to keep the indices of an earlier
+    /// snapshot of the same window; nil numbers elements in printing order.
+    public var allocate: ((Int) -> Int)?
+    /// (printed index, ref) in printing order, whichever way indices were chosen.
+    public private(set) var printed: [(index: Int, ref: Int)] = []
+
     /// Assigns an index to `ref` without printing a tree line.
     public mutating func register(_ ref: Int) -> Int {
+        let index = allocate?(ref) ?? indexToRef.count
         indexToRef.append(ref)
-        return indexToRef.count - 1
+        printed.append((index, ref))
+        return index
     }
 
     public mutating func render(_ node: UINode, depth: Int = 0, clip: CGRect? = nil) {

@@ -32,12 +32,23 @@ struct AppSession {
     /// map to the screen only while it stays there.
     var windowID: CGWindowID?
     var windowFrame: CGRect?
+    /// Which numbering the indices belong to: a full get_app_state starts a
+    /// new one; get_app_state with since keeps it.
+    var epoch: Int
 
-    init(elements: [AXUIElement], geometry: CaptureGeometry?, window: AXUIElement?) {
+    private static var epochs = 0
+
+    init(elements: [AXUIElement], geometry: CaptureGeometry?, window: AXUIElement?, epoch: Int? = nil) {
         self.elements = elements
         self.geometry = geometry
         self.window = window
         captured = geometry == nil ? nil : Date()
+        if let epoch {
+            self.epoch = epoch
+        } else {
+            Self.epochs += 1
+            self.epoch = Self.epochs
+        }
     }
 
     func element(_ index: Int) throws -> AXUIElement {
@@ -77,6 +88,8 @@ public final class ComputerUse {
     var capabilityHistory: [String: CapabilityReport] = [:]
     /// Whether the client can ask the user (MCP elicitation); nil when unknown.
     public var clientCanAsk: (() -> Bool)?
+    /// The last few looks per app, for get_app_state since.
+    var stateHistory: [pid_t: [StateRecord]] = [:]
 
     public func enableLockedUse() async throws {
         guard !DirectLockedUse.enabled else {
@@ -478,11 +491,24 @@ public final class ComputerUse {
         await enableAccessibility(app, appElement)
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
         let name = app.localizedName ?? query
-        let engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
+        var engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
+        // Look when the app announces a change, and once a second otherwise
+        // (not every change is announced). SKFIY_WAIT_EVENTS=0 polls instead.
+        let events = ProcessInfo.processInfo.environment["SKFIY_WAIT_EVENTS"] == "0" ? nil : AXChangeEvents(pid: app.processIdentifier)
+        defer { events?.stop() }
+        if events != nil { engine.interval = 1 }
+        var looks = 0
         let started = Date()
         let result = await engine.run(
             now: { Date().timeIntervalSince(started) },
-            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+            sleep: { seconds in
+                if let events {
+                    await events.wait(upTo: seconds)
+                    try Task.checkCancellation()
+                } else {
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                }
+            },
             check: {
                 if EmergencyStop.isStopped { throw WaitStopped("emergency stop is on.") }
                 // While locked, accessibility answers for the lock screen, not the app.
@@ -490,6 +516,7 @@ public final class ComputerUse {
                 if app.isTerminated { throw WaitStopped("\(name) quit.") }
             },
             observe: {
+                looks += 1
                 // A window that is not there (yet) proves nothing either way.
                 guard let snapshot = try? self.buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil) else {
                     return WaitObservation(text: nil, textFingerprint: UUID().uuidString)
@@ -504,7 +531,8 @@ public final class ComputerUse {
             })
         if case .cancelled = result { throw CancellationError() }
         if app.isTerminated { sessions[app.processIdentifier] = nil }
-        let outcome = engine.describe(result)
+        let outcome = engine.describe(result) + " (\(looks) look\(looks == 1 ? "" : "s")"
+            + (events.map { ", woken by \($0.received) accessibility notification\($0.received == 1 ? "" : "s")" } ?? ", polling") + ")"
         if case .stopped = result { throw ToolError(outcome) }
         var state = try await getAppState(args)
         state.text = outcome + "\n" + state.text
@@ -926,10 +954,20 @@ public final class ComputerUse {
         AXUIElementSetMessagingTimeout(appElement, 2)
         await enableAccessibility(app, appElement)
 
+        let since = nonEmpty(args.string("since")?.trimmingCharacters(in: .whitespaces))
+        if since != nil, args.string("find")?.trimmingCharacters(in: .whitespaces).isEmpty == false {
+            throw ToolError("since and find cannot be combined: since lists what changed in the whole window.")
+        }
+        // A comparison keeps the numbering of the look it compares with, so
+        // elements that stayed keep their indices.
+        let base = since.flatMap { version in stateHistory[pid]?.last { $0.version == version } }
+        let keeping = base.flatMap { base in sessions[pid].flatMap { $0.epoch == base.epoch ? $0 : nil } }
+
         // Hidden or minimized windows are left alone: unhiding would restack
         // the user's windows. The tree still works; only pixels are missing.
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
-        var snapshot = try buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil)
+        var snapshot = try buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil,
+                                         keeping: keeping?.elements)
         var screenshot: Screenshot?
         var captureNote: String?
         let shownWindow = snapshot.chosenWindow ?? appElement.element(kAXFocusedWindowAttribute)
@@ -945,16 +983,30 @@ public final class ComputerUse {
         } else {
             captureNote = "No screenshot: the app has no visible window. Use the menu bar or a shortcut such as cmd+n to open one."
         }
-        snapshot.header.append(screenshot.map { screenshotLine($0.geometry) } ?? captureNote ?? "")
+        let windowKey = shownWindow.flatMap(windowID(of:)).map(String.init) ?? shownWindow?.string(kAXTitleAttribute) ?? ""
+        let comparable = base.map { $0.window == windowKey } ?? false
+        let fingerprint = screenshot.flatMap { TextRecognition.decode($0.data) }.flatMap { PixelFingerprint($0, region: nil) }
+        let pixelsSame: Bool = {
+            guard comparable, let then = base?.fingerprint, let now = fingerprint else { return false }
+            return !now.changed(from: then)
+        }()
+        let shotLine = screenshot.map { screenshotLine($0.geometry) } ?? captureNote ?? ""
         // Text only in the pixels: the whole window when it publishes no
-        // accessibility, or on request (canvas, images).
+        // accessibility, or on request (canvas, images). Unchanged pixels
+        // read the same: the last recognition is reused.
+        var recognizedLines: [String] = []
         if let screenshot, (args.values["ocr"] as? Bool) ?? snapshot.opaque {
-            do {
-                let lines = try await recognizeText(pid: pid, region: screenshot.geometry.rect)
-                snapshot.body.append(contentsOf: textLines(lines, geometry: screenshot.geometry))
-            } catch {
-                snapshot.body.append("(Text recognition failed: \(error.localizedDescription))")
+            if pixelsSame, let reused = base?.textLines, !reused.isEmpty {
+                recognizedLines = reused
+            } else {
+                do {
+                    let lines = try await recognizeText(pid: pid, region: screenshot.geometry.rect)
+                    recognizedLines = textLines(lines, geometry: screenshot.geometry)
+                } catch {
+                    recognizedLines = ["(Text recognition failed: \(error.localizedDescription))"]
+                }
             }
+            snapshot.body.append(contentsOf: recognizedLines)
         }
         if let query = args.string("find")?.trimmingCharacters(in: .whitespaces), !query.isEmpty {
             let total = snapshot.body.count
@@ -964,14 +1016,44 @@ public final class ComputerUse {
                 : "Showing the \(found.matches) line(s) matching \(quote(query, limit: 60)) with their containers, out of \(total); indices are those of the full tree.")
             snapshot.body = found.lines
         }
-        sessions[pid] = AppSession(elements: snapshot.elements, geometry: screenshot?.geometry, window: snapshot.chosenWindow)
+        sessions[pid] = AppSession(elements: snapshot.elements, geometry: screenshot?.geometry, window: snapshot.chosenWindow, epoch: keeping?.epoch)
         sessions[pid]?.windowID = shownWindow.flatMap(windowID(of:))
         sessions[pid]?.windowFrame = shownWindow?.frame
-        return ToolResult(
-            text: snapshot.text,
-            image: screenshot?.data,
-            imageMimeType: screenshot?.mimeType ?? "image/jpeg"
-        )
+        let version = StateVersions.next()
+        if args.string("find") == nil {
+            stateHistory[pid] = StateRecord.appending(StateRecord(version: version, epoch: sessions[pid]!.epoch, window: windowKey, lines: snapshot.body,
+                                                                  textLines: recognizedLines, windows: snapshot.windows, fingerprint: fingerprint), to: stateHistory[pid])
+        }
+        snapshot.header.append("State: \(version)" + (since == nil ? "" : " (compared with \(since!))") + ". Pass since: \"\(version)\" next time to get only what changed.")
+
+        let full = { (note: String?) -> ToolResult in
+            var snapshot = snapshot
+            snapshot.header.append(shotLine)
+            if let note { snapshot.header.append(note) }
+            return ToolResult(text: snapshot.text, image: screenshot?.data, imageMimeType: screenshot?.mimeType ?? "image/jpeg")
+        }
+        guard let since else { return full(nil) }
+        guard let base else {
+            return full("\(since) is not known for this app (only its last \(StateRecord.kept) looks are kept, and a lock change forgets them); the full state follows.")
+        }
+        guard comparable, keeping != nil else {
+            return full("Cannot compare with \(since): " + (comparable ? "a full get_app_state renumbered the elements since" : "it showed another window")
+                        + "; the full state follows.")
+        }
+        let diff = StateDiff.compare(old: base.lines, new: snapshot.body, oldWindows: base.windows, newWindows: snapshot.windows)
+        if diff.isEmpty, pixelsSame {
+            var header = snapshot.header
+            header.append("Unchanged since \(since): the tree, the windows and the pixels are the same, so no screenshot is attached. Element indices of \(since) still hold.")
+            return ToolResult(text: header.filter { !$0.isEmpty }.joined(separator: "\n"))
+        }
+        if diff.isLarge(comparedTo: snapshot.body.count) {
+            return full("Most of the window changed since \(since) (\(diff.summary)); the full state follows. Elements that stayed kept their indices.")
+        }
+        var header = snapshot.header
+        header.append(pixelsSame ? "The pixels are the same as in \(since); no screenshot is attached." : shotLine)
+        header.append("Changes since \(since): \(diff.summary). Lines not listed are unchanged, with the same indices; new elements got new indices.")
+        let text = (header.filter { !$0.isEmpty } + [""] + diff.render()).joined(separator: "\n")
+        return ToolResult(text: text, image: pixelsSame ? nil : screenshot?.data, imageMimeType: screenshot?.mimeType ?? "image/jpeg")
     }
 
     /// Recognizes the text shown in `region` of an app, from a capture at the
@@ -1006,12 +1088,14 @@ public final class ComputerUse {
         var elements: [AXUIElement]
         var focusedWindowFrame: CGRect?
         var chosenWindow: AXUIElement?
+        /// All of the app's windows: id (or title) -> title.
+        var windows: [String: String] = [:]
         /// The window publishes no accessibility elements.
         var opaque = false
         var text: String { (header.filter { !$0.isEmpty } + [""] + body).joined(separator: "\n") }
     }
 
-    func buildSnapshot(app: NSRunningApplication, appElement: AXUIElement, windowQuery: String?) throws -> Snapshot {
+    func buildSnapshot(app: NSRunningApplication, appElement: AXUIElement, windowQuery: String?, keeping: [AXUIElement]? = nil) throws -> Snapshot {
         let pid = app.processIdentifier
         let builder = AXTreeBuilder()
         let values = appElement.multipleValues([
@@ -1040,6 +1124,22 @@ public final class ComputerUse {
                 scroll = (bar.value(kAXValueAttribute) as? NSNumber)?.doubleValue
             }
             return NodeDetails(actions: element.actionNames(), settable: settable, verticalScroll: scroll)
+        }
+        // Keeping an earlier numbering: elements seen then keep their index,
+        // new ones are numbered after all of them.
+        if let keeping {
+            var known: [ElementKey: Int] = [:]
+            for (index, element) in keeping.enumerated() where known[ElementKey(element)] == nil {
+                known[ElementKey(element)] = index
+            }
+            var next = keeping.count
+            renderer.allocate = { ref in
+                let key = ElementKey(builder.elements[ref])
+                if let index = known[key] { return index }
+                known[key] = next
+                next += 1
+                return next - 1
+            }
         }
 
         var header = ["App: \(app.localizedName ?? "?") — \(app.bundleIdentifier ?? "no bundle id") (pid \(pid))"
@@ -1120,7 +1220,18 @@ public final class ComputerUse {
             renderer.appendLine("(Tree truncated. Elements deeper or further down are omitted; scroll or use the screenshot and x/y coordinates.)")
         }
 
-        let elements = renderer.indexToRef.map { builder.elements[$0] }
+        var elements = renderer.indexToRef.map { builder.elements[$0] }
+        if let keeping {
+            elements = keeping
+            for (index, ref) in renderer.printed {
+                if index < elements.count { elements[index] = builder.elements[ref] } else { elements.append(builder.elements[ref]) }
+            }
+        }
+        var windowTitles: [String: String] = [:]
+        for window in windows where window.string(kAXRoleAttribute) == kAXWindowRole {
+            let title = window.string(kAXTitleAttribute) ?? ""
+            windowTitles[windowID(of: window).map(String.init) ?? "title:" + title] = title
+        }
         if let window = focusedWindow {
             header.append("Window: \(quote(window.string(kAXTitleAttribute) ?? "", limit: 120))"
                 + (windowID(of: window).map { " (id \($0))" } ?? "")
@@ -1132,7 +1243,8 @@ public final class ComputerUse {
         if opaqueWindow {
             header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Its text is recognized from the screenshot below, with positions for x/y clicks; also use the menu bar and keyboard shortcuts.")
         }
-        return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow, opaque: opaqueWindow)
+        return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow,
+                        windows: windowTitles, opaque: opaqueWindow)
     }
 
     /// A window by id, by exact title, or by part of its title. Windows that
