@@ -118,17 +118,21 @@ extension BrowserBridge {
             exit(0)
         }
 
+        /// Listens on a temporary name and renames it into place, so the
+        /// socket never appears before it accepts: a client connecting
+        /// between bind and listen would be refused and take it for stale.
         private func listenSocket() -> Int32 {
-            guard var address = socketAddress(socketPath) else { return -1 }
+            let staging = socketPath + ".new"
+            guard var address = socketAddress(staging) else { return -1 }
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else { return -1 }
-            unlink(socketPath)
+            unlink(staging)
             let bound = withUnsafePointer(to: &address) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
             }
             guard bound == 0 else { close(fd); return -1 }
-            chmod(socketPath, 0o600)
-            guard listen(fd, 16) == 0 else { close(fd); return -1 }
+            chmod(staging, 0o600)
+            guard listen(fd, 16) == 0, rename(staging, socketPath) == 0 else { unlink(staging); close(fd); return -1 }
             return fd
         }
 
@@ -226,7 +230,8 @@ extension BrowserBridge {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard connected == 0 else {
-            if errno == ECONNREFUSED || errno == ENOENT { unlink(socketPath) }
+            // Stale only when its browser is gone; a live one may just be busy.
+            if errno == ECONNREFUSED || errno == ENOENT, !browserAlive(socketPath) { unlink(socketPath) }
             throw ToolError("The browser bridge at \(socketPath) is not running.")
         }
         let request: [String: Any] = ["id": 1, "method": method, "params": params]
@@ -240,6 +245,12 @@ extension BrowserBridge {
             throw ToolError("Browser: \(error)")
         }
         return response["result"] ?? NSNull()
+    }
+
+    /// Sockets are named after the browser's pid.
+    static func browserAlive(_ socketPath: String) -> Bool {
+        guard let pid = pid_t(URL(fileURLWithPath: socketPath).deletingPathExtension().lastPathComponent), pid > 1 else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
     }
 
     /// Live browsers with the extension connected; stale sockets are removed.
