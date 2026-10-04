@@ -23,6 +23,6 @@
 
 - 新增：`scripts/compat_baseline.py`（三种状态 × 六个用例 × 五项操作）、`scripts/run_when_locked.py` 与 `scripts/locked_suites.txt`（用户锁屏后自动运行锁屏套件）、`scripts/compat_server.py`（本地测试页与事件回报）、`scripts/fixtures/compat.html`、`scripts/fixtures/electron/`、独立探针 `AXProbe.swift`、不激活启动 `Launch.swift`、窗口守护 `WindowGuard.swift`；`make compat`。
 - 产品改动：浏览器工具的 `browser` 参数可以写进程号。Chrome 和 Chrome for Testing 可能同名，按名称会选错浏览器；`browser_tabs` 显示每个浏览器的 pid。
-- 验证（锁屏）：30 项中 17 项通过、5 项按设计拒绝、8 项失败（Chromium 坐标点击、TextEdit/Finder 点击、预览快捷键），原因见兼容表“锁屏 direct 的基线发现”；全部运行期间系统保持锁定。
+- 验证（锁屏）：30 项中 18 项通过、3 项按设计拒绝、9 项失败（Chrome 与 Electron 的坐标点击及其后的输入和弹窗、TextEdit/Finder 点击、预览快捷键），原因见兼容表“锁屏 direct 的基线发现”；全部运行期间系统保持锁定。
 - 验证（解锁·后台）：30 项中 26 项通过、2 项按设计拒绝、2 项失败（Electron 输入与滚动；整套连跑时 Electron 的网页辅助功能树还会缺失，见兼容表“基线发现”）；前台被改变 0 次。锁屏和前台两列未测（条件不具备，见兼容表）。
 - 剩余限制：见 [compatibility.md](compatibility.md) 的“基线发现”。
