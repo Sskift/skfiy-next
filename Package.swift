@@ -6,9 +6,16 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "skfiy", targets: ["skfiy"]),
+        .executable(name: "skfiy-locked-guardian", targets: ["skfiy-locked-guardian"]),
         .library(name: "SkfiyKit", targets: ["SkfiyKit"])
     ],
     targets: [
+        .target(name: "LockedUseSupport", path: "locked-use/Support", publicHeadersPath: "include",
+                linkerSettings: [.linkedFramework("Security"), .linkedFramework("SystemConfiguration"), .linkedLibrary("bsm")]),
+        .target(name: "LockedUseKit", dependencies: ["LockedUseSupport"],
+                swiftSettings: [.swiftLanguageMode(.v5)]),
+        .executableTarget(name: "skfiy-locked-guardian", dependencies: ["LockedUseKit", "LockedUseSupport"],
+                          swiftSettings: [.swiftLanguageMode(.v5)]),
         .target(
             name: "SkfiyKit",
             swiftSettings: [.swiftLanguageMode(.v5)]
@@ -20,7 +27,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SkfiyKitTests",
-            dependencies: ["SkfiyKit"],
+            dependencies: ["SkfiyKit", "LockedUseKit"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]

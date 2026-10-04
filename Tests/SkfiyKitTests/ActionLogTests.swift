@@ -14,7 +14,7 @@ struct ActionLogTests {
         let text = try String(contentsOfFile: path, encoding: .utf8)
         #expect(!text.contains("get_app_state"))
         #expect(!text.contains("hunter2"))
-        #expect(text.contains("(7 characters, password field)"))
+        #expect(text.contains("(7 characters, redacted)"))
         #expect(!text.contains("Screenshot"))
         let lines = log.recent(10)
         #expect(lines.count == 3)
@@ -22,5 +22,11 @@ struct ActionLogTests {
         #expect(lines[2].contains("✘ click"))
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test func secretKeyboardArgumentsAreRedactedEvenWhenRefused() {
+        let recorded = ActionLog.recordedArguments(["app": "Test", "key": "private-key-text"], secret: true)
+        #expect(recorded["key"] as? String == "(16 characters, redacted)")
+        #expect(recorded["app"] as? String == "Test")
     }
 }

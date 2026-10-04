@@ -59,6 +59,23 @@ enum Input {
     /// A private source, so the user's physically held modifiers never leak in.
     private static let keySource = CGEventSource(stateID: .privateState)
     private static let mouseSource = CGEventSource(stateID: .hidSystemState)
+    /// Set only around the direct locked handler's PID/window-scoped events.
+    /// Rechecked throughout typing/dragging, including after each suspension.
+    static var directLockedValidation: (() -> Bool)?
+    static var directLockedWindowOrigin: CGPoint?
+    static var directLockedReleaseValidation: (() -> Bool)?
+    static var directLockedAborted = false
+    private static var cancelled: Bool {
+        if directLockedValidation != nil, directLockedAborted { return true }
+        if DirectLockedUse.enabled, directLockedValidation == nil, DirectLockedUse.lockState != .unlocked {
+            return true
+        }
+        if let validation = directLockedValidation, !validation() {
+            directLockedAborted = true
+            return true
+        }
+        return EmergencyStop.isStopped || LockedUseInterruption.blocksInput || Task.isCancelled
+    }
 
     static func pause(_ seconds: Double) async {
         try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
@@ -67,6 +84,9 @@ enum Input {
     // MARK: Keyboard
 
     private static func postKey(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, to pid: pid_t) {
+        // A key-up may release an already delivered key when the lease ends.
+        guard !down || !cancelled else { return }
+        guard down || directLockedReleaseValidation?() != false else { return }
         guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: down) else { return }
         event.flags = flags
         event.postToPid(pid)
@@ -87,12 +107,14 @@ enum Input {
     }
 
     static func press(_ chord: KeyChord, repeat count: Int = 1, to pid: pid_t) async {
+        guard !cancelled else { return }
         switch chord.key {
         case .character(let text):
             await type(String(repeating: text, count: max(1, count)), to: pid)
         case .code(let code):
             let flags = chord.modifiers.eventFlags.union(intrinsicFlags(code))
             for index in 0..<max(1, count) {
+                guard !cancelled else { return }
                 postKey(code, down: true, flags: flags, to: pid)
                 await pause(0.012)
                 postKey(code, down: false, flags: flags, to: pid)
@@ -106,11 +128,14 @@ enum Input {
     /// Presses a chord as the keyboard does, for the frontmost app. Only
     /// run_in_front uses it, once the user approved and the app is in front.
     static func pressToFrontApp(_ chord: KeyChord) async {
+        guard !cancelled else { return }
         let source = CGEventSource(stateID: .hidSystemState)
         switch chord.key {
         case .code(let code):
             let flags = chord.modifiers.eventFlags.union(intrinsicFlags(code))
             for down in [true, false] {
+                guard !down || !cancelled else { return }
+                guard down || directLockedReleaseValidation?() != false else { return }
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { continue }
                 event.flags = flags
                 event.post(tap: .cghidEventTap)
@@ -119,6 +144,8 @@ enum Input {
         case .character(let text):
             let units = Array(text.utf16)
             for down in [true, false] {
+                guard !down || !cancelled else { return }
+                guard down || directLockedReleaseValidation?() != false else { return }
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 event.flags = chord.modifiers.eventFlags
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
@@ -132,6 +159,7 @@ enum Input {
     /// gets one key down and one key up, like a physical key held without
     /// auto-repeat. The emergency stop releases it early.
     static func hold(_ chord: KeyChord, seconds: Double, to pid: pid_t) async {
+        guard !cancelled else { return }
         let post: (Bool) -> Void
         switch chord.key {
         case .code(let code):
@@ -140,6 +168,8 @@ enum Input {
         case .character(let text):
             let units = Array(text.utf16)
             post = { down in
+                guard !down || !cancelled else { return }
+                guard down || directLockedReleaseValidation?() != false else { return }
                 guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: 0, keyDown: down) else { return }
                 event.flags = chord.modifiers.eventFlags
                 event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
@@ -148,7 +178,7 @@ enum Input {
         }
         post(true)
         let until = Date().addingTimeInterval(seconds)
-        while Date() < until, !EmergencyStop.isStopped {
+        while Date() < until, !cancelled {
             await pause(min(0.05, until.timeIntervalSinceNow))
         }
         post(false)
@@ -162,7 +192,7 @@ enum Input {
     static func type(_ text: String, to pid: pid_t) async -> Int {
         var typed = 0
         for character in text {
-            if EmergencyStop.isStopped { return typed }
+            if cancelled { return typed }
             typed += 1
             switch character {
             case "\n", "\r", "\r\n":
@@ -172,6 +202,8 @@ enum Input {
             default:
                 let units = Array(String(character).utf16)
                 for down in [true, false] {
+                    guard !down || !cancelled else { return typed }
+                    guard down || directLockedReleaseValidation?() != false else { return typed }
                     guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: 0, keyDown: down) else { continue }
                     event.flags = []
                     event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
@@ -211,13 +243,18 @@ enum Input {
         group: Int64,
         eventNumber: Int64 = 0
     ) {
+        // Release an already-held button after cancellation, but never start
+        // another action or move the pointer while the guardian is relocking.
+        let releasesButton = event.type == .leftMouseUp || event.type == .rightMouseUp || event.type == .otherMouseUp
+        guard releasesButton || !cancelled else { return }
+        guard !releasesButton || directLockedReleaseValidation?() != false else { return }
         let fields: [(UInt32, Int64)] = [
             (0, eventNumber), (1, clickState), (3, buttonNumber), (7, subtype), (40, Int64(pid)),
             (51, Int64(windowID)), (58, group), (91, Int64(windowID)), (92, Int64(windowID))
         ]
         // The location within the window: AppKit views work it out from the
         // screen location, but WebKit reads this field.
-        let origin = windowOrigin(windowID)
+        let origin = directLockedWindowOrigin ?? windowOrigin(windowID)
         SkyLight.setWindowLocation?(event, point.x - origin.x, point.y - origin.y)
         for (field, value) in fields {
             if let setIntegerField = SkyLight.setIntegerField {
@@ -243,6 +280,7 @@ enum Input {
     /// click: an off-screen press/release (user-activation primer), then the
     /// target press/release sharing one mouse event number.
     static func click(at point: CGPoint, pid: pid_t, windowID: CGWindowID, button: MouseButton, count: Int, modifiers: Modifiers, chromium: Bool = false) async {
+        guard !cancelled else { return }
         let (downType, upType, cgButton, number): (CGEventType, CGEventType, CGMouseButton, Int64) = switch button {
         case .left: (.leftMouseDown, .leftMouseUp, .left, 0)
         case .right: (.rightMouseDown, .rightMouseUp, .right, 1)
@@ -256,6 +294,7 @@ enum Input {
             post(move, at: point, pid: pid, windowID: windowID, clickState: 0, buttonNumber: 0, subtype: 3, group: group, eventNumber: 2)
         }
         await pause(0.015)
+        guard !cancelled else { return }
         if chromium {
             let offscreen = CGPoint(x: -1, y: -1)
             if let down = mouseEvent(.leftMouseDown, offscreen, .left, []) {
@@ -267,6 +306,7 @@ enum Input {
             await pause(0.1)
         }
         for clickState in 1...Int64(max(1, count)) {
+            guard !cancelled else { return }
             let eventNumber = 2 + clickState
             if let down = mouseEvent(downType, point, cgButton, flags) {
                 post(down, at: point, pid: pid, windowID: windowID, clickState: clickState, buttonNumber: number, subtype: 3, group: group, eventNumber: eventNumber)
@@ -283,36 +323,43 @@ enum Input {
     }
 
     static func drag(from start: CGPoint, to end: CGPoint, pid: pid_t, windowID: CGWindowID) async {
+        guard !cancelled else { return }
         let group = Int64.random(in: 1...Int64(Int32.max))
         if let move = mouseEvent(.mouseMoved, start, .left, []) {
             post(move, at: start, pid: pid, windowID: windowID, clickState: 0, buttonNumber: 0, subtype: 0, group: group)
         }
         await pause(0.015)
+        guard !cancelled else { return }
         if let down = mouseEvent(.leftMouseDown, start, .left, []) {
             post(down, at: start, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
         }
         await pause(0.08)
         let steps = 20
+        var lastPoint = start
         for step in 1...steps {
+            if cancelled { break }
             let t = Double(step) / Double(steps)
             let point = CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
             if let dragged = mouseEvent(.leftMouseDragged, point, .left, []) {
                 post(dragged, at: point, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
+                lastPoint = point
             }
             await pause(0.012)
         }
-        await pause(0.08)
-        if let up = mouseEvent(.leftMouseUp, end, .left, []) {
-            post(up, at: end, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
+        if !cancelled { await pause(0.08) }
+        if let up = mouseEvent(.leftMouseUp, lastPoint, .left, []) {
+            post(up, at: lastPoint, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
         }
     }
 
     /// Scrolls by `dx`/`dy` points at `point`. Positive `dy` reveals content
     /// further down, positive `dx` content further right.
     static func scroll(at point: CGPoint, dx: Double, dy: Double, pid: pid_t, windowID: CGWindowID) async {
+        guard !cancelled else { return }
         let steps = max(1, Int((max(abs(dx), abs(dy)) / 60).rounded(.up)))
         let group = Int64.random(in: 1...Int64(Int32.max))
         for _ in 0..<steps {
+            guard !cancelled else { return }
             // Wheel deltas are the opposite sign: positive wheel1 scrolls up.
             guard let event = CGEvent(
                 scrollWheelEvent2Source: mouseSource,
@@ -360,6 +407,7 @@ enum Input {
     /// window, runs `body`, then hands key focus back to the user's window.
     /// For pointer input nothing else can deliver (e.g. text views, canvases).
     static func withBriefFocus(pid: pid_t, windowID: CGWindowID, _ body: () async -> Void) async -> Bool {
+        guard !cancelled else { return false }
         guard let postRecord = SkyLight.postEventRecord,
               let frontPID = frontmostProcessID(), frontPID != pid,
               let frontPSN = psn(for: frontPID), let targetPSN = psn(for: pid),
@@ -369,11 +417,11 @@ enum Input {
         _ = postRecord(frontPSN, focusRecord(frontWindow, focus: false))
         _ = postRecord(targetPSN, focusRecord(windowID, focus: true))
         await pause(0.05)
-        await body()
+        if !cancelled { await body() }
         await pause(0.05)
         _ = postRecord(targetPSN, focusRecord(windowID, focus: false))
         _ = postRecord(frontPSN, focusRecord(frontWindow, focus: true))
-        return true
+        return !cancelled
     }
 }
 

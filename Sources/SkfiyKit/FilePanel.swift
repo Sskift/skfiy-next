@@ -45,7 +45,7 @@ struct FilePanel {
                 throw ToolError("\(target.path) already exists; pass overwrite: true to replace it, or choose another name.")
             }
             if let disclosure = find("NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"), (disclosure.value(kAXValueAttribute) as? NSNumber)?.intValue == 0 {
-                _ = AXUIElementPerformAction(disclosure, kAXPressAction as CFString)
+                _ = guardedAXPerformAction(disclosure, kAXPressAction as CFString)
                 await Input.pause(0.6)
             }
         } else if !exists {
@@ -58,7 +58,7 @@ struct FilePanel {
             throw ToolError("The panel does not show its columns (it is in list or icon view, or collapsed), which is the only view skfiy can navigate. The user can switch it to column view once; it is remembered.")
         }
         let (place, row) = try sidebarPlace(for: resolved)
-        _ = AXUIElementSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        _ = guardedAXSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
         await Input.pause(0.4)
 
         var current = place
@@ -84,7 +84,7 @@ struct FilePanel {
         let button = ok.string(kAXTitleAttribute) ?? "OK"
         // The panel's elements live in another process and may report an
         // error for an action they did perform; the outcome is checked below.
-        _ = AXUIElementPerformAction(ok, kAXPressAction as CFString)
+        _ = guardedAXPerformAction(ok, kAXPressAction as CFString)
         await Input.pause(0.5)
         if isSave, exists, let still = FilePanel.find(in: app) {
             try await still.confirmReplace()
@@ -152,13 +152,13 @@ struct FilePanel {
                     Self.descendant(of: item, limit: 10, where: { names.contains($0.string(kAXValueAttribute) ?? "") }) != nil
                 }) {
                     // The list reports an error for files, yet selects them.
-                    _ = AXUIElementSetAttributeValue(list, kAXSelectedChildrenAttribute as CFString, [item] as CFArray)
+                    _ = guardedAXSetAttributeValue(list, kAXSelectedChildrenAttribute as CFString, [item] as CFArray)
                     await Input.pause(0.35)
                     return
                 }
                 // Long folders: bring later items into view.
                 if scrolled < 40, let area = list.element(kAXParentAttribute),
-                   AXUIElementPerformAction(area, "AXScrollDownByPage" as CFString) == .success {
+                   guardedAXPerformAction(area, "AXScrollDownByPage" as CFString) == .success {
                     scrolled += 1
                     await Input.pause(0.1)
                     continue
@@ -182,7 +182,7 @@ struct FilePanel {
         guard let replace = buttons.first(where: { $0.string("AXIdentifier") == "action-button-1" }) else {
             throw ToolError("The Save panel asked something skfiy does not recognize; call get_app_state to see it.")
         }
-        _ = AXUIElementPerformAction(replace, kAXPressAction as CFString)
+        _ = guardedAXPerformAction(replace, kAXPressAction as CFString)
         await Input.pause(0.4)
     }
 

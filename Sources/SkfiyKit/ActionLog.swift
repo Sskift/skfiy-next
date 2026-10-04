@@ -36,8 +36,8 @@ public struct ActionLog: Sendable {
     static func recordedArguments(_ arguments: [String: Any], secret: Bool) -> [String: Any] {
         var recorded: [String: Any] = [:]
         for (key, value) in arguments {
-            if ["text", "value"].contains(key), let text = value as? String {
-                recorded[key] = secret ? "(\(text.count) characters, password field)" : String(text.prefix(500))
+            if (["text", "value"].contains(key) || secret && key == "key"), let text = value as? String {
+                recorded[key] = secret ? "(\(text.count) characters, redacted)" : String(text.prefix(500))
             } else if value is String || value is NSNumber || value is Bool {
                 recorded[key] = value
             }

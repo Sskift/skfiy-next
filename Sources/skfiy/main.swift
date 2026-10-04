@@ -90,6 +90,7 @@ case "install-browser-bridge":
     }
 
 case "mcp":
+    do { try LockedUse.runInstalledMCPIfEnabled() } catch { fail(String(describing: error)) }
     Instance.runFromOwnLink()
     atexit { Instance.removeOwnLink() }
     MainActor.assumeIsolated {

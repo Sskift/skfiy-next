@@ -243,6 +243,9 @@ enum ToolSchemas {
             ],
             required: ["message"]
         )
+    ] + [
+        tool("locked_use_status", "Inspect this MCP session's locked-use mode and actual OS lock state. Does not unlock the Mac.", properties: [:], required: [], readOnly: true),
+        tool("locked_use_end", "End locked use for this MCP session. Direct mode leaves the OS locked; experimental guardian mode restores the OS lock before removing display protection. Call when the task is finished.", properties: [:], required: [])
     ]
 
     private static let tab: [String: Any] = ["type": "integer", "description": "Tab id from browser_tabs or browser_open"]
@@ -375,6 +378,7 @@ enum ToolSchemas {
     - Commands that act on the current selection or document (formatting, Undo, Find) only work in the frontmost app; when a task needs one, use run_in_front, which asks the user first, or say so. Do not retry them with press_key. Terminals and the app hosting you never receive input.
     - Never put things over the user's screen: windows are not raised, context menus and menu buttons are not opened in background apps, and keys that open floating panels (space for Quick Look in Finder) should be avoided. Use the menu bar listing and keyboard shortcuts instead.
     - Copy and paste (cmd+c, cmd+x, cmd+v in press_key) use skfiy's own clipboard: text through accessibility; files, cells and images through the app's own Copy/Paste command, with the user's clipboard lent for that moment and put back. read_clipboard takes what the user copied, with their approval.
+    - With SKFIY_LOCKED_USE=direct, macOS stays locked. get_app_state returns a live single-window screenshot and OCR coordinates; use x/y click, scroll, drag, press_key and type_text. AX element_index, foreground actions, file-dialog helpers and clipboard are unavailable while locked. Keyboard input requires an unambiguous app window. Refresh get_app_state after a lock transition or window change. locked_use_end ends this MCP session's direct access without changing the OS lock. locked_use_status reports the mode and lock state. The experimental SKFIY_LOCKED_USE=1 guardian mode instead restores the OS lock on locked_use_end.
     - Everything runs in the background: the user keeps their front app, window order, cursor, clipboard and keyboard focus, and can keep typing. Hidden or minimized apps are not brought forward (no screenshot, but element actions still work).
     - A background mouse click reaches most controls; if a view ignores it (the screenshot shows no change), use an element_index, set_value/select_text, or keyboard shortcuts instead.
     - Web pages in Chrome/Edge/Brave: when the skfiy browser bridge extension is connected, prefer the browser_* tools. They work in background tabs by element index; open your own tab with browser_open instead of taking over the tab the user is looking at.
