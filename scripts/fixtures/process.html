@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>skfiy process page</title>
+<style>
+  body { font: 16px -apple-system, sans-serif; margin: 20px; color: #111; background: #fff; }
+  div { margin: 8px 0; }
+  #loaded, #words, #result { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Process a data file</h1>
+<div><label>Data file <input id="file" type="file" aria-label="Data file"></label></div>
+<div id="loaded">Nothing loaded</div>
+<div><button id="count">Count words</button></div>
+<div id="words">Words: ?</div>
+<div><label>Answer <input id="answer" aria-label="Answer"></label></div>
+<div><button id="submit">Submit</button></div>
+<div id="result">Not submitted</div>
+<script>
+  // The harness checks everything through these reports, never through skfiy.
+  const run = new URLSearchParams(location.search).get('run') || 'none';
+  document.title = 'skfiy process ' + run;
+  const state = { run, loads: 0, file: null, words: null, answer: null, submits: 0 };
+  let text = '';
+  function report(event) {
+    fetch('/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, state, time: Date.now() }) }).catch(() => {});
+  }
+  document.getElementById('file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    text = await file.text();
+    state.loads += 1;
+    state.file = file.name;
+    const lines = text.split('\n').filter(Boolean).length;
+    document.getElementById('loaded').textContent = `Loaded ${file.name} (${lines} lines)`;
+    report('load');
+  });
+  document.getElementById('count').addEventListener('click', () => {
+    state.words = text.split(/\s+/).filter(Boolean).length;
+    document.getElementById('words').textContent = `Words: ${state.words}`;
+    report('count');
+  });
+  document.getElementById('submit').addEventListener('click', () => {
+    state.answer = document.getElementById('answer').value.trim();
+    state.submits += 1;
+    const correct = state.words !== null && String(state.words) === state.answer;
+    document.getElementById('result').textContent = `Submitted ${state.answer}${correct ? ' (correct)' : ' (wrong)'}`;
+    report('submit');
+  });
+  report('ready');
+</script>
+</body>
+</html>

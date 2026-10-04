@@ -116,7 +116,8 @@ public final class ComputerUse {
     nonisolated public static let toolNames = [
         "list_apps", "get_desktop_status", "get_app_state", "get_app_capabilities", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "file_dialog", "read_clipboard", "wait_for", "locate", "hand_over", "locked_use_status", "locked_use_end"
+        "file_dialog", "read_clipboard", "wait_for", "locate", "flow_start", "flow_record", "flow_status", "hand_over",
+        "locked_use_status", "locked_use_end"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -238,6 +239,9 @@ public final class ComputerUse {
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
             case "locate": return try await locate(args)
+            case "flow_start": return try await flowStart(args)
+            case "flow_record": return try await flowRecord(args)
+            case "flow_status": return try await flowStatus(args)
             case "read_clipboard": return try await readClipboard(args)
             case "hand_over": return try await handOver(args)
             case "file_dialog": return try await keepingFront(args) { try await self.fileDialog(args) }

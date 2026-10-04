@@ -203,7 +203,7 @@ extension Locator {
         let gap = { (other: CGRect) in max(0, other.minX - frame.maxX, frame.minX - other.maxX) }
         let cost = { (other: CGRect) in frame.minY - other.maxY + 2 * gap(other) }
         return candidates.filter { other in
-            other != candidate && (!other.roleKnown || ["AXStaticText", "AXHeading", "heading", "statictext", "text"].contains(other.role))
+            other != candidate && (!other.roleKnown || ["AXStaticText", "AXHeading", "heading", "statictext"].contains(other.role))
                 && other.frame.maxY <= frame.minY + 2 && gap(other.frame) <= reach
         }.min { cost($0.frame) < cost($1.frame) }?.label
     }
@@ -288,6 +288,15 @@ extension Locator {
     func unique(_ matches: [LocatorMatch]) -> LocatorMatch? {
         guard let best = matches.first else { return nil }
         let equals = best.nameScore >= 1 ? matches.filter { $0.nameScore >= 1 } : matches
+        // A control's own label shows as text with the same words ("Email"
+        // next to its field): that text is not a second thing to act on.
+        let texts: Set<String> = ["AXStaticText", "AXHeading", "statictext", "heading"]
+        let controls = equals.filter { $0.candidate.roleKnown && !texts.contains($0.candidate.role) }
+        if controls.count == 1, let control = controls.first,
+           equals.allSatisfy({ $0 == control || ($0.candidate.roleKnown && texts.contains($0.candidate.role)
+                                                && TextMatch.normalized($0.candidate.label) == TextMatch.normalized(control.candidate.label)) }) {
+            return control
+        }
         guard equals.count > 1 else { return best }
         guard near != nil, let first = equals[0].distance, let second = equals[1].distance else { return nil }
         return first <= second * 0.6 && second - first >= 10 ? best : nil

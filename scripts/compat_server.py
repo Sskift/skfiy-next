@@ -12,6 +12,8 @@
 - GET  /download/broken?name=N           announces more bytes than it sends, then hangs up
 - GET  /download/missing?name=N          404, as a broken link
 - GET  /downloads.html?run=R             a page linking to all of the above
+- GET  /stats?name=N&run=R               how often /download/ok served N, and how many
+                                         "submit" events run R reported
 
 It binds to 127.0.0.1 only, and never reads anything outside --root.
 """
@@ -25,6 +27,8 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 STATES = {}
+SERVED = {}
+SUBMITS = {}
 LOCK = threading.Lock()
 
 
@@ -57,6 +61,8 @@ def make_handler(root, events):
             report['received'] = time.time()
             with LOCK:
                 STATES[run] = report
+                if report.get('event') == 'submit':
+                    SUBMITS[run] = SUBMITS.get(run, 0) + 1
                 with open(events / f'{run}.jsonl', 'a') as journal:
                     journal.write(json.dumps(report) + '\n')
             self.send_json({'ok': True})
@@ -77,7 +83,12 @@ def make_handler(root, events):
             if url.path == '/state':
                 with LOCK:
                     return self.send_json(STATES.get(query.get('run', ''), {}))
+            if url.path == '/stats':
+                with LOCK:
+                    return self.send_json({'served': SERVED.get(query.get('name', ''), 0), 'submits': SUBMITS.get(query.get('run', ''), 0)})
             if url.path == '/download/ok':
+                with LOCK:
+                    SERVED[query.get('name', 'file.txt')] = SERVED.get(query.get('name', 'file.txt'), 0) + 1
                 size = max(1, min(int(query.get('size', '2048')), 50_000_000))
                 line = f"skfiy download {query.get('name', 'file.txt')} {query.get('run', '')}\n".encode()
                 body = (line * (size // len(line) + 1))[:size]

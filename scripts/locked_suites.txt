@@ -11,3 +11,4 @@ python3 scripts/test_downloads.py {bin}
 python3 scripts/test_locate.py {bin} --textedit --chrome
 python3 scripts/bench_reads.py {bin} --rounds 2
 python3 scripts/bench_reads.py {bin} --rounds 2 --textedit
+python3 scripts/test_flow.py {bin}

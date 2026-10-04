@@ -169,4 +169,23 @@ struct LocatorTests {
         let word = try locator(["name": "apple"])
         #expect(word.unique(word.matches(all, bounds: window))?.candidate.label == "apple")
     }
+
+    @Test func aControlsOwnLabelDoesNotMakeItAmbiguous() throws {
+        let page = [LocatorCandidate(label: "Data file", role: "statictext", frame: CGRect(x: 10, y: 40, width: 60, height: 18)),
+                    LocatorCandidate(label: "Data file", role: "file", frame: CGRect(x: 75, y: 40, width: 200, height: 22), index: 0),
+                    LocatorCandidate(label: "Process a data file", role: "heading", frame: CGRect(x: 10, y: 5, width: 300, height: 30))]
+        let file = try locator(["name": "Data file"])
+        #expect(file.unique(file.matches(page, bounds: CGRect(x: 0, y: 0, width: 800, height: 600)))?.candidate.index == 0)
+        // A text input's page kind is "text"; its label is still just a label.
+        let answer = [LocatorCandidate(label: "Answer", role: "statictext", frame: CGRect(x: 10, y: 90, width: 50, height: 18)),
+                      LocatorCandidate(label: "Answer", role: "text", frame: CGRect(x: 65, y: 90, width: 200, height: 22), index: 2)]
+        let field = try locator(["name": "Answer"])
+        #expect(field.unique(field.matches(answer, bounds: CGRect(x: 0, y: 0, width: 800, height: 600)))?.candidate.index == 2)
+        // Two controls with that label stay ambiguous.
+        let twice = page + [LocatorCandidate(label: "Data file", role: "file", frame: CGRect(x: 75, y: 80, width: 200, height: 22), index: 1)]
+        #expect(file.unique(file.matches(twice, bounds: CGRect(x: 0, y: 0, width: 800, height: 600))) == nil)
+        // Recognized text has no kinds: two "Save" texts stay ambiguous.
+        let ocr = [text("Save", 20, 20), text("Save", 400, 400)]
+        #expect(try locator(["name": "Save"]).unique(try locator(["name": "Save"]).matches(ocr, bounds: window)) == nil)
+    }
 }
