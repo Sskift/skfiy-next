@@ -5,3 +5,5 @@ python3 scripts/test_capabilities.py {bin} --browser
 python3 scripts/test_wait.py {bin} --chrome
 python3 scripts/test_zoom.py {bin} --chrome
 python3 scripts/test_verify.py {bin} --textedit
+python3 scripts/test_windows.py {bin} --textedit
+python3 scripts/experiment_locked_keyboard.py --trials 12
