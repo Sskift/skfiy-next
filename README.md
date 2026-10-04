@@ -32,6 +32,8 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 
 2026-10-04：合并前的 direct release 版本已安装并通过真实锁屏 MCP 测试，覆盖截图、文字输入、点击提交、按键、滚动、拖动及拒绝路径；518 个锁态采样保持锁定。另通过双窗口键盘拒绝回归，当时 72 项自动测试通过。验收范围是本机专用 fixture，不表示所有第三方应用都兼容。配置、限制和验证记录见 [locked-use/README.md](locked-use/README.md)。另保留独立的实验性 `skfiy mcp --locked-use` guardian 路径，其短暂解锁方案尚未完成真机验收，见 [guardian 文档](locked-use/GUARDIAN.md)；不要与 direct 同时启用。
 
+真实应用的兼容性基线（TextEdit、预览、Finder、Chrome、Electron 在解锁前台/后台/锁屏下的截图、点击、输入、滚动、弹窗）见 [docs/compatibility.md](docs/compatibility.md)；后台与锁屏能力建设的进度和验证记录见 [docs/roadmap.md](docs/roadmap.md)。
+
 ## 工具
 
 前 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；`zoom`、`open_file`、`save_document`、`run_in_front`、`file_dialog`、`wait_for` 是 skfiy 额外加的。下表中 AX、前台和文件操作的完整功能用于解锁状态；锁屏 direct 模式的可用范围见上文。

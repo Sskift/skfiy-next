@@ -1,0 +1,7 @@
+{
+  "name": "skfiy-electron-compat",
+  "productName": "skfiy Electron compat",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js"
+}

@@ -254,7 +254,7 @@ enum ToolSchemas {
     ]
 
     private static let tab: [String: Any] = ["type": "integer", "description": "Tab id from browser_tabs or browser_open"]
-    private static let browserName: [String: Any] = ["type": "string", "description": "Browser name, only needed when several are connected"]
+    private static let browserName: [String: Any] = ["type": "string", "description": "Browser name (or its process id, as browser_tabs shows it), only needed when several are connected"]
     private static let pageIndex: [String: Any] = ["type": "integer", "description": "Element index from the latest browser_state of the tab"]
 
     static let browser: [[String: Any]] = [

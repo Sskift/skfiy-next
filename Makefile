@@ -5,7 +5,7 @@ TEST_FLAGS := $(if $(wildcard $(TESTING_PLUGINS)),-Xswiftc -plugin-path -Xswiftc
 PREFIX ?= $(HOME)/.local
 EXTENSION_DIR := $(HOME)/Library/Application Support/skfiy/browser-extension
 
-.PHONY: build release test test-locked-use test-locked-use-plugin locked-use smoke smoke-fixture smoke-web smoke-browser install clean
+.PHONY: build release test test-locked-use test-locked-use-plugin locked-use smoke smoke-fixture smoke-web smoke-browser compat install clean
 
 build:
 	swift build
@@ -50,6 +50,12 @@ smoke-web: build
 smoke-browser: build
 	scripts/test_browser.sh .build/debug/skfiy
 	python3 scripts/smoke_browser.py /tmp/skfiy-test/bin/skfiy
+
+# Real-app compatibility baseline (TextEdit, Preview, Finder, Chrome for Testing,
+# Electron) with the target apps in the background; see docs/compatibility.md.
+compat: build
+	python3 scripts/compat_baseline.py .build/debug/skfiy --mode background
+	python3 scripts/compat_baseline.py --report
 
 # Installs the binary, copies the extension somewhere browsers may read it
 # (not ~/Desktop or ~/Documents), and registers the native messaging host.

@@ -249,7 +249,9 @@ final class BrowserTools {
         let browsers = await connected()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
         if let wanted = args.string("browser")?.lowercased(), !wanted.isEmpty {
-            guard let match = browsers.first(where: { $0.name.lowercased().contains(wanted) }) else {
+            // Two browsers can share a name (Chrome and Chrome for Testing); a pid is exact.
+            guard let match = browsers.first(where: { String($0.pid) == wanted })
+                    ?? browsers.first(where: { $0.name.lowercased().contains(wanted) }) else {
                 throw ToolError("No connected browser matches \"\(wanted)\". Connected: \(browsers.map(\.name).joined(separator: ", ")).")
             }
             return match
@@ -271,12 +273,12 @@ final class BrowserTools {
         var browsers = await connected()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
         if let wanted = args.string("browser")?.lowercased(), !wanted.isEmpty {
-            browsers = browsers.filter { $0.name.lowercased().contains(wanted) }
+            browsers = browsers.filter { String($0.pid) == wanted || $0.name.lowercased().contains(wanted) && Int(wanted) == nil }
         }
         var lines: [String] = []
         for browser in browsers {
             let windows = try await send(browser, "tabs", [:]) as? [[String: Any]] ?? []
-            lines.append(contentsOf: formatTabs(browser: browser.name, windows: windows))
+            lines.append(contentsOf: formatTabs(browser: "\(browser.name) (pid \(browser.pid))", windows: windows))
         }
         lines.append("")
         lines.append("[shown] marks the tab the user sees in their focused window; prefer working in other tabs, or open your own with browser_open.")

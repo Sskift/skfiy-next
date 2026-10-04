@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>skfiy compat page</title>
+<style>
+  body { font: 18px -apple-system, sans-serif; margin: 20px; background: #fff; color: #111; }
+  #controls { position: sticky; top: 0; background: #fff; padding: 8px 0; border-bottom: 2px solid #333; }
+  button { font-size: 18px; padding: 6px 14px; margin-right: 10px; }
+  input { font-size: 18px; width: 260px; }
+  .row { padding: 10px 0; border-bottom: 1px solid #ddd; font-size: 20px; }
+  #status, #echo, #clicks, #scrolled, #popup { font-weight: 600; margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <h1 id="heading">COMPAT PAGE</h1>
+  <div id="clicks">Clicks: 0</div>
+  <button id="increment" onclick="increment()">Increment</button>
+  <button id="alert" onclick="showAlert()">Show alert</button>
+  <button id="later" onclick="later()">Load later</button>
+  <div><label>Compat input <input id="input" aria-label="Compat input" oninput="typed()"></label></div>
+  <div id="echo">Echo: </div>
+  <div id="popup">Popup: none</div>
+  <div id="scrolled">Scrolled: 0</div>
+  <div id="status">Status: ready</div>
+</div>
+<div id="rows"></div>
+<script>
+  // The harness verifies everything through these reports, never through skfiy.
+  const run = new URLSearchParams(location.search).get('run') || 'none';
+  document.title = 'skfiy compat ' + run;
+  const state = { run, clicks: 0, value: '', popup: 'none', scrollY: 0, maxScroll: 0, later: 'idle', events: 0 };
+  function report(event) {
+    state.events += 1;
+    state.scrollY = Math.round(window.scrollY);
+    state.maxScroll = Math.max(state.maxScroll, state.scrollY);
+    fetch('/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, state, time: Date.now() }) }).catch(() => {});
+  }
+  function increment() {
+    state.clicks += 1;
+    document.getElementById('clicks').textContent = 'Clicks: ' + state.clicks;
+    report('click');
+  }
+  function typed() {
+    state.value = document.getElementById('input').value;
+    document.getElementById('echo').textContent = 'Echo: ' + state.value;
+    report('input');
+  }
+  function showAlert() {
+    state.popup = 'open';
+    report('popup-open');
+    alert('Compat alert ' + run);
+    state.popup = 'closed';
+    document.getElementById('popup').textContent = 'Popup: closed';
+    report('popup-closed');
+  }
+  function later() {
+    state.later = 'loading';
+    document.getElementById('status').textContent = 'Status: loading';
+    report('later-start');
+    setTimeout(() => {
+      state.later = 'done';
+      document.getElementById('status').textContent = 'Status: LOADED ' + run;
+      report('later-done');
+    }, 3000);
+  }
+  const rows = document.getElementById('rows');
+  for (let i = 1; i <= 120; i++) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.textContent = 'Row ' + String(i).padStart(3, '0');
+    rows.appendChild(row);
+  }
+  let scrollTimer = null;
+  window.addEventListener('scroll', () => {
+    document.getElementById('scrolled').textContent = 'Scrolled: ' + Math.round(window.scrollY);
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => report('scroll'), 150);
+  });
+  // Hidden tabs run no rendering steps, so no scroll events: also poll.
+  let lastY = 0;
+  setInterval(() => {
+    if (Math.round(window.scrollY) !== lastY) {
+      lastY = Math.round(window.scrollY);
+      document.getElementById('scrolled').textContent = 'Scrolled: ' + lastY;
+      report('scroll');
+    }
+  }, 400);
+  report('loaded');
+</script>
+</body>
+</html>

@@ -1,0 +1,1019 @@
+{
+ "runs": [
+  {
+   "mode": "background",
+   "evidence": "eval/results/compat-background-20261005-001726-fe299114e7",
+   "started": 1791130646.818976,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 455,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "chrome",
+    "chrome-extension",
+    "finder",
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 3
+  },
+  {
+   "mode": "background",
+   "evidence": "eval/results/compat-background-20261005-002035-0d9d91b611",
+   "started": 1791130835.523011,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 53,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "preview"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 0
+  },
+  {
+   "mode": "background",
+   "evidence": "eval/results/compat-background-20261005-002200-6071205215",
+   "started": 1791130920.6277912,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 101,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "electron"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 1
+  },
+  {
+   "mode": "locked",
+   "evidence": "eval/results/compat-locked-20261005-002245-1058da8312",
+   "started": 1791130965.4167218,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 1,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "chrome",
+    "chrome-extension",
+    "electron",
+    "finder",
+    "preview",
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 0
+  },
+  {
+   "mode": "front",
+   "evidence": "eval/results/compat-front-20261005-002245-a543ee33fa",
+   "started": 1791130965.746007,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 1,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "chrome",
+    "chrome-extension",
+    "electron",
+    "finder",
+    "preview",
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 0
+  }
+ ],
+ "results": [
+  {
+   "case": "electron",
+   "mode": "background",
+   "op": "screenshot",
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); heading found",
+   "seconds": 4.23,
+   "run": "compat-background-20261005-002200-6071205215"
+  },
+  {
+   "case": "electron",
+   "mode": "background",
+   "op": "click",
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.8,
+   "run": "compat-background-20261005-002200-6071205215"
+  },
+  {
+   "case": "electron",
+   "mode": "background",
+   "op": "type",
+   "status": "fail",
+   "path": "ax-index+keyboard",
+   "detail": "page input value ''",
+   "seconds": 1.04,
+   "run": "compat-background-20261005-002200-6071205215"
+  },
+  {
+   "case": "electron",
+   "mode": "background",
+   "op": "scroll",
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "page scrollY 0 -> 0",
+   "seconds": 0.81,
+   "run": "compat-background-20261005-002200-6071205215"
+  },
+  {
+   "case": "electron",
+   "mode": "background",
+   "op": "popup",
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "alert shown in state; closed with OK by element_index: yes",
+   "seconds": 0.77,
+   "run": "compat-background-20261005-002200-6071205215"
+  },
+  {
+   "case": "textedit",
+   "mode": "background",
+   "op": "screenshot",
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); first lines visible",
+   "seconds": 1.14,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "textedit",
+   "mode": "background",
+   "op": "click",
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "caret at 269, line 10 spans 261-289",
+   "seconds": 0.78,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "textedit",
+   "mode": "background",
+   "op": "type",
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "typed into 'TextEditMARKFE2991 line 010 fe299114e7'",
+   "seconds": 1.05,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "textedit",
+   "mode": "background",
+   "op": "scroll",
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "first visible line 1 -> 52",
+   "seconds": 1.0,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "textedit",
+   "mode": "background",
+   "op": "popup",
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "keep-document sheet appeared; answered Delete, document gone (by element_index)",
+   "seconds": 1.4,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "preview",
+   "mode": "background",
+   "op": "screenshot",
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); page text recognized",
+   "seconds": 1.14,
+   "run": "compat-background-20261005-002035-0d9d91b611"
+  },
+  {
+   "case": "preview",
+   "mode": "background",
+   "op": "click",
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "focused element: AXTextField",
+   "seconds": 0.86,
+   "run": "compat-background-20261005-002035-0d9d91b611"
+  },
+  {
+   "case": "preview",
+   "mode": "background",
+   "op": "type",
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "search field reads \"page 4\"",
+   "seconds": 1.01,
+   "run": "compat-background-20261005-002035-0d9d91b611"
+  },
+  {
+   "case": "preview",
+   "mode": "background",
+   "op": "scroll",
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "pages visible [1, 2, 4] -> [4, 6]; vertical bars [0, 0.59] -> [1, 0.59]",
+   "seconds": 0.99,
+   "run": "compat-background-20261005-002035-0d9d91b611"
+  },
+  {
+   "case": "preview",
+   "mode": "background",
+   "op": "popup",
+   "status": "refused",
+   "path": "keyboard",
+   "detail": "no sheet appeared; skfiy: menu item \"Go to Page…\" disabled in the background",
+   "seconds": 0.95,
+   "run": "compat-background-20261005-002035-0d9d91b611"
+  },
+  {
+   "case": "finder",
+   "mode": "background",
+   "op": "screenshot",
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); files listed",
+   "seconds": 1.12,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "finder",
+   "mode": "background",
+   "op": "click",
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "selected: item-05-fe29.txt",
+   "seconds": 0.79,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "finder",
+   "mode": "background",
+   "op": "type",
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "selected after type-select: item-42-fe29.txt",
+   "seconds": 0.99,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "finder",
+   "mode": "background",
+   "op": "scroll",
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "vertical scroll bars [0, 0.4] -> [0, 0.46]",
+   "seconds": 0.89,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "finder",
+   "mode": "background",
+   "op": "popup",
+   "status": "refused",
+   "path": "keyboard",
+   "detail": "no Get Info window; skfiy: menu item \"Get Info\" disabled in the background",
+   "seconds": 0.92,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome",
+   "mode": "background",
+   "op": "screenshot",
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); heading found",
+   "seconds": 0.96,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome",
+   "mode": "background",
+   "op": "click",
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.88,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome",
+   "mode": "background",
+   "op": "type",
+   "status": "pass",
+   "path": "ax-index+keyboard",
+   "detail": "page input value 'typedfe2991'",
+   "seconds": 1.13,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome",
+   "mode": "background",
+   "op": "scroll",
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "page scrollY 0 -> 80",
+   "seconds": 0.87,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome",
+   "mode": "background",
+   "op": "popup",
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "alert shown in state; closed with OK by element_index: yes",
+   "seconds": 0.8,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "background",
+   "op": "screenshot",
+   "status": "pass",
+   "path": "extension",
+   "detail": "1 image(s) (debugger capture of a background tab); heading found",
+   "seconds": 0.28,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "background",
+   "op": "click",
+   "status": "pass",
+   "path": "extension",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.27,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "background",
+   "op": "type",
+   "status": "pass",
+   "path": "extension",
+   "detail": "page input value 'typedfe2991'",
+   "seconds": 0.27,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "background",
+   "op": "scroll",
+   "status": "pass",
+   "path": "extension",
+   "detail": "page scrollY 0 -> 1525",
+   "seconds": 0.28,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "background",
+   "op": "popup",
+   "status": "pass",
+   "path": "extension",
+   "detail": "alert answered and reported in the state; page popup=closed",
+   "seconds": 0.32,
+   "run": "compat-background-20261005-001726-fe299114e7"
+  },
+  {
+   "case": "textedit",
+   "mode": "locked",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "textedit",
+   "mode": "locked",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "textedit",
+   "mode": "locked",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "textedit",
+   "mode": "locked",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "textedit",
+   "mode": "locked",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "preview",
+   "mode": "locked",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "preview",
+   "mode": "locked",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "preview",
+   "mode": "locked",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "preview",
+   "mode": "locked",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "preview",
+   "mode": "locked",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "finder",
+   "mode": "locked",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "finder",
+   "mode": "locked",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "finder",
+   "mode": "locked",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "finder",
+   "mode": "locked",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "finder",
+   "mode": "locked",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome",
+   "mode": "locked",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome",
+   "mode": "locked",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome",
+   "mode": "locked",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome",
+   "mode": "locked",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome",
+   "mode": "locked",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "locked",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "locked",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "locked",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "locked",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "locked",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "electron",
+   "mode": "locked",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "electron",
+   "mode": "locked",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "electron",
+   "mode": "locked",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "electron",
+   "mode": "locked",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "electron",
+   "mode": "locked",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "the Mac is not locked",
+   "seconds": null,
+   "run": "compat-locked-20261005-002245-1058da8312"
+  },
+  {
+   "case": "textedit",
+   "mode": "front",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "textedit",
+   "mode": "front",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "textedit",
+   "mode": "front",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "textedit",
+   "mode": "front",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "textedit",
+   "mode": "front",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "preview",
+   "mode": "front",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "preview",
+   "mode": "front",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "preview",
+   "mode": "front",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "preview",
+   "mode": "front",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "preview",
+   "mode": "front",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "finder",
+   "mode": "front",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "finder",
+   "mode": "front",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "finder",
+   "mode": "front",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "finder",
+   "mode": "front",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "finder",
+   "mode": "front",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome",
+   "mode": "front",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome",
+   "mode": "front",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome",
+   "mode": "front",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome",
+   "mode": "front",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome",
+   "mode": "front",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "front",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "front",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "front",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "front",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "chrome-extension",
+   "mode": "front",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "electron",
+   "mode": "front",
+   "op": "screenshot",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "electron",
+   "mode": "front",
+   "op": "click",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "electron",
+   "mode": "front",
+   "op": "type",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "electron",
+   "mode": "front",
+   "op": "scroll",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  },
+  {
+   "case": "electron",
+   "mode": "front",
+   "op": "popup",
+   "status": "untested",
+   "path": "",
+   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "seconds": null,
+   "run": "compat-front-20261005-002245-a543ee33fa"
+  }
+ ]
+}
