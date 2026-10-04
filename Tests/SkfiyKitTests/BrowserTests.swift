@@ -81,4 +81,23 @@ struct BrowserFormattingTests {
         (Page text truncated; scroll or use browser_scroll to see more.)
         """)
     }
+
+    @Test func downloadsAreHandedOnOnlyWhenComplete() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-download-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let complete = try #require(DownloadInfo(["id": 3, "state": "complete", "path": file.path, "exists": true, "bytes": 1, "total": 1,
+                                                  "started": "2026-10-05T01:38:49.123Z"]))
+        #expect(complete.usable && complete.status == "complete")
+        #expect(abs((complete.started ?? 0) - 1791164329.123) < 0.01)
+        let running = try #require(DownloadInfo(["id": 4, "state": "in_progress", "path": file.path, "exists": true, "bytes": 50, "total": 200]))
+        #expect(!running.usable && running.status.hasPrefix("still downloading 25%"))
+        let gone = try #require(DownloadInfo(["id": 5, "state": "complete", "path": "/nonexistent/x.txt", "exists": true]))
+        #expect(!gone.usable && gone.status.contains("gone"))
+        let cut = try #require(DownloadInfo(["id": 6, "state": "interrupted", "error": "SERVER_CONTENT_LENGTH_MISMATCH"]))
+        #expect(!cut.usable && cut.status.hasPrefix("the transfer broke off"))
+        #expect(DownloadInfo.reason("SERVER_BAD_CONTENT").contains("no such file"))
+        #expect(DownloadInfo.reason("USER_CANCELED") == "cancelled")
+        #expect(DownloadInfo(["state": "complete"]) == nil)
+    }
 }

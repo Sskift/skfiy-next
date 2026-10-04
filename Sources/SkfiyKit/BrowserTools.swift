@@ -12,7 +12,7 @@ final class BrowserTools {
     nonisolated static let toolNames = [
         "browser_tabs", "browser_open", "browser_state", "browser_click", "browser_type",
         "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
-        "browser_upload", "browser_hover", "browser_wait"
+        "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
     ]
     /// Asks the user a yes/no question through the client; nil when it cannot.
     var askUser: ((String) async -> Bool?)?
@@ -60,6 +60,8 @@ final class BrowserTools {
             return try await upload(args)
         case "browser_wait":
             return try await wait(args)
+        case "browser_downloads":
+            return try await downloads(args)
         default:
             throw ToolError("Unknown tool \(name).")
         }
@@ -143,7 +145,18 @@ final class BrowserTools {
     private func upload(_ args: Arguments) async throws -> ToolResult {
         let tabID = try requiredTab(args)
         guard let index = try args.elementIndex("index") else { throw ToolError("Missing required argument \"index\".") }
-        let path = (try args.requiredString("path") as NSString).expandingTildeInPath
+        var requested = (args.string("path") ?? "") as NSString
+        if let downloadID = try args.int("download_id") {
+            // A finished download hands its file straight on.
+            let browser = try await browser(for: args, tabID: tabID)
+            let item = try await send(browser, "download_get", ["id": downloadID]) as? [String: Any] ?? [:]
+            guard let ready = DownloadInfo(item), ready.usable else {
+                throw ToolError("Download \(downloadID) is not a finished file yet (\(DownloadInfo(item)?.status ?? "unknown")). Wait for it with browser_downloads action wait.")
+            }
+            requested = ready.path as NSString
+        }
+        guard requested.length > 0 else { throw ToolError("Pass path, or download_id of a finished download.") }
+        let path = requested.expandingTildeInPath
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
             throw ToolError("No file at \(path).")
@@ -231,6 +244,76 @@ final class BrowserTools {
         return state
     }
 
+    // MARK: Downloads
+
+    /// Downloads skfiy caused in a browser: list them, wait for one to end,
+    /// start one from a URL, or cancel one. Only a complete download whose
+    /// file exists yields a path to hand on.
+    private func downloads(_ args: Arguments) async throws -> ToolResult {
+        let action = (args.string("action") ?? "list").lowercased()
+        let browser = try await browser(for: args, tabID: nil)
+        switch action {
+        case "list":
+            let items = try await downloadList(browser).items
+            guard !items.isEmpty else { return ToolResult(text: "No downloads started by skfiy in \(browser.name) yet (the user's own downloads are not listed).") }
+            return ToolResult(text: (["Downloads skfiy started in \(browser.name), newest first:"] + items.map { "  " + $0.line }).joined(separator: "\n"))
+        case "start":
+            guard let url = args.string("url"), !url.isEmpty else { throw ToolError("start needs a url.") }
+            var params: [String: Any] = ["url": url]
+            if let name = args.string("filename"), !name.isEmpty { params["filename"] = name }
+            let started = try await send(browser, "download_start", params) as? [String: Any] ?? [:]
+            guard let id = started["id"] as? Int else { throw ToolError("The browser did not start the download.") }
+            return try await waitDownload(browser, id: id, timeout: try args.double("timeout") ?? 30, prefix: "Started download \(id) of \(url).")
+        case "cancel":
+            guard let id = try args.int("download_id") else { throw ToolError("cancel needs a download_id.") }
+            let item = DownloadInfo(try await send(browser, "download_cancel", ["id": id]) as? [String: Any] ?? [:])
+            return ToolResult(text: "Download \(id): \(item?.status ?? "unknown"). No file is handed on from a cancelled download.")
+        case "wait":
+            let timeout = try args.double("timeout") ?? 30
+            if let id = try args.int("download_id") {
+                return try await waitDownload(browser, id: id, timeout: timeout, prefix: nil)
+            }
+            // The download caused by skfiy's latest action in a tab: one that
+            // started after it. An older download is not what this wait is about.
+            let started = Date()
+            while Date().timeIntervalSince(started) < min(timeout, 10) {
+                let list = try await downloadList(browser)
+                if let fresh = list.items.first(where: { ($0.started ?? 0) >= list.lastAct - 1 }) {
+                    return try await waitDownload(browser, id: fresh.id, timeout: max(0.5, timeout - Date().timeIntervalSince(started)), prefix: nil)
+                }
+                try await Task.sleep(nanoseconds: 300_000_000)
+            }
+            throw ToolError("No download started after skfiy's last action in this browser. If that was a click on a download link, the browser may have blocked it: Chrome lets a site start one download without a real user gesture, then blocks further automatic downloads. Download the link's URL with action start instead, or check the page.")
+        default:
+            throw ToolError("action must be list, wait, start or cancel.")
+        }
+    }
+
+    private func downloadList(_ browser: ConnectedBrowser) async throws -> (items: [DownloadInfo], lastAct: Double) {
+        let reply = try await send(browser, "downloads", [:]) as? [String: Any] ?? [:]
+        let items = ((reply["downloads"] as? [[String: Any]]) ?? []).compactMap(DownloadInfo.init)
+        return (items, ((reply["lastAct"] as? NSNumber)?.doubleValue ?? 0) / 1000)
+    }
+
+    private func waitDownload(_ browser: ConnectedBrowser, id: Int, timeout: Double, prefix: String?) async throws -> ToolResult {
+        guard timeout.isFinite, (0.5...600).contains(timeout) else { throw ToolError("timeout must be between 0.5 and 600 seconds.") }
+        let started = Date()
+        var item: DownloadInfo?
+        while true {
+            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
+            try Task.checkCancellation()
+            item = DownloadInfo(try await send(browser, "download_get", ["id": id]) as? [String: Any] ?? [:])
+            if let item, item.state != "in_progress" || Date().timeIntervalSince(started) >= timeout { break }
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }
+        guard let item else { throw ToolError("Download \(id) disappeared from the browser's list.") }
+        let lead = prefix.map { $0 + "\n" } ?? ""
+        if item.usable {
+            return ToolResult(text: lead + "Download \(id) finished: \(item.path) (\(item.size)). Hand it on with open_file(path) or browser_upload(download_id: \(id)); the file is only handed on now that it is complete.")
+        }
+        return ToolResult(text: lead + "Download \(id) did not finish: \(item.status). No file is handed on.", isError: true)
+    }
+
     // MARK: Browsers and requests
 
     private func send(_ browser: ConnectedBrowser, _ method: String, _ params: [String: Any], timeout: TimeInterval = 20) async throws -> Any {
@@ -306,6 +389,72 @@ final class BrowserTools {
             text += "\n(No screenshot: this tab is in the background. Pass background_screenshot: true to take one through Chrome's debugger, if the page's look matters: canvas, charts, images.)"
         }
         return ToolResult(text: text, image: image, imageMimeType: "image/jpeg")
+    }
+}
+
+/// A download as the extension reports it.
+struct DownloadInfo: Equatable {
+    let id: Int
+    let url: String
+    let path: String
+    let state: String
+    let error: String?
+    let bytes: Int
+    let total: Int
+    let exists: Bool
+    /// Seconds since 1970 when it started.
+    let started: Double?
+
+    init?(_ item: [String: Any]) {
+        guard let id = item["id"] as? Int, let state = item["state"] as? String else { return nil }
+        self.id = id
+        self.state = state
+        url = item["url"] as? String ?? ""
+        path = item["path"] as? String ?? ""
+        error = item["error"] as? String
+        bytes = (item["bytes"] as? NSNumber)?.intValue ?? 0
+        total = (item["total"] as? NSNumber)?.intValue ?? 0
+        exists = item["exists"] as? Bool ?? false
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        started = (item["started"] as? String).flatMap { iso.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) }?.timeIntervalSince1970
+    }
+
+    /// Complete, and the file is there: only then is it handed on.
+    var usable: Bool { state == "complete" && exists && !path.isEmpty && FileManager.default.fileExists(atPath: path) }
+
+    var size: String { ByteCountFormatter.string(fromByteCount: Int64(max(bytes, total)), countStyle: .file) }
+
+    var status: String {
+        switch state {
+        case "complete": return usable ? "complete" : "complete, but the file is gone from \(path)"
+        case "in_progress":
+            let share = total > 0 ? " \(Int(Double(bytes) / Double(total) * 100))%" : ""
+            return "still downloading\(share) (\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)))"
+        default: return "\(Self.reason(error)) (\(error ?? "interrupted"))"
+        }
+    }
+
+    var line: String {
+        let name = path.isEmpty ? url : path
+        return "download \(id): \(status) — \(name)"
+    }
+
+    /// Chrome's interrupt reasons, in words.
+    static func reason(_ code: String?) -> String {
+        switch code ?? "" {
+        case "USER_CANCELED": return "cancelled"
+        case "NETWORK_FAILED", "NETWORK_TIMEOUT", "NETWORK_DISCONNECTED": return "the network connection failed"
+        case "NETWORK_SERVER_DOWN": return "the server could not be reached"
+        case "SERVER_FAILED", "SERVER_NO_RANGE": return "the server failed"
+        case "SERVER_CONTENT_LENGTH_MISMATCH": return "the transfer broke off (less arrived than the server announced)"
+        case "SERVER_BAD_CONTENT": return "the server has no such file (HTTP error)"
+        case "SERVER_UNAUTHORIZED", "SERVER_FORBIDDEN", "SERVER_CERT_PROBLEM": return "the server refused it"
+        case "FILE_FAILED", "FILE_ACCESS_DENIED", "FILE_NO_SPACE", "FILE_NAME_TOO_LONG", "FILE_TOO_LARGE", "FILE_TRANSIENT_ERROR": return "the file could not be written"
+        case "FILE_VIRUS_INFECTED", "FILE_BLOCKED", "FILE_SECURITY_CHECK_FAILED": return "the browser blocked it"
+        case "CRASH", "USER_SHUTDOWN": return "the browser stopped"
+        default: return "it was interrupted"
+        }
     }
 }
 

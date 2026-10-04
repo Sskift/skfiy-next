@@ -12,7 +12,7 @@ skfiy doctor                     # 检查辅助功能 + 屏幕录制权限
 claude mcp add --scope user skfiy -- ~/.local/bin/skfiy mcp
 ```
 
-浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。以后 `make install` 更新了插件文件，需要在 `chrome://extensions` 的 skfiy 卡片上点一下刷新按钮。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
+浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。以后 `make install` 更新了插件文件，需要在 `chrome://extensions` 的 skfiy 卡片上点一下刷新按钮。插件 0.5.0 新增了 `downloads` 权限（用于 `browser_downloads`），从旧版本更新后同样要刷新一次。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
 
 macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，如 Ghostty / Terminal / iTerm），而不是 skfiy 本身。`skfiy doctor` 会触发系统授权提示；授权后需重启终端与 Claude Code。
 
@@ -64,7 +64,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `locked_use_status` | direct 模式下查看当前 MCP 会话是否启用、系统是否锁定及锁态是否已知，不触发解锁 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
-浏览器插件连上后多出 13 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
+浏览器插件连上后多出 14 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
 | --- | --- |
@@ -76,6 +76,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `browser_navigate` / `browser_close_tab` | 后退/前进/刷新、关闭标签页 |
 | `browser_upload` | 把本地文件填进网页的上传框（不弹文件选择器）；每次上传前都在 Claude Code 里征得你同意，最大 20 MB |
 | `browser_hover` | 在后台标签页里悬停到元素上：页面收到打开悬停菜单所需的指针事件，页面 CSS 的 `:hover` 样式也会生效（其他域名的样式表由插件取回）；之后可按编号点击出现的菜单项 |
+| `browser_downloads` | 只列出 skfiy 引起的下载（在它操作过的标签页里 15 秒内发起的，或由它直接下载的），不列用户自己的下载：状态、本地路径、失败原因（网络中断、服务器无此文件、已取消……）。`wait` 等下载结束，只有完成且文件存在时才给出路径；`start` 直接下载某个网址（同名时浏览器自动改名，结果给出真实文件名）；`cancel` 取消。完成的文件可交给 `open_file(path)` 或 `browser_upload(download_id)`。Chrome 只允许一个网站在没有真实手势时自动下载一次，之后合成点击触发的下载会被拦截，这时 `wait` 会说明并建议用 `start` |
 | `browser_wait` | 不操作页面，等某段文字出现/消失（含所有 frame、标题和输入框的值），不给文字则等页面加载完且半秒内不再变化 |
 
 树的样子（Finder）：

@@ -375,9 +375,10 @@ enum ToolSchemas {
             "Attach a local file to a file input of a tab (by index), without the file picker. This sends the file to the website, so the user is asked to approve every upload first; uploads are refused when the client cannot ask. Up to 20 MB.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
-                "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"]
+                "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"],
+                "download_id": ["type": "integer", "description": "Instead of path: a finished download from browser_downloads"]
             ],
-            required: ["tab_id", "index", "path"]
+            required: ["tab_id", "index"]
         ),
         tool(
             "browser_hover",
@@ -388,6 +389,19 @@ enum ToolSchemas {
                 "y": ["type": "number", "description": "Y in the tab's latest screenshot, when not using index"]
             ],
             required: ["tab_id"]
+        ),
+        tool(
+            "browser_downloads",
+            "Downloads skfiy caused in the browser (from tabs it acted on, or started here); the user's own downloads are never listed. action list shows each with its state, file path and failure reason; wait waits for one (download_id, else the newest) to end and returns its local path only when it is complete and the file exists; start downloads a URL (Chrome renames on a name clash, the result gives the real name); cancel stops one. Hand a finished file on with open_file(path) or browser_upload(download_id).",
+            properties: [
+                "action": ["type": "string", "enum": ["list", "wait", "start", "cancel"], "description": "Defaults to list"],
+                "download_id": ["type": "integer", "description": "Download id from list, wait or start"],
+                "url": ["type": "string", "description": "For start: the URL to download"],
+                "filename": ["type": "string", "description": "For start: optional file name inside the browser's download folder"],
+                "timeout": ["type": "number", "description": "For wait and start: seconds to wait at most (0.5-600). Defaults to 30"],
+                "browser": browserName
+            ],
+            required: []
         ),
         tool(
             "browser_wait",

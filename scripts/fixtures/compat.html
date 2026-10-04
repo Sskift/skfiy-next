@@ -20,6 +20,7 @@
   <button id="alert" onclick="showAlert()">Show alert</button>
   <button id="later" onclick="later()">Load later</button>
   <div><label>Compat input <input id="input" aria-label="Compat input" oninput="typed()"></label></div>
+  <div><label>Upload file <input id="upload" type="file" aria-label="Upload file" onchange="uploaded(this)"></label></div>
   <div id="echo">Echo: </div>
   <div id="popup">Popup: none</div>
   <div id="scrolled">Scrolled: 0</div>
@@ -51,6 +52,14 @@
     state.value = document.getElementById('input').value;
     document.getElementById('echo').textContent = 'Echo: ' + state.value;
     report('input');
+  }
+  function uploaded(input) {
+    const file = input.files[0];
+    if (!file) return;
+    file.slice(0, 200).text().then((head) => {
+      state.upload = { name: file.name, size: file.size, head };
+      report('upload');
+    });
   }
   function showAlert() {
     state.popup = 'open';

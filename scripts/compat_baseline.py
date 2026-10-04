@@ -623,6 +623,50 @@ class Finder(Case):
 
 # ------------------------------------------------------------ web (Chrome, Electron)
 
+DOWNLOADS = WORK / 'downloads'
+
+
+def chrome_pid():
+    out = sh('pgrep', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', check=False).split()
+    return int(out[0]) if out else None
+
+
+def launch_chrome(binary, url='about:blank', restart=False):
+    """Chrome for Testing with its own profile, the current extension files,
+    and downloads going to /tmp/skfiy-compat/downloads (never the user's
+    Downloads folder). restart=True quits it first so new extension files load."""
+    if restart and chrome_pid():
+        subprocess.run(['pkill', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'])
+        wait_until(lambda: not chrome_pid(), timeout=10)
+    if chrome_pid():
+        return chrome_pid()
+    profile = WORK / 'chrome-profile'
+    extension = WORK / 'extension'
+    # Chrome keeps running a cached service worker for an unpacked extension;
+    # clearing the test profile's cache makes it load the current files.
+    shutil.rmtree(profile / 'Default/Service Worker', ignore_errors=True)
+    shutil.rmtree(extension, ignore_errors=True)
+    shutil.copytree(ROOT / 'browser-extension', extension)
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
+    preferences = profile / 'Default/Preferences'
+    preferences.parent.mkdir(parents=True, exist_ok=True)
+    prefs = json.loads(preferences.read_text()) if preferences.exists() else {}
+    prefs.setdefault('download', {}).update({'default_directory': str(DOWNLOADS), 'prompt_for_download': False, 'directory_upgrade': True})
+    prefs.setdefault('savefile', {})['default_directory'] = str(DOWNLOADS)
+    preferences.write_text(json.dumps(prefs))
+    host = WORK / 'bin/skfiy-host'
+    host.unlink(missing_ok=True)
+    shutil.copy2(binary, host)
+    sh(host, 'install-browser-bridge', '--user-data-dir', profile)
+    sh(TOOLS['Launch'] if TOOLS else BIN_LAUNCH, chrome_app(), f'--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
+       '--disable-search-engine-choice-screen', '--disable-features=DisableLoadExtensionCommandLineSwitch',
+       f'--load-extension={extension}', url, timeout=30)
+    return wait_until(chrome_pid, timeout=10)
+
+
+BIN_LAUNCH = WORK / 'bin/Launch'
+
+
 def chrome_app():
     found = sorted((Path.home() / '.cache/skfiy-test').glob(CFT_GLOB))
     return found[-1] if found else None
@@ -718,16 +762,7 @@ class Chrome(WebApp):
         extension = WORK / 'extension'
         if not self.running():
             shutil.rmtree(profile, ignore_errors=True)
-            shutil.rmtree(extension, ignore_errors=True)
-            shutil.copytree(ROOT / 'browser-extension', extension)
-            # The bridge host runs from a copy, so rebuilding skfiy never swaps it mid-run.
-            host = WORK / 'bin/skfiy-host'
-            host.unlink(missing_ok=True)
-            shutil.copy2(self.run.binary, host)
-            sh(host, 'install-browser-bridge', '--user-data-dir', profile)
-            sh(TOOLS['Launch'], chrome_app(), f'--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
-               '--disable-search-engine-choice-screen', '--disable-features=DisableLoadExtensionCommandLineSwitch',
-               f'--load-extension={extension}', f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}', timeout=30)
+            launch_chrome(self.run.binary, f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
         else:
             sh('open', '-g', '-a', chrome_app(), f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
         require(self.wait_page(lambda s: s.get('run') == self.run_id, timeout=20), 'the compat page did not load in Chrome')

@@ -118,7 +118,12 @@ def make_handler(root, events):
                          ('broken', f'/download/broken?name=broken-{run}.bin'),
                          ('missing', f'/download/missing?name=missing-{run}.txt')]
                 items = ''.join(f'<li><a id="{key}" href="{href}" download>Download {key}</a></li>' for key, href in links)
-                body = f'<!doctype html><meta charset="utf-8"><title>skfiy downloads {run}</title><h1>Downloads</h1><ul>{items}</ul>'.encode()
+                # ?auto=S: the page downloads a file by itself after S seconds, as a
+                # page (or the user) would, without any skfiy action just before.
+                auto = query.get('auto')
+                script = (f'<script>setTimeout(() => {{ const a = document.createElement("a"); a.href = "/download/ok?name=unrelated-{run}.txt";'
+                          f' a.download = ""; document.body.appendChild(a); a.click(); }}, {float(auto) * 1000:.0f});</script>') if auto else ''
+                body = f'<!doctype html><meta charset="utf-8"><title>skfiy downloads {run}</title><h1>Downloads</h1><ul>{items}</ul>{script}'.encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.send_header('Content-Length', str(len(body)))

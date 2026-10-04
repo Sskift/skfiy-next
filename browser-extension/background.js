@@ -84,6 +84,102 @@ async function hookDialogs(tabId) {
   }).catch(() => {});
 }
 
+// --------------------------------------------------------------- downloads
+// Only downloads skfiy caused are visible to it: started by download_start,
+// or from a tab within 15 s of a skfiy action there, from that tab's page.
+// The user's own downloads are never listed.
+
+const ACT_WINDOW_MS = 15000;
+
+async function sessionList(key) {
+  const stored = await chrome.storage.session.get(key);
+  return stored[key] || [];
+}
+
+async function noteAct(tab) {
+  if (!tab || !tab.url) return;
+  const now = Date.now();
+  const acts = (await sessionList('recentActs')).filter((a) => now - a.time < ACT_WINDOW_MS);
+  acts.push({ tabId: tab.id, url: tab.url, time: now });
+  await chrome.storage.session.set({ recentActs: acts });
+}
+
+async function markOwnDownload(id) {
+  const ids = new Set(await sessionList('ownDownloads'));
+  ids.add(id);
+  await chrome.storage.session.set({ ownDownloads: [...ids] });
+}
+
+function origin(url) {
+  try { return new URL(url).origin; } catch { return ''; }
+}
+
+chrome.downloads.onCreated.addListener(async (item) => {
+  const now = Date.now();
+  const starts = await sessionList('pendingStarts');
+  if (starts.includes(item.url)) {
+    await chrome.storage.session.set({ pendingStarts: starts.filter((url) => url !== item.url) });
+    return markOwnDownload(item.id);
+  }
+  const acts = await sessionList('recentActs');
+  const from = item.referrer || '';
+  const caused = acts.some((a) => now - a.time < ACT_WINDOW_MS
+    && (from === a.url || (from && origin(from) === origin(a.url)) || (!from && origin(item.url) === origin(a.url))));
+  if (caused) await markOwnDownload(item.id);
+});
+
+function describeDownload(item) {
+  return {
+    id: item.id, url: item.finalUrl || item.url, path: item.filename || '', state: item.state, error: item.error || null,
+    bytes: item.bytesReceived, total: item.totalBytes, exists: item.exists, danger: item.danger, mime: item.mime,
+    paused: item.paused, started: item.startTime, ended: item.endTime || null
+  };
+}
+
+async function ownDownload(id) {
+  const ids = new Set(await sessionList('ownDownloads'));
+  if (!ids.has(Number(id))) throw new Error(`download ${id} was not started by skfiy (only skfiy's own downloads are visible)`);
+  const [item] = await chrome.downloads.search({ id: Number(id) });
+  if (!item) throw new Error(`no download ${id}; it was removed from the browser's list`);
+  return item;
+}
+
+async function listDownloads() {
+  const ids = await sessionList('ownDownloads');
+  const items = [];
+  for (const id of ids) {
+    const [item] = await chrome.downloads.search({ id });
+    if (item) items.push(describeDownload(item));
+  }
+  items.sort((a, b) => Date.parse(b.started) - Date.parse(a.started));
+  // When skfiy last acted in a tab: a download it caused starts after that.
+  const acts = await sessionList('recentActs');
+  const lastAct = acts.length ? Math.max(...acts.map((a) => a.time)) : 0;
+  return { downloads: items.slice(0, 30), lastAct };
+}
+
+async function getDownload({ id }) {
+  return describeDownload(await ownDownload(id));
+}
+
+async function startDownload({ url, filename }) {
+  if (!url) throw new Error('url is required');
+  const starts = await sessionList('pendingStarts');
+  await chrome.storage.session.set({ pendingStarts: [...starts, url] });
+  const options = { url, conflictAction: 'uniquify', saveAs: false };
+  if (filename) options.filename = filename;
+  const id = await chrome.downloads.download(options);
+  await markOwnDownload(id);
+  return { id };
+}
+
+async function cancelDownload({ id }) {
+  const item = await ownDownload(id);
+  if (item.state === 'in_progress') await chrome.downloads.cancel(item.id);
+  const [after] = await chrome.downloads.search({ id: item.id });
+  return describeDownload(after || item);
+}
+
 // ---------------------------------------------------------------- requests
 
 async function handle(method, params) {
@@ -96,6 +192,10 @@ async function handle(method, params) {
     case 'screenshot': return screenshot(params);
     case 'act': return act(params);
     case 'probe': return probe(params);
+    case 'downloads': return listDownloads(params);
+    case 'download_get': return getDownload(params);
+    case 'download_start': return startDownload(params);
+    case 'download_cancel': return cancelDownload(params);
     default: throw new Error(`unknown method ${method}`);
   }
 }
@@ -131,6 +231,7 @@ async function skfiyGroup(windowId) {
 async function openTab({ url, tab_id: tabId }) {
   if (!url) throw new Error('url is required');
   if (tabId != null) {
+    await noteAct({ id: Number(tabId), url });
     const tab = await chrome.tabs.update(Number(tabId), { url });
     await waitForLoad(tab.id);
     return { tabId: tab.id };
@@ -140,6 +241,7 @@ async function openTab({ url, tab_id: tabId }) {
   const tab = await chrome.tabs.create({ url: 'about:blank', active: false, ...(window ? { windowId: window.id } : {}) });
   await markOwnTab(tab.id);
   await chrome.tabs.update(tab.id, { url });
+  await noteAct({ id: tab.id, url });
   try {
     const existing = await skfiyGroup(tab.windowId);
     const groupId = await chrome.tabs.group({ tabIds: [tab.id], ...(existing != null ? { groupId: existing } : {}) });
@@ -277,6 +379,7 @@ function pageProbe(text) {
 
 async function act(params) {
   const tab = await tabById(params.tab_id);
+  await noteAct(tab);
   const { frameId, local } = locateIndex(tab.id, params.index);
   if ((await ownTabs()).has(tab.id)) await hookDialogs(tab.id);
   if (params.trusted && frameId !== 0) throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
