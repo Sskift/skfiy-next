@@ -294,21 +294,24 @@ async function run(tabId, func, args, frameId = 0) {
 // their own elements, which are numbered after the page's.
 const frameIndex = new Map();
 
-async function tabState({ tab_id: tabId, max_chars: maxChars }) {
+async function tabState({ tab_id: tabId, max_chars: maxChars, locate }) {
   const tab = await tabById(tabId);
   await waitForLoad(tab.id, 5000);
   const frames = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000], world: 'ISOLATED'
+    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate)], world: 'ISOLATED'
   });
   const top = frames.find((f) => f.frameId === 0);
   if (!top || !top.result) throw new Error('the page did not answer');
   const map = [];
   const lines = [];
   const dialogs = [];
+  const items = [];
   let truncated = false;
   for (const { frameId, result } of [top, ...frames.filter((f) => f.frameId !== 0)]) {
     if (!result || !result.ownFrame) continue;
     const base = map.length;
+    // Positions are known for the top frame (and same-origin frames inside it) only.
+    if (frameId === 0) for (const item of result.items || []) items.push(item.index == null ? item : { ...item, index: item.index + base });
     if (frameId !== 0) lines.push(`--- frame ${result.url} ---`);
     for (const line of result.lines) lines.push(line.replace(/^\[(\d+)\]/, (_, n) => `[${Number(n) + base}]`));
     for (let local = 0; local < result.count; local++) map.push({ frameId, local });
@@ -319,7 +322,8 @@ async function tabState({ tab_id: tabId, max_chars: maxChars }) {
   const notes = dialogs.map((d) => d.type === 'alert'
     ? `(page dialog) alert ${JSON.stringify(d.message)}, dismissed`
     : `(page dialog) ${d.type} ${JSON.stringify(d.message)}, answered ${JSON.stringify(d.answer)}`);
-  return { tabId: tab.id, title: tab.title, url: tab.url, active: tab.active, ...top.result, lines: [...notes, ...lines], truncated };
+  return { tabId: tab.id, title: tab.title, url: tab.url, active: tab.active, ...top.result, lines: [...notes, ...lines], truncated,
+    items: locate ? items : undefined };
 }
 
 /// The frame and frame-local index of a page element index.
@@ -496,13 +500,17 @@ async function trustedAct(tabId, params) {
 // Both run in the extension's isolated world of the page. They must be
 // self-contained: executeScript serializes only the function body.
 
-function pageSnapshot(maxChars) {
+function pageSnapshot(maxChars, locate) {
   const state = (globalThis.__skfiy = globalThis.__skfiy || { elements: [] });
   state.elements = [];
   const lines = [];
   let chars = 0;
   let truncated = false;
   let text = '';
+  // With locate: every element and block of text with its box (viewport CSS
+  // pixels of the top frame) and the labels of the sections it is in.
+  const items = [];
+  let blockNodes = [];
 
   const INTERACTIVE_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemcheckbox',
     'menuitemradio', 'option', 'switch', 'textbox', 'combobox', 'searchbox', 'slider', 'spinbutton', 'treeitem']);
@@ -514,10 +522,58 @@ function pageSnapshot(maxChars) {
     lines.push(line);
     chars += line.length + 1;
   };
+  const offset = (doc) => {
+    let x = 0, y = 0;
+    let view = doc.defaultView;
+    while (view && view !== window && view.frameElement) {
+      const r = view.frameElement.getBoundingClientRect();
+      x += r.left; y += r.top;
+      view = view.frameElement.ownerDocument.defaultView;
+    }
+    return [x, y];
+  };
+  const box = (r, doc) => {
+    const [x, y] = offset(doc);
+    return [Math.round(r.left + x), Math.round(r.top + y), Math.round(r.width), Math.round(r.height)];
+  };
+  const sectionsOf = (start) => {
+    const out = [];
+    let node = start;
+    while (node && out.length < 5) {
+      node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
+      if (!node || node.tagName === 'BODY' || node.tagName === 'HTML') break;
+      let label = node.getAttribute('aria-label') || '';
+      const labelledBy = node.getAttribute('aria-labelledby');
+      if (!label && labelledBy) {
+        label = labelledBy.split(/\s+/).map((id) => node.ownerDocument.getElementById(id)).filter(Boolean).map((n) => n.innerText).join(' ');
+      }
+      if (!label) {
+        const heading = node.querySelector(':scope > legend, :scope > summary, :scope > [role=heading], :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > header > h1, :scope > header > h2, :scope > header > h3, :scope > header > h4');
+        if (heading && !heading.contains(start)) label = heading.innerText || '';
+      }
+      if (label.trim()) out.push(clip(label, 60));
+    }
+    return out;
+  };
+  const kindOf = (el) => {
+    const tag = el.tagName.toLowerCase();
+    if (el.isContentEditable && tag !== 'input' && tag !== 'textarea') return 'editable';
+    return el.getAttribute('role') || (tag === 'input' ? (el.type || 'text') : tag === 'a' ? 'link' : tag);
+  };
   const flush = () => {
     const clean = text.replace(/\s+/g, ' ').trim();
     if (clean) push(clean);
+    if (locate && clean && blockNodes.length && items.length < 3000) {
+      const first = blockNodes[0], last = blockNodes[blockNodes.length - 1];
+      const range = first.ownerDocument.createRange();
+      range.setStart(first, 0);
+      try { range.setEnd(last, last.length); } catch { range.setEnd(first, first.length); }
+      const heading = clean.startsWith('#');
+      items.push({ kind: heading ? 'heading' : 'statictext', label: clip(clean.replace(/^#+ /, ''), 200),
+        rect: box(range.getBoundingClientRect(), first.ownerDocument), sections: sectionsOf(first.parentElement) });
+    }
     text = '';
+    blockNodes = [];
   };
   const clip = (value, n) => {
     const v = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
@@ -600,6 +656,7 @@ function pageSnapshot(maxChars) {
     if (truncated) return;
     if (node.nodeType === Node.TEXT_NODE) {
       text += node.textContent;
+      if (locate && node.textContent.trim()) blockNodes.push(node);
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
@@ -613,6 +670,10 @@ function pageSnapshot(maxChars) {
       const index = state.elements.length;
       state.elements.push(el);
       push(describe(el, index));
+      if (locate && items.length < 3000) {
+        items.push({ index, kind: kindOf(el), label: clip(labelOf(el), 120), rect: box(el.getBoundingClientRect(), el.ownerDocument),
+          sections: sectionsOf(el) });
+      }
       if (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return;
       // Nested controls (a button inside a link) still get their own index.
       for (const child of el.children) {
@@ -651,6 +712,7 @@ function pageSnapshot(maxChars) {
   if (root) root.removeAttribute('data-skfiy-dialogs');
   return {
     count: state.elements.length,
+    items: locate ? items : undefined,
     ownFrame,
     url: location.href,
     dialogs,

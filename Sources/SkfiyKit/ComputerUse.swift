@@ -103,7 +103,7 @@ public final class ComputerUse {
     nonisolated public static let toolNames = [
         "list_apps", "get_desktop_status", "get_app_state", "get_app_capabilities", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "file_dialog", "read_clipboard", "wait_for", "hand_over", "locked_use_status", "locked_use_end"
+        "file_dialog", "read_clipboard", "wait_for", "locate", "hand_over", "locked_use_status", "locked_use_end"
     ] + BrowserTools.toolNames
 
     private let browser = BrowserTools()
@@ -147,7 +147,25 @@ public final class ComputerUse {
     }
 
     private func act(_ name: String, _ raw: [String: Any]) async -> ToolResult {
-        Self.verifiableTools.contains(name) ? await performVerified(name, raw) : await perform(name, raw)
+        var raw = raw
+        var note: String?
+        // A target is resolved against the UI as it is now, then acted on by
+        // element_index or x/y like any other call.
+        if raw["target"] != nil, !name.hasPrefix("browser_"), name != "locate", !EmergencyStop.isStopped {
+            do {
+                if let resolved = try await resolveTarget(name, raw) {
+                    raw = resolved.raw
+                    note = resolved.note
+                }
+            } catch let error as ToolError {
+                return ToolResult(text: error.description, isError: true)
+            } catch {
+                return ToolResult(text: "\(error)", isError: true)
+            }
+        }
+        var result = Self.verifiableTools.contains(name) ? await performVerified(name, raw) : await perform(name, raw)
+        if let note { result.text = note + "\n" + result.text }
+        return result
     }
 
     /// Where actions are recorded; nil records nothing.
@@ -157,7 +175,7 @@ public final class ComputerUse {
     private var lastInputWasSecret = false
     private static let nativeSessionTools: Set<String> = [
         "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag",
-        "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for"
+        "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for", "locate"
     ]
 
     func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
@@ -179,6 +197,7 @@ public final class ComputerUse {
                 // No foreground preservation, AX fallback, menu emulation, or
                 // clipboard logic is entered by this strictly scoped path.
                 if name == "scroll" { try refuseProtectedTarget(args) }
+                if name == "locate" { return try await locate(args) }
                 return try await directLockedUse.perform(name, args)
             }
             switch name {
@@ -205,6 +224,7 @@ public final class ComputerUse {
                 return try await runInFront(args)
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
+            case "locate": return try await locate(args)
             case "read_clipboard": return try await readClipboard(args)
             case "hand_over": return try await handOver(args)
             case "file_dialog": return try await keepingFront(args) { try await self.fileDialog(args) }
@@ -1442,7 +1462,7 @@ public final class ComputerUse {
     func performSecondaryAction(_ args: Arguments) async throws -> ToolResult {
         let (app, session) = try target(args)
         guard let index = try args.elementIndex() else {
-            throw ToolError("Missing required argument \"element_index\".")
+            throw ToolError("Missing required argument \"element_index\" (or a target).")
         }
         let element = try session.element(index)
         let requested = try args.requiredString("action").trimmingCharacters(in: .whitespaces)
@@ -1472,7 +1492,7 @@ public final class ComputerUse {
     func setValue(_ args: Arguments) async throws -> ToolResult {
         let (app, session) = try target(args)
         guard let index = try args.elementIndex() else {
-            throw ToolError("Missing required argument \"element_index\".")
+            throw ToolError("Missing required argument \"element_index\" (or a target).")
         }
         let element = try session.element(index)
         let text = try args.requiredText("value")
@@ -1517,7 +1537,7 @@ public final class ComputerUse {
     func selectText(_ args: Arguments) async throws -> ToolResult {
         let (app, session) = try target(args)
         guard let index = try args.elementIndex() else {
-            throw ToolError("Missing required argument \"element_index\".")
+            throw ToolError("Missing required argument \"element_index\" (or a target).")
         }
         let element = try session.element(index)
         let target = try args.requiredText("text")
@@ -1803,7 +1823,7 @@ public final class ComputerUse {
     }
 
     /// Resolves the `app` argument to a running app with a session.
-    private func target(_ args: Arguments) throws -> (NSRunningApplication, AppSession) {
+    func target(_ args: Arguments) throws -> (NSRunningApplication, AppSession) {
         try requireAccessibility()
         let query = try args.requiredString("app")
         guard case .running(let app) = try directory.resolve(query) else {

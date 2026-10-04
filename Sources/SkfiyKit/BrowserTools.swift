@@ -10,7 +10,7 @@ final class BrowserTools {
     private var screenshotScale: [Int: Double] = [:]
 
     nonisolated static let toolNames = [
-        "browser_tabs", "browser_open", "browser_state", "browser_click", "browser_type",
+        "browser_tabs", "browser_open", "browser_state", "browser_locate", "browser_click", "browser_type",
         "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
         "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
     ]
@@ -43,6 +43,12 @@ final class BrowserTools {
             let browser = try await browser(for: args, tabID: tabID)
             return try await state(browser, tabID: tabID, prefix: nil, screenshot: (args.values["screenshot"] as? Bool) ?? true,
                                    background: (args.values["background_screenshot"] as? Bool) ?? false)
+        case "browser_locate":
+            let tabID = try requiredTab(args)
+            guard let locator = try Locator.parse(args.values["target"]) else { throw ToolError("Missing required argument \"target\".") }
+            let browser = try await browser(for: args, tabID: tabID)
+            let found = try await locate(locator, browser: browser, tabID: tabID)
+            return ToolResult(text: describe(found, locator: locator, tabID: tabID, acting: false), isError: found.matches.isEmpty)
         case "browser_navigate":
             let tabID = try requiredTab(args)
             let action = try args.requiredString("action")
@@ -78,11 +84,17 @@ final class BrowserTools {
         let tabID = try requiredTab(args)
         var params: [String: Any] = ["tab_id": tabID]
         if let index = try args.elementIndex("index") { params["index"] = index }
+        var located: String?
+        if let locator = try Locator.parse(args.values["target"]) {
+            let resolved = try await resolve(locator, args: args, tabID: tabID, pointAllowed: ["browser_click", "browser_hover"].contains(name))
+            params.merge(resolved.params) { _, new in new }
+            located = resolved.note
+        }
         if (args.values["trusted"] as? Bool) == true { params["trusted"] = true }
         switch name {
         case "browser_hover":
             params["action"] = "hover"
-            if params["index"] == nil {
+            if params["index"] == nil, params["x"] == nil {
                 guard let x = try args.double("x"), let y = try args.double("y") else {
                     throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
                 }
@@ -102,7 +114,7 @@ final class BrowserTools {
                 params["dialog"] = params["dialog"] ?? "accept"
                 params["prompt_text"] = text
             }
-            if params["index"] == nil {
+            if params["index"] == nil, params["x"] == nil {
                 guard let x = try args.double("x"), let y = try args.double("y") else {
                     throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
                 }
@@ -137,14 +149,18 @@ final class BrowserTools {
         let result = try await send(browser, "act", params, timeout: 30) as? [String: Any] ?? [:]
         lastInputWasSecret = result["secret"] as? Bool == true
         let message = (result["message"] as? String) ?? "Done"
-        return try await state(browser, tabID: tabID, prefix: message + ".", screenshot: false)
+        return try await state(browser, tabID: tabID, prefix: (located.map { $0 + "\n" } ?? "") + message + ".", screenshot: false)
     }
 
     /// Sends a file to the page in pieces and attaches it to a file input,
     /// once the user has approved sending it to that site.
     private func upload(_ args: Arguments) async throws -> ToolResult {
         let tabID = try requiredTab(args)
-        guard let index = try args.elementIndex("index") else { throw ToolError("Missing required argument \"index\".") }
+        var index = try args.elementIndex("index")
+        if let locator = try Locator.parse(args.values["target"]) {
+            index = try await resolve(locator, args: args, tabID: tabID, pointAllowed: false).params["index"] as? Int
+        }
+        guard let index else { throw ToolError("Missing required argument \"index\" (or a target).") }
         var requested = (args.string("path") ?? "") as NSString
         if let downloadID = try args.int("download_id") {
             // A finished download hands its file straight on.
@@ -525,4 +541,92 @@ func fitForModel(_ data: Data) -> (data: Data, width: Int, height: Int)? {
     context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
     guard let scaled = context.makeImage(), let encoded = try? encode(scaled, format: "jpeg") else { return nil }
     return (encoded, width, height)
+}
+
+// MARK: - Locating
+
+extension BrowserTools {
+    struct Found {
+        var viewport: CGRect
+        var candidates: [LocatorCandidate]
+        var matches: [LocatorMatch]
+        var chosen: LocatorMatch?
+        var elsewhere: [LocatorMatch]
+    }
+
+    /// The tab's elements and text blocks with their boxes, read now (which
+    /// refreshes element indices, as browser_state does), matched.
+    func locate(_ locator: Locator, browser: ConnectedBrowser, tabID: Int) async throws -> Found {
+        let page = try await send(browser, "state", ["tab_id": tabID, "locate": true, "max_chars": 200_000]) as? [String: Any] ?? [:]
+        guard let raw = page["items"] as? [[String: Any]] else {
+            throw ToolError("The skfiy extension in this browser is older than skfiy and cannot locate. Reload it: chrome://extensions → skfiy browser bridge → reload.")
+        }
+        let viewport = page["viewport"] as? [String: Any]
+        let bounds = CGRect(x: 0, y: 0, width: (viewport?["width"] as? NSNumber)?.doubleValue ?? 0, height: (viewport?["height"] as? NSNumber)?.doubleValue ?? 0)
+        let candidates = raw.compactMap { item -> LocatorCandidate? in
+            guard let rect = (item["rect"] as? [NSNumber])?.map(\.doubleValue), rect.count == 4, rect[2] >= 1 || rect[3] >= 1 else { return nil }
+            return LocatorCandidate(label: item["label"] as? String ?? "", role: item["kind"] as? String ?? "",
+                                    frame: CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]),
+                                    containers: item["sections"] as? [String] ?? [], index: (item["index"] as? NSNumber)?.intValue)
+        }
+        let scale = screenshotScale[tabID]
+        let pixelArea = scale.map { scale in { (rect: CGRect) in CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale) } }
+        if case .pixels? = locator.area, scale == nil {
+            throw ToolError("A region in pixels needs a screenshot of this tab first (browser_state); or name the region, e.g. bottom-right.")
+        }
+        let matches = locator.matches(candidates, bounds: bounds, pixelArea: pixelArea)
+        let elsewhere = matches.isEmpty ? (locator.loosened.map { $0.matches(candidates, bounds: bounds) } ?? []) : []
+        return Found(viewport: bounds, candidates: candidates, matches: matches, chosen: locator.unique(matches), elsewhere: elsewhere)
+    }
+
+    func line(_ match: LocatorMatch, tabID: Int, viewport: CGRect) -> String {
+        let candidate = match.candidate
+        var parts = [candidate.index.map { "[\($0)]" }, candidate.role + (candidate.label.isEmpty ? "" : " \(quote(candidate.label, limit: 60))")].compactMap { $0 }
+        let inView = viewport.contains(CGPoint(x: candidate.frame.midX, y: candidate.frame.midY))
+        parts.append(inView ? match.area : candidate.frame.midY < viewport.minY ? "above the visible part" : "out of view (scroll)")
+        if inView, let scale = screenshotScale[tabID], scale > 0 {
+            parts.append("x=\(Int((candidate.frame.midX / scale).rounded())) y=\(Int((candidate.frame.midY / scale).rounded()))")
+        }
+        if let section = candidate.containers.first { parts.append("in \(quote(section, limit: 40))") }
+        if let distance = match.distance { parts.append("\(Int(distance.rounded())) px from the near text") }
+        return parts.joined(separator: " ")
+    }
+
+    func describe(_ found: Found, locator: Locator, tabID: Int, acting: Bool) -> String {
+        if found.matches.isEmpty {
+            var text = "Nothing in tab \(tabID) matches \(locator.summary) (the page as it is now)" + (acting ? "; nothing was done." : ".")
+            if !found.elsewhere.isEmpty {
+                text += " Matching the name/kind alone, elsewhere:\n" + found.elsewhere.prefix(10).map { "  " + line($0, tabID: tabID, viewport: found.viewport) }.joined(separator: "\n")
+            }
+            return text
+        }
+        let listed = found.matches.prefix(15).enumerated().map { "  \($0.offset + 1). " + line($0.element, tabID: tabID, viewport: found.viewport) }
+        if found.chosen == nil {
+            return "\(found.matches.count) candidates match \(locator.summary) in tab \(tabID); skfiy does not choose between them" + (acting ? ", so nothing was done" : "")
+                + ". Narrow the target with region, within, near, below or right_of, or act on one by its index (refreshed just now):\n" + listed.joined(separator: "\n")
+        }
+        return "\(found.matches.count == 1 ? "1 match" : "\(found.matches.count) matches, one clearly meant") for \(locator.summary) in tab \(tabID) (indices refreshed just now):\n"
+            + listed.joined(separator: "\n")
+    }
+
+    /// The index (or, for text without one, the point in viewport CSS
+    /// pixels) a target means now; otherwise why not.
+    func resolve(_ locator: Locator, args: Arguments, tabID: Int, pointAllowed: Bool) async throws -> (params: [String: Any], note: String) {
+        if ["index", "x", "y"].contains(where: { args.values[$0] != nil && !(args.values[$0] is NSNull) }) {
+            throw ToolError("Pass either target or index / x,y — not both.")
+        }
+        let browser = try await browser(for: args, tabID: tabID)
+        let found = try await locate(locator, browser: browser, tabID: tabID)
+        guard let chosen = found.chosen else { throw ToolError(describe(found, locator: locator, tabID: tabID, acting: true)) }
+        let note = "Target \(locator.summary) → " + line(chosen, tabID: tabID, viewport: found.viewport) + " (found just now)."
+        if let index = chosen.candidate.index { return (["index": index], note) }
+        let frame = chosen.candidate.frame
+        guard pointAllowed else {
+            throw ToolError("\(locator.summary) matched text, not an element that takes this action (\(line(chosen, tabID: tabID, viewport: found.viewport))). Describe the field or control itself, e.g. with role and near/right_of that text; nothing was done.")
+        }
+        guard found.viewport.contains(CGPoint(x: frame.midX, y: frame.midY)) else {
+            throw ToolError("\(locator.summary) matched text outside the visible part of the page (\(line(chosen, tabID: tabID, viewport: found.viewport))); scroll to it first. Nothing was done.")
+        }
+        return (["x": Double(frame.midX.rounded()), "y": Double(frame.midY.rounded())], note)
+    }
 }

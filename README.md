@@ -12,7 +12,7 @@ skfiy doctor                     # 检查辅助功能 + 屏幕录制权限
 claude mcp add --scope user skfiy -- ~/.local/bin/skfiy mcp
 ```
 
-浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。以后 `make install` 更新了插件文件，需要在 `chrome://extensions` 的 skfiy 卡片上点一下刷新按钮。插件 0.5.0 新增了 `downloads` 权限（用于 `browser_downloads`），从旧版本更新后同样要刷新一次。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
+浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。以后 `make install` 更新了插件文件，需要在 `chrome://extensions` 的 skfiy 卡片上点一下刷新按钮。插件 0.5.0 新增了 `downloads` 权限（用于 `browser_downloads`），0.6.0 起支持按描述定位（`browser_locate`、`target`），从旧版本更新后同样要刷新一次。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
 
 macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，如 Ghostty / Terminal / iTerm），而不是 skfiy 本身。`skfiy doctor` 会触发系统授权提示；授权后需重启终端与 Claude Code。
 
@@ -44,6 +44,8 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `get_app_capabilities` | 操作前先问：这个应用此刻能用哪些路径——辅助功能树、截图、OCR、坐标指针、键盘、浏览器扩展、前台、文件面板、剪贴板——各自不可用的原因或限制，以及现在能用的工具。随锁态、窗口数量、权限和浏览器连接变化；带版本号并指出与上次查询相比变了什么。只读，不启动应用、不发送任何输入 |
 | `get_app_state` | 应用窗口的截图 + 带编号的辅助功能树；未运行时在后台启动；可用 `window` 查看其他窗口（不会把它提到前面），用 `find` 只列出含某段文字的元素（大窗口省 token）；也列出应用在菜单栏右侧的状态图标。每个窗口带窗口 id，`window` 可传 id；同名窗口必须用 id 区分；操作可带 `window_id`，若最新截图不是该窗口、或窗口已移动/关闭/被重建，则拒绝且不发送输入。元素的悬停提示（tooltip）直接写在树里（`help="…"`），不用悬停。不公开辅助功能的窗口会自动识别截图里的文字（本机 Vision 框架，中英日韩），列出每段文字和可直接用于 `click` 的 x/y；`ocr: true` 可在其他窗口里识别画布、图片中的文字 |
 | `click` | 按元素编号或截图像素坐标点击；支持右键、中键、双击/三击、修饰键 |
+| `target`（参数） | `click`、`scroll`、`set_value`、`perform_secondary_action`、`select_text` 和网页的 `browser_click` / `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` / `browser_hover` / `browser_upload` 可以不给编号或坐标，而是描述控件：名称、类型（button、text field…）、窗口区域（`bottom-right`、`右下角`…或截图像素矩形）、所在分组（`within`：分组框、fieldset、标题下的区块）、邻近文字（`near` / `below` / `right_of`）。执行时按当下的界面重新查找（解锁用辅助功能树，树里没有时补上截图识别文字；锁屏用当场截图的识别文字及其位置；网页用页面元素），恰好一个时才操作；几个同样符合时不挑，什么都不做并列出候选 |
+| `locate` | 只查找不操作：按同样的描述列出当下符合的控件，各带元素编号（以及最新截图里的 x/y）、区域、所在分组；没有符合的时说明名称相同的控件现在在哪里 |
 | `expect`（参数） | `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag` 等操作都可带 `expect`：文字出现/消失、值改变、窗口打开/关闭、有变化。结果首行给出“已验证完成（verified）／未观察到效果（no_effect）／目标变化（target_changed）／超时（timeout）”，未验证时附当前状态。提交、发送、付款等只能发生一次的操作 skfiy 从不自动重试；上一次未验证时，再原样重复会被拒绝，直到重新查看过状态（或明确 `confirm_repeat`） |
 | `perform_secondary_action` | 执行元素的辅助功能动作（Increment、ShowMenu、Confirm…） |
 | `set_value` | 直接设置文本框、滑块等可设值元素 |
@@ -64,12 +66,13 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `locked_use_status` | direct 模式下查看当前 MCP 会话是否启用、系统是否锁定及锁态是否已知，不触发解锁 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
-浏览器插件连上后多出 14 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
+浏览器插件连上后多出 15 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
 | --- | --- |
 | `browser_tabs` | 列出窗口和标签页，`[shown]` 标出你正在看的那个 |
 | `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页 |
+| `browser_locate` | 按描述（名称、类型、视口区域、所在 fieldset/标题区块、邻近文字）在页面当下的元素和文字里查找，列出候选及刷新后的编号，不挑、不操作 |
 | `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页要截图（canvas、图表、图片）需传 `background_screenshot`，经 Chrome 调试接口截取，约 0.3 秒，之后可按截图坐标点击 |
 | `browser_click` | 按编号点击（或按截图坐标）；`target=_blank` 链接改为后台新标签页打开 |
 | `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` | 输入（可清空、可提交）、选下拉项、按键、滚动页面或元素 |

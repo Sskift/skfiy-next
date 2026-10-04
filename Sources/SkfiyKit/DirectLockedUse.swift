@@ -47,12 +47,15 @@ final class DirectLockedUse {
     }
 
     /// Tools this mode serves while macOS is locked; everything else is refused.
-    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom"]
+    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom", "locate"]
 
     private let directory = AppDirectory()
     private var states: [pid_t: State] = [:]
     /// The latest zoom per app; its coordinates hold while its screenshot does.
     private var zooms: [pid_t: ZoomMapping] = [:]
+    /// The window each app's latest screenshot showed, kept after the
+    /// screenshot expires: locating looks there again.
+    private var shownWindows: [pid_t: CGWindowID] = [:]
     private var zoomCount = 0
     private var transitions = TransitionTracker()
     private var ended = false
@@ -280,6 +283,7 @@ final class DirectLockedUse {
             }
             return existing
         }
+        if let exact = windows.first(where: { String($0.id) == query }) { return exact }
         if !query.isEmpty {
             let matches = windows.filter { $0.title.localizedCaseInsensitiveContains(query) || String($0.id) == query }
             guard matches.count == 1, let match = matches.first else {
@@ -325,7 +329,39 @@ final class DirectLockedUse {
         try check(generation: captureGeneration)
         guard valid(state) else { throw ToolError("The window changed while reading its screenshot. Refresh get_app_state.") }
         states[app.processIdentifier] = state
+        shownWindows[app.processIdentifier] = window.id
         return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
+    }
+
+    // MARK: locating
+
+    /// The window of the latest screenshot (or the one window_id or window
+    /// names) captured and read again now, for resolving a target. This
+    /// capture becomes the latest screenshot.
+    func locateView(_ args: Arguments) async throws -> (ComputerUse.LocateView, pid_t) {
+        try check()
+        let app = try application(args)
+        let pid = app.processIdentifier
+        var query = (args.string("window_id") ?? args.string("window") ?? "").trimmingCharacters(in: .whitespaces)
+        if query.isEmpty, let id = shownWindows[pid] {
+            guard try await directLockedWindows(pid: pid).contains(where: { $0.id == id }) else {
+                shownWindows[pid] = nil
+                states[pid] = nil
+                throw ToolError("The window of the latest screenshot (id \(id)) closed. Call get_app_state again; no input was sent.")
+            }
+            query = String(id)
+        }
+        var values = args.values
+        values["window"] = query
+        values["ocr"] = true
+        let shot = try await snapshot(Arguments(values))
+        guard let state = states[pid] else { throw ToolError("The window could not be read. Call get_app_state again; no input was sent.") }
+        let items = state.recognized.map { text in
+            ComputerUse.Located(candidate: LocatorCandidate(label: text.text, role: "text", frame: text.frame, roleKnown: false), element: nil,
+                                pixel: state.geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY)))
+        }
+        return (ComputerUse.LocateView(window: "\(quote(state.window.title, limit: 80)) (id \(state.window.id))", bounds: state.window.frame,
+                                       items: items, geometry: state.geometry, recognized: true, screenshot: shot), pid)
     }
 
     // MARK: verification support

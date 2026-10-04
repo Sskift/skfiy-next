@@ -286,7 +286,7 @@ struct CapabilityReport {
         if blocker == nil {
             if lockedDirect {
                 for tool in ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom",
-                             "find_element"] where lockedTools.contains(tool) {
+                             "locate"] where lockedTools.contains(tool) {
                     switch tool {
                     case "click", "scroll", "drag": if usable["pointer"] == true { tools.append(tool) }
                     case "press_key", "type_text": if usable["keyboard"] == true { tools.append(tool) }
@@ -295,6 +295,7 @@ struct CapabilityReport {
                 }
             } else if unlocked {
                 tools += ["get_app_state", "wait_for"]
+                if usable["ax"] == true || usable["ocr"] == true { tools.append("locate") }
                 if usable["ax"] == true { tools += ["perform_secondary_action", "set_value", "select_text"] }
                 if usable["screenshot"] == true { tools.append("zoom") }
                 if facts.protection == nil || facts.protection == .terminal { tools.append("scroll") }

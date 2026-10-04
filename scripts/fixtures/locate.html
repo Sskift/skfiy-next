@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>skfiy locate page</title>
+<style>
+  body { font: 16px -apple-system, sans-serif; margin: 0; padding: 12px; background: #fff; color: #111; }
+  button { font-size: 16px; padding: 4px 12px; }
+  fieldset, .card { display: inline-block; vertical-align: top; width: 220px; margin: 8px; padding: 8px; }
+  .card { border: 1px solid #999; }
+  .card h3 { margin: 0 0 8px; font-size: 16px; }
+  #bar { position: fixed; right: 16px; bottom: 16px; }
+  body.rearranged #bar { right: auto; bottom: auto; left: 40%; top: 45%; }
+  #status { margin-left: 16px; font-weight: 600; }
+</style>
+</head>
+<body>
+<header><button id="save-top">Save</button><span id="status">Status: ready</span></header>
+<fieldset><legend>Profile</legend><button id="edit-profile">Edit</button></fieldset>
+<fieldset><legend>Billing</legend><button id="edit-billing">Edit</button></fieldset>
+<div class="card"><h3>Shipping</h3><button id="edit-shipping">Edit</button></div>
+<div style="margin: 8px"><span>Email</span> <input id="email" size="24"></div>
+<div style="margin: 8px"><button id="rearrange">Rearrange</button></div>
+<div id="bar"><button id="cancel">Cancel</button> <button id="save-bottom">Save</button></div>
+<script>
+  // The harness checks everything through these reports, never through skfiy.
+  const run = new URLSearchParams(location.search).get('run') || 'none';
+  document.title = 'skfiy locate ' + run;
+  const state = { run, counters: {}, email: '', rearranged: false };
+  function report(event) {
+    fetch('/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, state, time: Date.now() }) }).catch(() => {});
+  }
+  for (const button of document.querySelectorAll('button')) {
+    button.addEventListener('click', () => {
+      state.counters[button.id] = (state.counters[button.id] || 0) + 1;
+      if (button.id === 'rearrange') {
+        state.rearranged = !state.rearranged;
+        document.body.classList.toggle('rearranged', state.rearranged);
+      }
+      document.getElementById('status').textContent = 'Status: ' + button.id + ' ' + state.counters[button.id];
+      report('click');
+    });
+  }
+  document.getElementById('email').addEventListener('input', (e) => { state.email = e.target.value; report('input'); });
+  report('ready');
+</script>
+</body>
+</html>

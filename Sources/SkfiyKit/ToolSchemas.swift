@@ -10,6 +10,24 @@ enum ToolSchemas {
         "description": "Element index from the latest get_app_state tree, e.g. \"12\""
     ]
 
+    /// Tools that take a target instead of an index or x/y.
+    private static let targetTools: Set<String> = [
+        "click", "scroll", "set_value", "perform_secondary_action", "select_text",
+        "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"
+    ]
+
+    /// A control described by what it is, resolved when the tool runs.
+    static let target: [String: Any] = [
+        "type": ["object", "string"],
+        "description": "Instead of an index or x/y: describe the control, and skfiy finds it in the UI as it is now (accessibility or page elements; recognized text while locked). A name, or {\"name\": \"Save\", \"role\": \"button\", \"region\": \"bottom-right\"}; also within (a group, box or section label), near, below, right_of (another text). region: top-left, top, top-right, left, center, right, bottom-left, bottom, bottom-right, or [x, y, w, h] in screenshot pixels. Exactly one match is acted on; when several fit equally, nothing is done and they are listed",
+        "properties": [
+            "name": ["type": "string", "description": "Its label or text; exact beats partial"],
+            "role": ["type": "string", "description": "button, text field, checkbox, radio, link, menu item, pop-up, tab, row, slider, text, image, file input"],
+            "region": ["type": ["string", "array"]],
+            "within": ["type": "string"], "near": ["type": "string"], "below": ["type": "string"], "right_of": ["type": "string"]
+        ]
+    ]
+
     /// Outcome checking, offered on every action that changes something.
     private static let verification: [String: Any] = [
         "expect": ["type": "object", "description": "Check the outcome after acting: {\"text\": \"Saved\"} (appears), {\"text_gone\": \"Loading\"}, {\"value_changes\": true} or {\"value\": \"42\"} (the element's or focused field's value), {\"window_closed\": true}, {\"window_opened\": \"Settings\"} (or true for any), {\"changed\": true}; optional \"timeout\" seconds (0.2-30, default 5). The result starts with Verification: verified, no_effect, target_changed or timeout, and brings the current state when not verified",
@@ -33,8 +51,9 @@ enum ToolSchemas {
             "description": description,
             "inputSchema": [
                 "type": "object",
-                "properties": ["click", "type_text", "press_key", "set_value", "scroll", "drag", "perform_secondary_action", "select_text"].contains(name)
-                    ? properties.merging(verification) { current, _ in current } : properties,
+                "properties": (["click", "type_text", "press_key", "set_value", "scroll", "drag", "perform_secondary_action", "select_text"].contains(name)
+                    ? properties.merging(verification) { current, _ in current } : properties)
+                    .merging(targetTools.contains(name) ? ["target": target] : [:]) { current, _ in current },
                 "required": required,
                 "additionalProperties": false
             ] as [String: Any],
@@ -105,7 +124,7 @@ enum ToolSchemas {
                 "element_index": elementIndex,
                 "action": ["type": "string", "description": "Secondary accessibility action name, with or without the AX prefix"]
             ],
-            required: ["app", "element_index", "action"]
+            required: ["app", "action"]
         ),
         tool(
             "set_value",
@@ -115,7 +134,7 @@ enum ToolSchemas {
                 "element_index": elementIndex,
                 "value": ["type": "string", "description": "Value to assign"]
             ],
-            required: ["app", "element_index", "value"]
+            required: ["app", "value"]
         ),
         tool(
             "select_text",
@@ -128,7 +147,7 @@ enum ToolSchemas {
                 "suffix": ["type": "string", "description": "Optional text immediately after the target, to disambiguate repeated matches"],
                 "selection": ["type": "string", "enum": ["text", "cursor_before", "cursor_after"], "description": "Select the text, or place the cursor before or after it. Defaults to text."]
             ],
-            required: ["app", "element_index", "text"]
+            required: ["app", "text"]
         ),
         tool(
             "scroll",
@@ -268,6 +287,18 @@ enum ToolSchemas {
             readOnly: true
         ),
         tool(
+            "locate",
+            "Find a control by what it is — name, kind, area of the window, the group or box it is in, the text it is near, below or right of — in the app's window as it is now (the window of the latest get_app_state). Lists each match with its element_index (and x/y in the latest screenshot); when several fit equally, all are listed and none is picked. Unlocked it reads accessibility, adding text recognized in the screenshot when nothing there matches (canvas, images); while macOS is locked it recognizes the text of a screenshot taken now (returned too) and uses its layout, so kinds cannot be checked. Actions take the same description as target and resolve it again when they run.",
+            properties: [
+                "app": app,
+                "target": target,
+                "ocr": ["type": "boolean", "description": "Unlocked: also match text recognized in the screenshot from the start (false: never). Defaults to only when accessibility has no match"],
+                "window_id": ["type": "string", "description": "While locked: the window to look in, by id; defaults to the window of the latest screenshot"]
+            ],
+            required: ["app", "target"],
+            readOnly: true
+        ),
+        tool(
             "hand_over",
             "Hand a step to the user and wait until they have done it: signing in, a verification code or captcha, a payment or other confirmation, a system permission dialog, entering a password. They see the message in the client and confirm when done (up to 30 minutes). Never do these steps yourself. With app (and expect), returns the app's state afterwards, waiting up to 10 s for the expected text to check the step happened.",
             properties: [
@@ -312,6 +343,13 @@ enum ToolSchemas {
             readOnly: true
         ),
         tool(
+            "browser_locate",
+            "Find an element or text of a tab by what it is — name, kind, area of the viewport, the section it is in (fieldset legend, labelled region, a heading over it), the text it is near, below or right of — in the page as it is now. Lists each match with its index (indices are refreshed, as by browser_state); when several fit equally, all are listed and none is picked. The browser_* actions take the same description as target and resolve it again when they run.",
+            properties: ["tab_id": tab, "browser": browserName, "target": target],
+            required: ["tab_id", "target"],
+            readOnly: true
+        ),
+        tool(
             "browser_click",
             "Click an element of a tab by index (scrolls it into view first), or at x/y pixels of the tab's latest screenshot for things without an index (canvas, maps). Links that open a new window open as a background tab instead. Returns the updated page state.",
             properties: [
@@ -340,7 +378,7 @@ enum ToolSchemas {
             "browser_select",
             "Choose an option of a <select> element by its visible text or value.",
             properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "option": ["type": "string", "description": "Option text or value"]],
-            required: ["tab_id", "index", "option"]
+            required: ["tab_id", "option"]
         ),
         tool(
             "browser_press_key",
@@ -378,7 +416,7 @@ enum ToolSchemas {
                 "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"],
                 "download_id": ["type": "integer", "description": "Instead of path: a finished download from browser_downloads"]
             ],
-            required: ["tab_id", "index"]
+            required: ["tab_id"]
         ),
         tool(
             "browser_hover",
@@ -420,7 +458,7 @@ enum ToolSchemas {
     static let instructions = """
     Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_capabilities(app) when the app or the situation is new (locked, several windows, a browser) → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
     - get_desktop_status diagnoses lock state without unlocking. The experimental guardian is available only when the user started mcp --locked-use and approved the local system prompt. Direct mode is separately enabled with SKFIY_LOCKED_USE=direct and keeps macOS locked. Never enable it yourself, operate loginwindow, type an unlock password, or retry a failed automatic unlock. On revocation or a partially completed action, ask for manual unlock and inspect state before retrying. run_in_front is unavailable under locked-use protection.
-    - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
+    - Prefer element_index over x/y: it is exact and survives window moves. When you know what a control is but the UI may have changed (or several look alike), pass target instead ({"name": "Save", "role": "button", "region": "bottom-right"}, within/near/below/right_of): it is resolved when the action runs, and when several match nothing is done and the candidates are listed. locate does the same without acting. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.
     - To wait for something (a page or search result loading, a dialog, a download), use wait_for or browser_wait instead of polling get_app_state.
     - To open a document or folder, use open_file rather than an app's Open panel or Finder's Go to Folder; to save one to a path, use save_document. When an app shows an Open or Save panel anyway (attaching or inserting a file, uploading in Safari, saving in an app save_document cannot script), fill it in with file_dialog.
