@@ -193,9 +193,26 @@ final class DirectLockedUse {
     private func target(_ args: Arguments) async throws -> State {
         try check()
         let app = try application(args)
+        if let raw = args.string("window_id")?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+            guard let wanted = CGWindowID(raw) else { throw ToolError("window_id must be a window id number from get_app_state.") }
+            guard let state = states[app.processIdentifier], state.window.id == wanted else {
+                throw ToolError("window_id \(wanted) is not the window of the latest screenshot. Call get_app_state with window: \"\(wanted)\" first; no input was sent.")
+            }
+        }
         guard let state = states[app.processIdentifier], Date().timeIntervalSince(state.captured) < 30,
               valid(state) else {
+            let previous = states[app.processIdentifier]
             states[app.processIdentifier] = nil
+            if let previous, let current = try? await directLockedWindows(pid: app.processIdentifier),
+               !current.contains(where: { $0.id == previous.window.id }) {
+                let same = current.filter { $0.title == previous.window.title && !$0.title.isEmpty }
+                throw ToolError("The captured window (id \(previous.window.id)) closed" + (same.isEmpty ? "" : "; a window with the same title is now id \(same.map { String($0.id) }.joined(separator: ", ")) (recreated)") + ". Call get_app_state again; no input was sent.")
+            }
+            if let previous {
+                let age = Date().timeIntervalSince(previous.captured)
+                let why = age >= 30 ? "it is \(Int(age)) s old" : validationProblem(previous).map { $0.hasPrefix("window geometry differs") ? "the window moved or changed size (\($0))" : $0 } ?? "it no longer matches"
+                throw ToolError("The latest screenshot cannot be used: \(why). Call get_app_state again; no input was sent.")
+            }
             throw ToolError("No recent matching locked-window screenshot. Call get_app_state before sending input.")
         }
         guard let live = try await directLockedWindows(pid: app.processIdentifier).first(where: { $0.id == state.window.id }),
@@ -243,7 +260,7 @@ final class DirectLockedUse {
         let height = max(1, Int((hiresGeometry.rect.height * scale).rounded()))
         guard let image = resized(hires, width: width, height: height) else { throw ToolError("Could not prepare the screenshot.") }
         let geometry = CaptureGeometry(rect: hiresGeometry.rect, pixelWidth: width, pixelHeight: height)
-        let recognized = recognize ? TextRecognition.sorted(try await TextRecognition.recognize(hires, showing: geometry.rect)) : nil
+        let recognized = recognize ? TextRecognition.sorted(try await TextRecognition.recognizeBoth(hires, showing: geometry.rect)) : nil
         return Capture(shot: try encodeScreenshot(image, geometry: geometry), hires: hires, recognized: recognized)
     }
 
@@ -361,7 +378,7 @@ final class DirectLockedUse {
         if wantText {
             if let previous, !pixels.changed(from: previous.0) {
                 observation.text = previous.1
-            } else if let lines = try? await TextRecognition.recognize(image, showing: geometry.rect) {
+            } else if let lines = try? await TextRecognition.recognizeBoth(image, showing: geometry.rect) {
                 observation.text = TextRecognition.sorted(lines).map(\.text).joined(separator: "\n")
                 cache = (pixels, observation.text)
             }
@@ -504,7 +521,7 @@ final class DirectLockedUse {
                     if let lastPixels, let pixels, !pixels.changed(from: lastPixels), let lastText {
                         observation.text = lastText
                     } else {
-                        let lines = try await TextRecognition.recognize(image, showing: geometry.rect)
+                        let lines = try await TextRecognition.recognizeBoth(image, showing: geometry.rect)
                         let inside = pixelRegion == nil ? lines : lines.filter { line in
                             region.map { _ in self.regionContains(line.frame, region: region!, geometry: previous!.geometry) } ?? true
                         }

@@ -38,4 +38,13 @@ struct TextRecognitionTests {
         let lines = [text("b", 100, 12), text("c", 0, 60), text("a", 0, 10)]
         #expect(TextRecognition.sorted(lines).map(\.text) == ["a", "b", "c"])
     }
+
+    @Test func mergesTheLinesOneResolutionMissed() {
+        let title = RecognizedText(text: "twin.txt", frame: CGRect(x: 100, y: 5, width: 60, height: 14))
+        let titleAgain = RecognizedText(text: "twin.txt ~", frame: CGRect(x: 98, y: 6, width: 66, height: 13))
+        let line = RecognizedText(text: "Alpha line 001", frame: CGRect(x: 10, y: 30, width: 100, height: 13))
+        let merged = TextRecognition.merged([title], with: [titleAgain, line])
+        #expect(merged.map(\.text) == ["twin.txt", "Alpha line 001"])
+        #expect(TextRecognition.merged([], with: [line]).map(\.text) == ["Alpha line 001"])
+    }
 }

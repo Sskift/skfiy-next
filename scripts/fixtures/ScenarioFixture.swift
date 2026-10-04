@@ -205,8 +205,9 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func controlTextDidChange(_ notification: Notification) { record("text") }
 
-    private func openWindow(_ title: String) {
-        if extra[title] != nil { return }
+    private func openWindow(_ title: String, key: String? = nil) {
+        let key = key ?? title
+        if extra[key] != nil { return }
         let window = makeWindow(title, size: NSSize(width: 360, height: 180))
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 180))
         window.contentView = content
@@ -220,10 +221,10 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let frame = main.frame
         window.setFrameOrigin(NSPoint(x: frame.minX + 60, y: frame.minY + 60))
         window.orderBack(nil)
-        extra[title] = window
+        extra[key] = window
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.extra[title] = nil
+                self?.extra[key] = nil
                 self?.record("window_closed", ["title": title])
             }
         }
@@ -232,7 +233,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     private func window(_ title: String?) -> NSWindow? {
         guard let title, !title.isEmpty else { return main }
-        return title == main.title || title == "main" ? main : extra[title]
+        return title == "main" ? main : extra[title] ?? (title == main.title ? main : nil)
     }
 
     private func apply(_ command: [String: Any]) {
@@ -267,7 +268,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                     }
                 }
             }
-        case "open_window": openWindow(title ?? "Scenario extra \(options.nonce)")
+        case "open_window": openWindow(title ?? "Scenario extra \(options.nonce)", key: command["key"] as? String)
         case "close_window": window(title)?.close()
         case "move":
             if let window = window(title) {
@@ -285,8 +286,9 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
         case "recreate":
             if let title, let window = extra[title] {
+                let shown = window.title
                 window.close()
-                openWindow(title)
+                openWindow(shown, key: title)
             }
         case "hide": NSApp.hide(nil)
         case "unhide": NSApp.unhideWithoutActivation()

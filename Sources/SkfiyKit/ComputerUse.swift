@@ -28,6 +28,10 @@ struct AppSession {
     /// When the latest screenshot was taken, and the latest zoom of it.
     var captured: Date?
     var zoom: ZoomMapping?
+    /// The window the screenshot was about, and where it was then: pixels
+    /// map to the screen only while it stays there.
+    var windowID: CGWindowID?
+    var windowFrame: CGRect?
 
     init(elements: [AXUIElement], geometry: CaptureGeometry?, window: AXUIElement?) {
         self.elements = elements
@@ -941,6 +945,8 @@ public final class ComputerUse {
             snapshot.body = found.lines
         }
         sessions[pid] = AppSession(elements: snapshot.elements, geometry: screenshot?.geometry, window: snapshot.chosenWindow)
+        sessions[pid]?.windowID = shownWindow.flatMap(windowID(of:))
+        sessions[pid]?.windowFrame = shownWindow?.frame
         return ToolResult(
             text: snapshot.text,
             image: screenshot?.data,
@@ -954,7 +960,7 @@ public final class ComputerUse {
         let backing = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
         let shot = try await captureApp(pid: pid, rect: region, maxScale: Double(backing))
         guard let image = TextRecognition.decode(shot.data) else { return [] }
-        return TextRecognition.sorted(try await TextRecognition.recognize(image, showing: shot.geometry.rect))
+        return TextRecognition.sorted(try await TextRecognition.recognizeBoth(image, showing: shot.geometry.rect))
     }
 
     /// Recognized text as tree lines, with the middle of each line in pixels
@@ -999,15 +1005,9 @@ public final class ComputerUse {
         var chosenWindow: AXUIElement?
         if let windowQuery {
             // Inspect another window without raising it: the user's window order stays.
-            let needle = normalizeAppName(windowQuery)
             let titled = windows.filter { $0.string(kAXRoleAttribute) == kAXWindowRole }
-                .map { ($0, normalizeAppName($0.string(kAXTitleAttribute) ?? "")) }
-            guard let match = titled.first(where: { $0.1 == needle }) ?? titled.first(where: { $0.1.contains(needle) }) else {
-                let names = titled.map { quote($0.0.string(kAXTitleAttribute) ?? "", limit: 60) }
-                throw ToolError("No window of \(app.localizedName ?? "the app") matches \(quote(windowQuery, limit: 60)). Windows: \(names.joined(separator: ", ")).")
-            }
-            focusedWindow = match.0
-            chosenWindow = match.0
+            focusedWindow = try Self.chooseWindow(titled, query: windowQuery, app: app.localizedName ?? "the app")
+            chosenWindow = focusedWindow
         }
         let focusedFrame = focusedWindow?.frame
         let clip = appRegion(pid: pid, focusedWindow: focusedFrame) ?? focusedFrame
@@ -1086,11 +1086,11 @@ public final class ComputerUse {
                 && (focusedWindow.map { !CFEqual($0, window) } ?? true)
         }
         if !otherWindows.isEmpty {
-            renderer.appendLine("Other windows (pass window=\"<title>\" to get_app_state to inspect one):")
+            renderer.appendLine("Other windows (pass window=\"<title or id>\" to get_app_state to inspect one):")
             for window in otherWindows.prefix(20) {
                 let (info, _) = builder.info(window)
                 let index = renderer.register(builder.add(window))
-                var line = "  [\(index)] Window \(quote(info.title ?? "", limit: 80))"
+                var line = "  [\(index)] Window \(quote(info.title ?? "", limit: 80))" + (windowID(of: window).map { " id \($0)" } ?? "")
                 if window.bool(kAXMinimizedAttribute) == true { line += " minimized" }
                 renderer.appendLine(line)
             }
@@ -1103,7 +1103,8 @@ public final class ComputerUse {
         let elements = renderer.indexToRef.map { builder.elements[$0] }
         if let window = focusedWindow {
             header.append("Window: \(quote(window.string(kAXTitleAttribute) ?? "", limit: 120))"
-                + (chosenWindow != nil ? " (inspected by title; keyboard input still goes to the app's focused window)" : ""))
+                + (windowID(of: window).map { " (id \($0))" } ?? "")
+                + (chosenWindow != nil ? " — inspected without raising it; keyboard input still goes to the app's focused window" : ""))
         }
         if let focusedElement, let index = elements.firstIndex(where: { CFEqual($0, focusedElement) }) {
             header.append("Keyboard focus: [\(index)]")
@@ -1112,6 +1113,26 @@ public final class ComputerUse {
             header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Its text is recognized from the screenshot below, with positions for x/y clicks; also use the menu bar and keyboard shortcuts.")
         }
         return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow, opaque: opaqueWindow)
+    }
+
+    /// A window by id, by exact title, or by part of its title. Windows that
+    /// share a title must be told apart by id: picking one would be a guess.
+    static func chooseWindow(_ windows: [AXUIElement], query: String, app: String) throws -> AXUIElement {
+        let listing = { windows.map { "\(quote($0.string(kAXTitleAttribute) ?? "", limit: 50)) id \(windowID(of: $0).map(String.init) ?? "?")" }.joined(separator: "; ") }
+        if let id = CGWindowID(query.trimmingCharacters(in: .whitespaces)), let match = windows.first(where: { windowID(of: $0) == id }) {
+            return match
+        }
+        let needle = normalizeAppName(query)
+        let titles = windows.map { normalizeAppName($0.string(kAXTitleAttribute) ?? "") }
+        var matches = zip(windows, titles).filter { $0.1 == needle }.map(\.0)
+        if matches.isEmpty { matches = zip(windows, titles).filter { $0.1.contains(needle) }.map(\.0) }
+        guard !matches.isEmpty else {
+            throw ToolError("No window of \(app) matches \(quote(query, limit: 60)). Windows: \(listing()).")
+        }
+        guard matches.count == 1 else {
+            throw ToolError("\(matches.count) windows of \(app) match \(quote(query, limit: 60)); pass the window id instead. Windows: \(listing()).")
+        }
+        return matches[0]
     }
 
     private static let menuItemAttributes = [
@@ -1791,6 +1812,7 @@ public final class ComputerUse {
         guard let session = sessions[app.processIdentifier] else {
             throw ToolError("No state for \(app.localizedName ?? query) yet. Call get_app_state first.")
         }
+        try checkWindowID(args, session: session)
         return (app, session)
     }
 
@@ -1888,6 +1910,8 @@ public final class ComputerUse {
         do {
             let screenshot = try await captureApp(pid: pid, rect: region)
             sessions[pid]?.geometry = screenshot.geometry
+            sessions[pid]?.windowID = window.flatMap(windowID(of:))
+            sessions[pid]?.windowFrame = window?.frame
             return ToolResult(
                 text: message + "\n" + screenshotLine(screenshot.geometry) + " Element indices are unchanged; call get_app_state for a fresh tree.",
                 image: screenshot.data,
@@ -2205,11 +2229,13 @@ public final class ComputerUse {
             guard let x = try args.double(xKey), let y = try args.double(yKey), mapping.containsZoomPixel(x: x, y: y) else {
                 throw ToolError("\(xKey)/\(yKey) must be inside zoom \(zoomID) (\(mapping.zoomWidth)×\(mapping.zoomHeight) px).")
             }
+            try checkWindowUnmoved(session)
             return mapping.toScreen(CGPoint(x: x, y: y))
         }
         guard let x = try args.double(xKey), let y = try args.double(yKey) else {
             throw ToolError("Pass both \(xKey) and \(yKey) (or an element_index).")
         }
+        try checkWindowUnmoved(session)
         guard let geometry = session.geometry else {
             throw ToolError("There is no screenshot to map coordinates from. Call get_app_state first.")
         }
@@ -2217,6 +2243,33 @@ public final class ComputerUse {
             throw ToolError("(\(formatNumber(x)), \(formatNumber(y))) is outside the latest \(geometry.pixelWidth)×\(geometry.pixelHeight) screenshot.")
         }
         return geometry.toScreen(x: x, y: y)
+    }
+
+    /// Screenshot pixels say where things are only while the window they
+    /// show is still there, at the same place and size.
+    func checkWindowUnmoved(_ session: AppSession) throws {
+        guard let id = session.windowID, let then = session.windowFrame else { return }
+        let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []
+        guard let row = rows.first, let bounds = row[kCGWindowBounds as String] as? NSDictionary,
+              let now = CGRect(dictionaryRepresentation: bounds) else {
+            throw ToolError("The window of the latest screenshot (id \(id)) closed; if the app opened a new one, it has another id. Call get_app_state again; nothing was done.")
+        }
+        guard abs(now.minX - then.minX) < 1, abs(now.minY - then.minY) < 1, abs(now.width - then.width) < 1, abs(now.height - then.height) < 1 else {
+            throw ToolError("The window moved or changed size since the latest screenshot (it was \(then), now \(now)), so its x/y would land elsewhere. Call get_app_state again; nothing was done.")
+        }
+    }
+
+    /// window_id, when given, must be the window the latest screenshot showed.
+    func checkWindowID(_ args: Arguments, session: AppSession?) throws {
+        guard let raw = args.string("window_id")?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return }
+        guard let wanted = CGWindowID(raw) else { throw ToolError("window_id must be a window id number from get_app_state.") }
+        guard let session, let id = session.windowID else {
+            throw ToolError("No window is known for this app yet; call get_app_state before passing window_id.")
+        }
+        guard id == wanted else {
+            throw ToolError("window_id \(wanted) is not the window the latest get_app_state showed (id \(id)). Call get_app_state with window: \"\(wanted)\" first; nothing was done.")
+        }
+        try checkWindowUnmoved(session)
     }
 
     private func visibleCenter(of element: AXUIElement, session: AppSession) async throws -> CGPoint {

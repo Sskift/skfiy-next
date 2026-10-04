@@ -50,6 +50,32 @@ enum TextRecognition {
         }.value
     }
 
+    /// Recognizes at display resolution and at about one pixel per point, and
+    /// keeps both: small text reads better at full resolution, but Vision
+    /// sometimes misses dense blocks there (a page of monospaced lines came
+    /// back as only the window title) that it reads at the lower size.
+    static func recognizeBoth(_ hires: CGImage, showing region: CGRect) async throws -> [RecognizedText] {
+        let primary = try await recognize(hires, showing: region)
+        let scale = captureScale(for: region.size, maxScale: 1)
+        let width = max(1, Int((region.width * scale).rounded())), height = max(1, Int((region.height * scale).rounded()))
+        guard width < hires.width, let lower = resized(hires, width: width, height: height) else { return primary }
+        return merged(primary, with: try await recognize(lower, showing: region))
+    }
+
+    /// `extra` lines that no `primary` line already covers.
+    static func merged(_ primary: [RecognizedText], with extra: [RecognizedText]) -> [RecognizedText] {
+        var result = primary
+        for line in extra {
+            let covered = primary.contains { other in
+                let shared = other.frame.intersection(line.frame)
+                guard !shared.isNull else { return false }
+                return shared.width * shared.height >= 0.3 * min(line.frame.width * line.frame.height, other.frame.width * other.frame.height)
+            }
+            if !covered { result.append(line) }
+        }
+        return result
+    }
+
     /// Reading order: rows top to bottom (lines whose middles fall within
     /// half a line of each other share a row), each row left to right.
     static func sorted(_ lines: [RecognizedText]) -> [RecognizedText] {

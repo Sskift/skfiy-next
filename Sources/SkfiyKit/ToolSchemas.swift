@@ -17,7 +17,8 @@ enum ToolSchemas {
                                   "window_closed": ["type": "boolean"], "window_opened": ["type": ["string", "boolean"]], "changed": ["type": "boolean"],
                                   "timeout": ["type": "number"]]],
         "idempotent": ["type": "boolean", "description": "false marks an action that must not happen twice (submit, send, pay); buttons labelled so and Return are treated that way already"],
-        "confirm_repeat": ["type": "boolean", "description": "Repeat a risky action although the previous identical one was not verified, after checking the state showed it did nothing"]
+        "confirm_repeat": ["type": "boolean", "description": "Repeat a risky action although the previous identical one was not verified, after checking the state showed it did nothing"],
+        "window_id": ["type": "string", "description": "The window id the latest get_app_state showed, to make sure the action goes to that window: refused if the screenshot is of another window, or that window moved, closed or was recreated"]
     ]
 
     private static func tool(
@@ -63,7 +64,7 @@ enum ToolSchemas {
             "Get the state of an app's focused window: a screenshot plus its accessibility tree, where every element has an index. Launches the app in the background if it is not running. Call it before interacting with an app, and again whenever you need fresh element indices (after navigation, a dialog, or any larger UI change). Also shows the menu bar, open menus with their keyboard shortcuts, and the app's other windows. Never brings the app to the front.",
             properties: [
                 "app": app,
-                "window": ["type": "string", "description": "Optional window title (or part of it) to inspect instead of the focused window; it is not raised"],
+                "window": ["type": "string", "description": "Optional window id (as shown in the state) or title (or part of it) to inspect instead of the focused window; it is not raised. Windows sharing a title need the id"],
                 "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"],
                 "ocr": ["type": "boolean", "description": "Also list the text recognized in the screenshot, with x/y to click it. On by default for windows that publish no accessibility (custom-drawn apps such as WeChat); pass true for text drawn in a canvas or image elsewhere"]
             ],

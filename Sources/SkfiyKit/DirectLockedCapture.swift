@@ -65,16 +65,46 @@ func encodeScreenshot(_ image: CGImage, geometry: CaptureGeometry) throws -> Scr
     return Screenshot(geometry: geometry, data: try encode(image, format: format), mimeType: format == "png" ? "image/png" : "image/jpeg")
 }
 
-/// The display's pixels per point where `rect` mostly is (2 on Retina).
-func backingScale(for rect: CGRect) -> Double {
-    let center = CGPoint(x: rect.midX, y: rect.midY)
+/// A display in global screen points with a top-left origin (the space of
+/// window frames and events): displays left of or above the main one have
+/// negative coordinates.
+struct DisplayInfo: Equatable {
+    let frame: CGRect
+    let scale: Double
+}
+
+/// The connected displays, converted from AppKit's bottom-left coordinates.
+func displayInfos() -> [DisplayInfo] {
     let top = NSScreen.screens.first?.frame.maxY ?? 0
-    // NSScreen frames have a bottom-left origin; skfiy rects a top-left one.
-    let screen = NSScreen.screens.first { screen in
+    return NSScreen.screens.map { screen in
         let frame = screen.frame
-        return CGRect(x: frame.minX, y: top - frame.maxY, width: frame.width, height: frame.height).contains(center)
+        return DisplayInfo(frame: CGRect(x: frame.minX, y: top - frame.maxY, width: frame.width, height: frame.height),
+                           scale: Double(screen.backingScaleFactor))
     }
-    return Double(screen?.backingScaleFactor ?? NSScreen.screens.map(\.backingScaleFactor).max() ?? 2)
+}
+
+/// The display a window is on: the one holding its center, else the one it
+/// overlaps most, else the nearest (a window dragged off every display).
+func display(for rect: CGRect, among displays: [DisplayInfo]) -> DisplayInfo? {
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    if let holding = displays.first(where: { $0.frame.contains(center) }) { return holding }
+    let overlap = { (display: DisplayInfo) -> CGFloat in
+        let shared = display.frame.intersection(rect)
+        return shared.isNull ? 0 : shared.width * shared.height
+    }
+    if let most = displays.max(by: { overlap($0) < overlap($1) }), overlap(most) > 0 { return most }
+    let distance = { (display: DisplayInfo) -> CGFloat in
+        let dx = max(display.frame.minX - center.x, 0, center.x - display.frame.maxX)
+        let dy = max(display.frame.minY - center.y, 0, center.y - display.frame.maxY)
+        return dx * dx + dy * dy
+    }
+    return displays.min(by: { distance($0) < distance($1) })
+}
+
+/// The display's pixels per point where `rect` is (2 on Retina, 1 on most
+/// external displays), so captures use each display's own detail.
+func backingScale(for rect: CGRect, displays: [DisplayInfo] = displayInfos()) -> Double {
+    display(for: rect, among: displays)?.scale ?? displays.map(\.scale).max() ?? 2
 }
 
 /// `image` resized to exactly width × height pixels.
