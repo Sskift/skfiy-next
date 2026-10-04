@@ -43,6 +43,9 @@ final class DirectLockedUse {
         let generation: UInt64
     }
 
+    /// Tools this mode serves while macOS is locked; everything else is refused.
+    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text"]
+
     private let directory = AppDirectory()
     private var states: [pid_t: State] = [:]
     private var transitions = TransitionTracker()
@@ -73,6 +76,15 @@ final class DirectLockedUse {
         generation &+= 1
         states.removeAll()
         return true
+    }
+
+    var isEnded: Bool { ended }
+
+    /// Seconds since the latest screenshot of this app, while its coordinates are still usable.
+    func screenshotAge(pid: pid_t) -> Double? {
+        guard let state = states[pid], valid(state) else { return nil }
+        let age = Date().timeIntervalSince(state.captured)
+        return age < 30 ? age : nil
     }
 
     func status(end: Bool = false) -> ToolResult {
@@ -252,8 +264,7 @@ final class DirectLockedUse {
     func perform(_ name: String, _ args: Arguments) async throws -> ToolResult {
         try check()
         if name == "get_app_state" { return try await snapshot(args) }
-        let allowed: Set<String> = ["click", "scroll", "drag", "press_key", "type_text"]
-        guard allowed.contains(name) else {
+        guard Self.lockedTools.contains(name) else {
             throw ToolError("\(name) is unavailable while macOS remains locked. Use get_app_state and screenshot coordinates with click, scroll, drag, press_key or type_text; unlock manually for AX or foreground actions.")
         }
         guard try args.elementIndex() == nil, args.values["focus"] as? Bool != true else {

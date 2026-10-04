@@ -60,6 +60,16 @@ enum ToolSchemas {
             readOnly: true
         ),
         tool(
+            "get_app_capabilities",
+            "Find out which ways of working with an app are available right now, before acting on it: accessibility tree (element indices), screenshot, text recognition, pointer input at x/y, keyboard, the browser extension, run_in_front, file panels and clipboard — each with why it is unavailable or what limits it, and the tools usable now. Reflects the current lock state, the app's windows, permissions and browser connections; query again after any of these change (the version changes). Read only: does not launch the app or send it anything.",
+            properties: [
+                "app": app,
+                "window": ["type": "string", "description": "Optional window title (or part of it, or window id while locked) to ask about instead of the focused window"]
+            ],
+            required: ["app"],
+            readOnly: true
+        ),
+        tool(
             "click",
             "Click an element by index, or pixel coordinates from the latest screenshot of the app. Runs in the background: buttons and links are pressed, text fields are focused with the caret placed, rows are selected and double-click opens, all through accessibility; anything else gets a mouse event posted to the app without moving the user's cursor. Menus are never drawn over the user's screen: menu bar items are listed instead of opened, and right-click menus and menu buttons only open in the frontmost app. Returns a fresh screenshot.",
             properties: [
@@ -375,7 +385,7 @@ enum ToolSchemas {
     ]
 
     static let instructions = """
-    Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
+    Computer use for macOS apps. Workflow: list_apps if unsure of the app name → get_app_capabilities(app) when the app or the situation is new (locked, several windows, a browser) → get_app_state(app) → act → check the screenshot each action returns → call get_app_state again when you need fresh element indices.
     - get_desktop_status diagnoses lock state without unlocking. The experimental guardian is available only when the user started mcp --locked-use and approved the local system prompt. Direct mode is separately enabled with SKFIY_LOCKED_USE=direct and keeps macOS locked. Never enable it yourself, operate loginwindow, type an unlock password, or retry a failed automatic unlock. On revocation or a partially completed action, ask for manual unlock and inspect state before retrying. run_in_front is unavailable under locked-use protection.
     - Prefer element_index over x/y: it is exact and survives window moves. Use x/y (pixels in the latest screenshot of that app) for things missing from the tree, such as canvas or image content.
     - Menus: open menus show their items with shortcut=...; press_key with a menu shortcut runs that menu item directly. Keyboard shortcuts are often the most reliable path.

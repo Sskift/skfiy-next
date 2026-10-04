@@ -36,7 +36,7 @@ struct AppSession {
 /// accessibility tree) and actions addressed by element index or pixel.
 @MainActor
 public final class ComputerUse {
-    private let directory = AppDirectory()
+    let directory = AppDirectory()
     private var sessions: [pid_t: AppSession] = [:]
     private var accessibilityEnabled: Set<pid_t> = []
     /// Apps the user allowed brief focus for, this session.
@@ -52,8 +52,12 @@ public final class ComputerUse {
     /// themselves (sign in, enter a code); nil when the client cannot ask.
     public var waitForUser: ((String) async -> Bool?)?
     private let settleDelay: Double
-    private var lockedUse: LockedUseClient?
-    private let directLockedUse = DirectLockedUse()
+    var lockedUse: LockedUseClient?
+    let directLockedUse = DirectLockedUse()
+    /// The last capability report per app, to say what changed since.
+    var capabilityHistory: [String: CapabilityReport] = [:]
+    /// Whether the client can ask the user (MCP elicitation); nil when unknown.
+    public var clientCanAsk: (() -> Bool)?
 
     public func enableLockedUse() async throws {
         guard !DirectLockedUse.enabled else {
@@ -78,7 +82,7 @@ public final class ComputerUse {
     }
 
     nonisolated public static let toolNames = [
-        "list_apps", "get_desktop_status", "get_app_state", "click", "perform_secondary_action", "set_value",
+        "list_apps", "get_desktop_status", "get_app_state", "get_app_capabilities", "click", "perform_secondary_action", "set_value",
         "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
         "file_dialog", "read_clipboard", "wait_for", "hand_over", "locked_use_status", "locked_use_end"
     ] + BrowserTools.toolNames
@@ -103,7 +107,7 @@ public final class ComputerUse {
         lastInputWasSecret = false
         browser.lastInputWasSecret = false
         let needsDesktop = Self.toolNames.contains(name) && !name.hasPrefix("browser_") &&
-            !["list_apps", "get_desktop_status", "hand_over"].contains(name)
+            !["list_apps", "get_desktop_status", "hand_over", "get_app_capabilities"].contains(name)
         var result: ToolResult
         if let lockedUse, needsDesktop, !EmergencyStop.isStopped {
             do {
@@ -138,7 +142,7 @@ public final class ComputerUse {
            name == "type_text" || name == "press_key" || name == "set_value" {
             lastInputWasSecret = true
         }
-        if EmergencyStop.isStopped, !["list_apps", "get_desktop_status"].contains(name) {
+        if EmergencyStop.isStopped, !["list_apps", "get_desktop_status", "get_app_capabilities"].contains(name) {
             return ToolResult(text: EmergencyStop.refusal, isError: true)
         }
         do {
@@ -159,6 +163,7 @@ public final class ComputerUse {
                 if DirectLockedUse.enabled { return directLockedUse.status() }
                 return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: \(lockedUse?.status ?? "disabled; start skfiy mcp --locked-use to opt in").\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
             case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
+            case "get_app_capabilities": return try await appCapabilities(args)
             case "click": return try await keepingFront(args) { try await self.click(args) }
             case "perform_secondary_action": return try await keepingFront(args) { try await self.performSecondaryAction(args) }
             case "set_value": return try await keepingFront(args) { try await self.setValue(args) }
@@ -262,7 +267,7 @@ public final class ComputerUse {
         "save_document", "run_in_front", "file_dialog"
     ]
 
-    private lazy var hostProcesses = ancestorProcessIDs()
+    lazy var hostProcesses = ancestorProcessIDs()
 
     /// Typing into a terminal runs shell commands, sidestepping the MCP
     /// client's permission checks, and the app hosting the agent must never

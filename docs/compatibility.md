@@ -42,53 +42,66 @@ python3 scripts/compat_baseline.py --report                                    #
 <!-- compat-table:start -->
 | 应用 | 操作 | 解锁·前台 | 解锁·后台 | 锁屏 direct |
 | --- | --- | --- | --- | --- |
-| TextEdit | screenshot | — 未测 | ✅ 通过 | — 未测 |
-| TextEdit | click | — 未测 | ✅ 通过 | — 未测 |
-| TextEdit | type | — 未测 | ✅ 通过 | — 未测 |
-| TextEdit | scroll | — 未测 | ✅ 通过 | — 未测 |
-| TextEdit | popup | — 未测 | ✅ 通过 | — 未测 |
-| Preview | screenshot | — 未测 | ✅ 通过 | — 未测 |
-| Preview | click | — 未测 | ✅ 通过 | — 未测 |
-| Preview | type | — 未测 | ✅ 通过 | — 未测 |
-| Preview | scroll | — 未测 | ✅ 通过 | — 未测 |
-| Preview | popup | — 未测 | ⛔ 拒绝 | — 未测 |
-| Finder | screenshot | — 未测 | ✅ 通过 | — 未测 |
-| Finder | click | — 未测 | ✅ 通过 | — 未测 |
-| Finder | type | — 未测 | ✅ 通过 | — 未测 |
-| Finder | scroll | — 未测 | ✅ 通过 | — 未测 |
-| Finder | popup | — 未测 | ⛔ 拒绝 | — 未测 |
-| Chrome（应用工具） | screenshot | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（应用工具） | click | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（应用工具） | type | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（应用工具） | scroll | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（应用工具） | popup | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（扩展） | screenshot | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（扩展） | click | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（扩展） | type | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（扩展） | scroll | — 未测 | ✅ 通过 | — 未测 |
-| Chrome（扩展） | popup | — 未测 | ✅ 通过 | — 未测 |
-| Electron | screenshot | — 未测 | ✅ 通过 | — 未测 |
-| Electron | click | — 未测 | ✅ 通过 | — 未测 |
-| Electron | type | — 未测 | ❌ 失败 | — 未测 |
-| Electron | scroll | — 未测 | ❌ 失败 | — 未测 |
-| Electron | popup | — 未测 | ✅ 通过 | — 未测 |
+| TextEdit | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
+| TextEdit | click | — 未测 | ✅ 通过 | ❌ 失败 |
+| TextEdit | type | — 未测 | ✅ 通过 | ✅ 通过 |
+| TextEdit | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
+| TextEdit | popup | — 未测 | ✅ 通过 | ⛔ 拒绝 |
+| Preview | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
+| Preview | click | — 未测 | ✅ 通过 | ✅ 通过 |
+| Preview | type | — 未测 | ✅ 通过 | ✅ 通过 |
+| Preview | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
+| Preview | popup | — 未测 | ⛔ 拒绝 | ❌ 失败 |
+| Finder | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
+| Finder | click | — 未测 | ✅ 通过 | ❌ 失败 |
+| Finder | type | — 未测 | ✅ 通过 | ⛔ 拒绝 |
+| Finder | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
+| Finder | popup | — 未测 | ⛔ 拒绝 | ⛔ 拒绝 |
+| Chrome（应用工具） | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
+| Chrome（应用工具） | click | — 未测 | ✅ 通过 | ❌ 失败 |
+| Chrome（应用工具） | type | — 未测 | ✅ 通过 | ❌ 失败 |
+| Chrome（应用工具） | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
+| Chrome（应用工具） | popup | — 未测 | ✅ 通过 | ❌ 失败 |
+| Chrome（扩展） | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | click | — 未测 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | type | — 未测 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | popup | — 未测 | ✅ 通过 | ✅ 通过 |
+| Electron | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
+| Electron | click | — 未测 | ✅ 通过 | ❌ 失败 |
+| Electron | type | — 未测 | ❌ 失败 | ❌ 失败 |
+| Electron | scroll | — 未测 | ❌ 失败 | ✅ 通过 |
+| Electron | popup | — 未测 | ✅ 通过 | ❌ 失败 |
 
 **运行记录**
 
 - background（Chrome（应用工具）, Chrome（扩展）, Finder, TextEdit）：2026-10-05 00:17，macOS 26.6.1，会话锁定=False，锁态采样 455 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 3 次；证据 `eval/results/compat-background-20261005-001726-fe299114e7`（本机，不入库）
 - background（Preview）：2026-10-05 00:20，macOS 26.6.1，会话锁定=False，锁态采样 53 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-002035-0d9d91b611`（本机，不入库）
 - background（Electron）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 101 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 1 次；证据 `eval/results/compat-background-20261005-002200-6071205215`（本机，不入库）
-- locked（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 1 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-002245-1058da8312`（本机，不入库）
 - front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 1 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-front-20261005-002245-a543ee33fa`（本机，不入库）
+- locked（Chrome（应用工具）, Chrome（扩展）, Electron）：2026-10-05 00:25，macOS 26.6.1，会话锁定=True，锁态采样 450 次（锁定 450，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-002505-6a9344d055`（本机，不入库）
+- locked（Preview, TextEdit）：2026-10-05 00:31，macOS 26.6.1，会话锁定=True，锁态采样 289 次（锁定 289，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-003143-1ff80e09db`（本机，不入库）
+- locked（Finder）：2026-10-05 00:33，macOS 26.6.1，会话锁定=True，锁态采样 93 次（锁定 93，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-003324-f62cf8ea7d`（本机，不入库）
 
 **失败、拒绝、跳过与未测的原因**
 
+- TextEdit · click · locked：typed marker not on the clicked row (y 155 vs 38.0)
+- TextEdit · popup · locked：This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.
 - Preview · popup · background：no sheet appeared; skfiy: menu item "Go to Page…" disabled in the background
+- Preview · popup · locked：no sheet appeared
+- Finder · click · locked：selected: nothing readable
+- Finder · type · locked：This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.
 - Finder · popup · background：no Get Info window; skfiy: menu item "Get Info" disabled in the background
+- Finder · popup · locked：This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.
+- Chrome（应用工具） · click · locked：page clicks 0 -> 0
+- Chrome（应用工具） · type · locked：page input value ''
+- Chrome（应用工具） · popup · locked：the page did not open its alert
+- Electron · click · locked：page clicks 0 -> 0
 - Electron · type · background：page input value ''
+- Electron · type · locked：page input value ''
 - Electron · scroll · background：page scrollY 0 -> 0
+- Electron · popup · locked：the page did not open its alert
 - front 未测：front mode brings apps forward; pass --allow-front (only while the user is away)
-- locked 未测：the Mac is not locked
 <!-- compat-table:end -->
 
 ## 基线发现（2026-10-05，macOS 26.6.1，单块 Retina 内置屏）
@@ -99,4 +112,16 @@ python3 scripts/compat_baseline.py --report                                    #
 4. **作用于当前文档的菜单命令在后台被禁用**（TextEdit 打印、预览“前往页面…”、Finder“显示简介”）。skfiy 如实说明并指向 `run_in_front`，表中记为“拒绝”。TextEdit 的弹窗用后台可触发的“关闭未命名文档→保留确认表单”测到，表单出现在树里，按编号点“删除”可关闭。
 5. **测试窗口出现在用户窗口之上。** Chrome for Testing 和 Electron 后台启动后，它们的窗口会排到最上层（不激活应用）。窗口守护在每次运行中把用户的窗口放回最上层 1–3 次；skfiy 自身工具调用期间则由 `keepingFront` 处理。
 
-锁屏和前台两种状态尚未实测：锁屏须在 Mac 真正锁定时运行，前台须在用户离开时运行，两者都不由测试脚本触发。
+## 锁屏 direct 的基线发现（2026-10-05 00:24–00:33，系统实际锁定）
+
+锁屏运行由 `scripts/run_when_locked.py` 在用户自己锁屏 20 秒后启动，测试不锁屏也不解锁；每次运行的锁态采样全部为“锁定”（例如 450/450），见运行记录。
+
+6. **浏览器扩展通道在锁屏时照常工作**：截图（调试接口截后台标签页）、点击、输入、滚动、弹窗 5/5 通过。
+7. **Chrome 和 Electron 的坐标点击在锁屏时不生效**：Chromium 丢弃发往非活动窗口的指针事件，点击、经点击聚焦后的输入、打开 alert 都失败；滚轮事件有效（滚动通过）。锁屏下操作网页应走扩展通道。
+8. **TextEdit：坐标点击不移动光标**（随后输入的标记落在文档开头，不在被点的第 10 行）；输入和滚动有效。快捷键在锁屏时能生效（cmd+n 新建了文档），但随即出现第二个窗口，按设计拒绝后续键盘输入。
+9. **预览：点击搜索栏、输入、滚动有效**；“前往页面…”快捷键（cmd+alt+g）没有效果。
+10. **Finder：坐标点击没有选中文件**（以 Finder 自己经 Apple Event 报告的选中项为准）；滚动有效。Finder 另开着一个窗口时，键盘输入按设计拒绝（目标窗口无法确认）。
+11. **锁屏时 OCR 质量明显下降**：direct 模式在 1 倍截图上识别文字，单词被拆开、字符误识（如 “6a9344d055” 识别成 “бa9344d055”）；解锁时的 OCR 用 2 倍截图。这影响锁屏下按文字定位和等待文字出现，留待目标 3、4 处理。
+12. **锁屏时辅助功能读到的不是应用的真实状态**：TextEdit 只报告一个名为 “TextEdit” 的窗口、没有文本区，焦点在应用本身。锁屏核验因此改用窗口服务器元数据、页面回报、Finder 的 Apple Event 和独立 OCR；点击是否生效由随后输入落在哪一行来判断，输入被拒时该点击记为“未测”。
+
+前台状态尚未实测：须在用户离开且解锁时运行，测试脚本不会自行触发。

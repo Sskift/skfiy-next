@@ -8,7 +8,7 @@
 
 | # | 目标 | 状态 | 模拟测试 | 专用测试窗口 | 真实应用实测 | 锁屏实测（系统锁态） |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 真实应用兼容性基线 | 已完成（解锁·后台） | — | 本地测试页 + Electron 运行时 | 6 个应用 × 5 项，见 [compatibility.md](compatibility.md) | 待锁屏时运行 `--mode locked` |
+| 1 | 真实应用兼容性基线 | 已完成（后台、锁屏；前台待用户离开时） | — | 本地测试页 + Electron 运行时 | 6 个应用 × 5 项 × 2 种状态，见 [compatibility.md](compatibility.md) | 已测：锁态采样全部为锁定 |
 | 2 | 当前应用能力查询 | 待做 | | | | |
 | 3 | 锁屏等待 | 待做 | | | | |
 | 4 | 锁屏局部放大 | 待做 | | | | |
@@ -21,7 +21,8 @@
 
 ## 1. 真实应用兼容性基线
 
-- 新增：`scripts/compat_baseline.py`（三种状态 × 六个用例 × 五项操作）、`scripts/compat_server.py`（本地测试页与事件回报）、`scripts/fixtures/compat.html`、`scripts/fixtures/electron/`、独立探针 `AXProbe.swift`、不激活启动 `Launch.swift`、窗口守护 `WindowGuard.swift`；`make compat`。
+- 新增：`scripts/compat_baseline.py`（三种状态 × 六个用例 × 五项操作）、`scripts/run_when_locked.py` 与 `scripts/locked_suites.txt`（用户锁屏后自动运行锁屏套件）、`scripts/compat_server.py`（本地测试页与事件回报）、`scripts/fixtures/compat.html`、`scripts/fixtures/electron/`、独立探针 `AXProbe.swift`、不激活启动 `Launch.swift`、窗口守护 `WindowGuard.swift`；`make compat`。
 - 产品改动：浏览器工具的 `browser` 参数可以写进程号。Chrome 和 Chrome for Testing 可能同名，按名称会选错浏览器；`browser_tabs` 显示每个浏览器的 pid。
-- 验证：解锁·后台 30 项中 26 项通过、2 项按设计拒绝、2 项失败（Electron 输入与滚动；整套连跑时 Electron 的网页辅助功能树还会缺失，见兼容表“基线发现”）；前台被改变 0 次。锁屏和前台两列未测（条件不具备，见兼容表）。
+- 验证（锁屏）：30 项中 17 项通过、5 项按设计拒绝、8 项失败（Chromium 坐标点击、TextEdit/Finder 点击、预览快捷键），原因见兼容表“锁屏 direct 的基线发现”；全部运行期间系统保持锁定。
+- 验证（解锁·后台）：30 项中 26 项通过、2 项按设计拒绝、2 项失败（Electron 输入与滚动；整套连跑时 Electron 的网页辅助功能树还会缺失，见兼容表“基线发现”）；前台被改变 0 次。锁屏和前台两列未测（条件不具备，见兼容表）。
 - 剩余限制：见 [compatibility.md](compatibility.md) 的“基线发现”。

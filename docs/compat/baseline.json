@@ -64,9 +64,9 @@
    "windowGuardCorrections": 1
   },
   {
-   "mode": "locked",
-   "evidence": "eval/results/compat-locked-20261005-002245-1058da8312",
-   "started": 1791130965.4167218,
+   "mode": "front",
+   "evidence": "eval/results/compat-front-20261005-002245-a543ee33fa",
+   "started": 1791130965.746007,
    "macOS": "26.6.1",
    "lockSamples": {
     "count": 1,
@@ -89,26 +89,64 @@
    "windowGuardCorrections": 0
   },
   {
-   "mode": "front",
-   "evidence": "eval/results/compat-front-20261005-002245-a543ee33fa",
-   "started": 1791130965.746007,
+   "mode": "locked",
+   "evidence": "eval/results/compat-locked-20261005-002505-6a9344d055",
+   "started": 1791131105.720439,
    "macOS": "26.6.1",
    "lockSamples": {
-    "count": 1,
-    "locked": 0,
+    "count": 450,
+    "locked": 450,
     "unknown": 0
    },
    "session": {
     "known": true,
-    "locked": false
+    "locked": true
    },
    "cases": [
     "chrome",
     "chrome-extension",
-    "electron",
-    "finder",
+    "electron"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 0
+  },
+  {
+   "mode": "locked",
+   "evidence": "eval/results/compat-locked-20261005-003143-1ff80e09db",
+   "started": 1791131503.469287,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 289,
+    "locked": 289,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": true
+   },
+   "cases": [
     "preview",
     "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 0
+  },
+  {
+   "mode": "locked",
+   "evidence": "eval/results/compat-locked-20261005-003324-f62cf8ea7d",
+   "started": 1791131604.524679,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 93,
+    "locked": 93,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": true
+   },
+   "cases": [
+    "finder"
    ],
    "frontViolations": 0,
    "windowGuardCorrections": 0
@@ -419,301 +457,301 @@
    "case": "textedit",
    "mode": "locked",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); first lines visible",
+   "seconds": 1.02,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "textedit",
    "mode": "locked",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "typed marker not on the clicked row (y 155 vs 38.0)",
+   "seconds": 1.37,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "textedit",
    "mode": "locked",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "marker visible in a fresh screenshot (independent OCR; AX unreadable while locked)",
+   "seconds": 1.6,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "textedit",
    "mode": "locked",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "first visible line 1 -> 57",
+   "seconds": 1.86,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "textedit",
    "mode": "locked",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "refused",
+   "path": "keyboard",
+   "detail": "This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.",
+   "seconds": 0.17,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "preview",
    "mode": "locked",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); page text recognized",
+   "seconds": 0.85,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "preview",
    "mode": "locked",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "the search field took the typing",
+   "seconds": 1.17,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "preview",
    "mode": "locked",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "search field reads \"page 4\"",
+   "seconds": 1.31,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "preview",
    "mode": "locked",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "pages visible [2, 3, 4] -> [5, 6]; vertical bars [] -> []",
+   "seconds": 2.72,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "preview",
    "mode": "locked",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "keyboard",
+   "detail": "no sheet appeared",
+   "seconds": 1.37,
+   "run": "compat-locked-20261005-003143-1ff80e09db"
   },
   {
    "case": "finder",
    "mode": "locked",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); files listed",
+   "seconds": 1.1,
+   "run": "compat-locked-20261005-003324-f62cf8ea7d"
   },
   {
    "case": "finder",
    "mode": "locked",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "selected: nothing readable",
+   "seconds": 1.4,
+   "run": "compat-locked-20261005-003324-f62cf8ea7d"
   },
   {
    "case": "finder",
    "mode": "locked",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "refused",
+   "path": "keyboard",
+   "detail": "This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.",
+   "seconds": 0.21,
+   "run": "compat-locked-20261005-003324-f62cf8ea7d"
   },
   {
    "case": "finder",
    "mode": "locked",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "vertical scroll bars [] -> []; items shown [1]…[16] -> [35]…[49]",
+   "seconds": 1.91,
+   "run": "compat-locked-20261005-003324-f62cf8ea7d"
   },
   {
    "case": "finder",
    "mode": "locked",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "refused",
+   "path": "keyboard",
+   "detail": "This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.",
+   "seconds": 0.21,
+   "run": "compat-locked-20261005-003324-f62cf8ea7d"
   },
   {
    "case": "chrome",
    "mode": "locked",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); heading found",
+   "seconds": 0.8,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome",
    "mode": "locked",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "page clicks 0 -> 0",
+   "seconds": 1.37,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome",
    "mode": "locked",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates+keyboard",
+   "detail": "page input value ''",
+   "seconds": 1.5,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome",
    "mode": "locked",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "page scrollY 0 -> 1770",
+   "seconds": 2.29,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome",
    "mode": "locked",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "the page did not open its alert",
+   "seconds": 1.44,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome-extension",
    "mode": "locked",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "extension",
+   "detail": "1 image(s) (debugger capture of a background tab); heading found",
+   "seconds": 0.29,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome-extension",
    "mode": "locked",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "extension",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.27,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome-extension",
    "mode": "locked",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "extension",
+   "detail": "page input value 'typed6a9344'",
+   "seconds": 0.27,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome-extension",
    "mode": "locked",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "extension",
+   "detail": "page scrollY 0 -> 1525",
+   "seconds": 0.27,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "chrome-extension",
    "mode": "locked",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "extension",
+   "detail": "alert answered and reported in the state; page popup=closed",
+   "seconds": 0.28,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "electron",
    "mode": "locked",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); heading found",
+   "seconds": 0.6,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "electron",
    "mode": "locked",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "page clicks 0 -> 0",
+   "seconds": 1.14,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "electron",
    "mode": "locked",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates+keyboard",
+   "detail": "page input value ''",
+   "seconds": 1.31,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "electron",
    "mode": "locked",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "page scrollY 0 -> 1298",
+   "seconds": 1.8,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "electron",
    "mode": "locked",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "the Mac is not locked",
-   "seconds": null,
-   "run": "compat-locked-20261005-002245-1058da8312"
+   "status": "fail",
+   "path": "coordinates",
+   "detail": "the page did not open its alert",
+   "seconds": 1.17,
+   "run": "compat-locked-20261005-002505-6a9344d055"
   },
   {
    "case": "textedit",

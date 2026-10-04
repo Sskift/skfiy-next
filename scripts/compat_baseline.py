@@ -329,11 +329,8 @@ class TextEdit(Case):
         self.path = folder / f'compat-{self.nonce}.txt'
         self.path.write_text(''.join(f'TextEdit line {i:03d} {self.nonce}\n' for i in range(1, 161)))
         self.window = self.path.name
-        if self.run.mode == 'locked':
-            sh('open', '-g', '-a', 'TextEdit', self.path)
-        else:
-            result = self.run.call('open_file', path=str(self.path), app='TextEdit')
-            require(not result['is_error'], result['text'])
+        # -F: no restored windows from an earlier run, only this document.
+        sh('open', '-g', '-F', '-a', 'TextEdit', self.path)
         self.pid = wait_until(lambda: pids_of('TextEdit') and pids_of('TextEdit')[0], timeout=10)
         require(self.pid, 'TextEdit did not start')
         wait_until(lambda: any(self.nonce in w['title'] for w in self.dump()['windows']), timeout=10)
@@ -350,10 +347,15 @@ class TextEdit(Case):
 
     def op_click(self):
         state = self.state()
-        hit = ocr_find(state['text'], 'line 010')
+        hit = ocr_find(state['text'], 'line 010') or ocr_find(state['text'], '010')
         if not hit:
             return self.run.record(self.key, 'click', 'fail', 'OCR did not find "line 010" to click', 'coordinates')
         result = self.act('click', x=hit[1], y=hit[2])
+        if self.run.mode == 'locked':
+            # Accessibility does not describe the app truthfully while locked;
+            # the typed marker landing on this row verifies the click instead.
+            self.pending_click = (result, hit)
+            return
         content = self.path.read_text()
         start = content.index('TextEdit line 010')
         end = start + len(f'TextEdit line 010 {self.nonce}')
@@ -376,10 +378,17 @@ class TextEdit(Case):
             line = next((l for l in value['value'].splitlines() if marker in l), '')
             verified, detail = True, f'typed into {line[:60]!r}'
         else:
-            seen = marker.lower() in (result.get('text') or '').lower()
             fresh = self.state()
-            seen = seen or bool(ocr_find(fresh['text'], marker))
-            verified, detail = seen, ('marker visible in a fresh screenshot (AX unreadable)' if seen else 'marker not in the document')
+            seen = ocr_find(fresh['text'], marker) or ocr_find(fresh['text'], marker[:6])
+            verified, detail = bool(seen), ('marker visible in a fresh screenshot (independent OCR; AX unreadable while locked)' if seen else 'marker not visible')
+            pending = getattr(self, 'pending_click', None)
+            if pending and result['is_error']:
+                self.run.record(self.key, 'click', 'untested', 'sent, but not verifiable: the typing that would show where the caret went was refused', 'coordinates')
+            elif pending:
+                click_result, hit = pending
+                same_row = bool(seen) and abs(seen[2] - hit[2]) <= 8
+                self.outcome('click', click_result, same_row,
+                             f"typed marker {'on' if same_row else 'not on'} the clicked row (y {hit[2]:.0f} vs {seen[2] if seen else '—'})", 'coordinates')
         self.outcome('type', result, verified, detail, 'keyboard')
 
     def op_scroll(self):
@@ -447,11 +456,7 @@ class Preview(Case):
         self.path = folder / f'preview-{self.nonce}.pdf'
         sh(TOOLS['make_pdf'], self.path, *[f'Preview page {i} {self.nonce}' for i in range(1, 7)])
         self.window = self.path.stem
-        if self.run.mode == 'locked':
-            sh('open', '-g', '-a', 'Preview', self.path)
-        else:
-            result = self.run.call('open_file', path=str(self.path), app='Preview')
-            require(not result['is_error'], result['text'])
+        sh('open', '-g', '-F', '-a', 'Preview', self.path)
         self.pid = wait_until(lambda: pids_of('Preview') and pids_of('Preview')[0], timeout=10)
         require(self.pid, 'Preview did not start')
         wait_until(lambda: any(self.nonce in w['title'] for w in self.dump()['windows']), timeout=10)
@@ -467,14 +472,23 @@ class Preview(Case):
         if not target:
             return self.run.record(self.key, 'click', 'fail', 'no search field in the tree or OCR', path)
         result = self.act('click', **target)
+        if self.run.mode == 'locked':
+            self.pending_click = (result, path)  # verified by where the typing lands
+            return
         focused = wait_until(lambda: (f := self.dump().get('focused')) and f.get('role') in ('AXSearchField', 'AXTextField') and f, timeout=3)
         self.outcome('click', result, bool(focused), f"focused element: {(self.dump().get('focused') or {}).get('role')}", path)
 
     def op_type(self):
         result = self.act('type_text', text='page 4')
-        focused = wait_until(lambda: (f := self.dump().get('focused')) and 'page 4' in (f.get('value') or '') and f, timeout=3)
-        if not focused and self.run.mode == 'locked':
-            focused = bool(ocr_find(self.state()['text'], 'page 4'))
+        if self.run.mode == 'locked':
+            focused = not result['is_error'] and bool(ocr_find(self.state()['text'], 'page 4'))
+            pending = getattr(self, 'pending_click', None)
+            if pending and result['is_error']:
+                self.run.record(self.key, 'click', 'untested', 'sent, but not verifiable: the typing that would show the focus was refused', pending[1])
+            elif pending:
+                self.outcome('click', pending[0], focused, 'the search field took the typing' if focused else 'typing did not reach the search field', pending[1])
+        else:
+            focused = wait_until(lambda: (f := self.dump().get('focused')) and 'page 4' in (f.get('value') or '') and f, timeout=3)
         self.outcome('type', result, bool(focused), 'search field reads "page 4"' if focused else 'search field unchanged', 'keyboard')
         self.act('press_key', key='Escape')
 
@@ -536,14 +550,18 @@ class Finder(Case):
         else:
             result = self.run.call('open_file', path=str(self.folder))
             require(not result['is_error'], result['text'])
-        require(wait_until(lambda: any(self.folder.name in w['title'] for w in self.dump()['windows']), timeout=10),
+        require(wait_until(lambda: any(self.folder.name in w['title'] for w in self.dump()['cgWindows']), timeout=10),
                 'the Finder window did not open')
 
     def ours_focused(self):
         return any(w['focused'] and self.folder.name in w['title'] for w in self.dump()['windows'])
 
     def selected(self):
-        return ' '.join(self.dump().get('selectedRows', []))
+        # Finder's own answer through Apple Events (allowed for Finder, and
+        # truthful while locked, unlike accessibility).
+        script = 'tell application "Finder" to get name of every item of (get selection)'
+        out = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=10).stdout.strip()
+        return out or ' '.join(self.dump().get('selectedRows', []))
 
     def op_screenshot(self):
         result = self.state()
@@ -577,7 +595,13 @@ class Finder(Case):
         after = [b['value'] for b in self.dump().get('scrollBars', []) if b['orientation'] == 'AXVerticalOrientation']
         # The sidebar has a scroll bar too; any vertical bar that moved counts.
         verified = bool(before and len(after) == len(before) and any(abs(a - b) > 0.01 for a, b in zip(after, before)))
-        self.outcome('scroll', result, verified, f'vertical scroll bars {[round(v, 2) for v in before]} -> {[round(v, 2) for v in after]}', 'coordinates')
+        numbers = lambda text: sorted({int(m[1]) for label, _, _ in ocr_lines(text) if (m := re.search(r'item-(\d\d)', label))})
+        shown_before, shown_after = numbers(state['text']), numbers(self.state()['text'])
+        if not before:
+            # Accessibility is not truthful while locked: compare the file names shown.
+            verified = bool(shown_before and shown_after and shown_after != shown_before)
+        self.outcome('scroll', result, verified, f'vertical scroll bars {[round(v, 2) for v in before]} -> {[round(v, 2) for v in after]}; '
+                     f'items shown {shown_before[:1]}…{shown_before[-1:]} -> {shown_after[:1]}…{shown_after[-1:]}', 'coordinates')
 
     def op_popup(self):
         if self.run.mode != 'locked' and not self.ours_focused():
@@ -587,9 +611,14 @@ class Finder(Case):
         self.outcome('popup', result, bool(info), 'Get Info window opened' if info else 'no Get Info window', 'keyboard')
 
     def cleanup(self):
-        script = (f'tell application "Finder" to close (every window whose name contains "{self.nonce[:4]}")\n'
-                  f'tell application "Finder" to close (every window whose name contains "{self.folder.name}")')
-        subprocess.run(['osascript', '-e', script], capture_output=True, timeout=10)
+        # Only the windows this run opened: its folder and Get Info windows.
+        for script in (f'tell application "Finder" to close Finder window "{self.folder.name}"',
+                       f'tell application "Finder" to close (every information window whose name contains "-{self.nonce[:4]}.txt")'):
+            subprocess.run(['osascript', '-e', script], capture_output=True, timeout=10)
+        names = subprocess.run(['osascript', '-e', 'tell application "Finder" to get name of every window'],
+                               capture_output=True, text=True, timeout=10).stdout
+        if self.folder.name in names:
+            self.run.record(self.key, 'cleanup', 'fail', 'the test Finder window is still open')
 
 
 # ------------------------------------------------------------ web (Chrome, Electron)

@@ -162,6 +162,9 @@ public final class MCPServer {
 
     // MARK: Asking the user
 
+    /// Whether the client announced that it can ask the user (MCP elicitation).
+    public var clientCanAsk: Bool { clientCapabilities["elicitation"] != nil }
+
     /// Asks the user a yes/no question through the client (MCP elicitation).
     /// nil when the client cannot ask or no answer came in time.
     public func confirm(_ message: String, timeout: TimeInterval = 180) async -> Bool? {

@@ -1,0 +1,3 @@
+# Locked-mode suites for scripts/run_when_locked.py: one shell command per line, {bin} = skfiy binary snapshot.
+python3 scripts/compat_baseline.py {bin} --mode locked
+python3 scripts/smoke_locked_direct.py {bin} --run
