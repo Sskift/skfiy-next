@@ -90,6 +90,9 @@ public final class ComputerUse {
     public var clientCanAsk: (() -> Bool)?
     /// The last few looks per app, for get_app_state since.
     var stateHistory: [pid_t: [StateRecord]] = [:]
+    /// The text field a click last focused, per app: a background Chromium
+    /// app (Electron) reports no focused element, so typing needs to know.
+    var typingTargets: [pid_t: AXUIElement] = [:]
 
     public func enableLockedUse() async throws {
         guard !DirectLockedUse.enabled else {
@@ -1511,6 +1514,7 @@ public final class ComputerUse {
         case (.left, 1):
             if Self.textRoles.contains(role) {
                 _ = try? element.set(kAXFocusedAttribute, kCFBooleanTrue)
+                if let pid = element.pid { typingTargets[pid] = element }
                 // A click lands the caret under the pointer; by index, at the end.
                 let length = (element.string(kAXValueAttribute) as NSString?)?.length ?? 0
                 let location = point.flatMap { textIndex(in: element, at: $0) } ?? length
@@ -1690,7 +1694,7 @@ public final class ComputerUse {
             }
         }
         try element.set(kAXValueAttribute, newValue)
-        if webText, let now = element.string(kAXValueAttribute), now != text {
+        if webText, let now = await settledValue(element, expecting: text), now != text {
             return try await afterAction(app, "Tried to set the value of [\(index)] \(describe(element)), but it now reads \(quote(now, limit: 60)); the page may have reformatted or rejected it.")
         }
         return try await afterAction(app, "Set the value of [\(index)] \(describe(element)).")
@@ -1866,7 +1870,9 @@ public final class ComputerUse {
         }
         try checkInputTarget(app)
         let pid = app.processIdentifier
-        let focused = focusedElement(pid)
+        // Background Chromium (Electron) reports no focused element even
+        // right after a click focused a field: that field is meant.
+        let focused = focusedElement(pid) ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
         lastInputWasSecret = focused?.string(kAXSubroleAttribute) == "AXSecureTextField"
         var note = ""
         if let focused, !Self.textRoles.contains(focused.string(kAXRoleAttribute) ?? ""),
@@ -1892,15 +1898,49 @@ public final class ComputerUse {
             throw ToolError("Stopped after \(typed) of \(text.count) character(s): " + EmergencyStop.refusal)
         }
         await Input.pause(0.15)
-        if let focused, let before, focused.string(kAXValueAttribute) == before,
-           focused.isSettable(kAXSelectedTextAttribute),
-           (try? focused.set(kAXSelectedTextAttribute, text as CFString)) != nil {
-            return try await afterAction(app, "Entered \(text.count) character(s) (the app ignored background keystrokes, so they were inserted through accessibility).\(note)")
+        if let focused, let before, focused.string(kAXValueAttribute) == before {
+            // The app ignored background keystrokes: insert at the caret
+            // through accessibility, or set the field's value with the text
+            // put where the caret is.
+            if focused.isSettable(kAXSelectedTextAttribute), (try? focused.set(kAXSelectedTextAttribute, text as CFString)) != nil,
+               await settledValue(focused, changedFrom: before) != before {
+                return try await afterAction(app, "Entered \(text.count) character(s) (the app ignored background keystrokes, so they were inserted through accessibility).\(note)")
+            }
+            if focused.isSettable(kAXValueAttribute) {
+                let current = before as NSString
+                var range = CFRange(location: current.length, length: 0)
+                if let value = focused.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() {
+                    AXValueGetValue(value as! AXValue, .cfRange, &range)
+                }
+                let location = min(max(0, range.location), current.length)
+                let length = min(max(0, range.length), current.length - location)
+                let updated = current.replacingCharacters(in: NSRange(location: location, length: length), with: text)
+                if (try? focused.set(kAXValueAttribute, updated as CFString)) != nil, await settledValue(focused, expecting: updated) == updated {
+                    setCaret(focused, location + (text as NSString).length)
+                    return try await afterAction(app, "Entered \(text.count) character(s) (the app ignored background keystrokes, so the field's value was set through accessibility, with the text at the caret).\(note)")
+                }
+            }
         }
         return try await afterAction(app, "Typed \(text.count) character(s) (sent to the app in the background).\(note)")
     }
 
     // MARK: - Helpers
+
+    /// A web field's value as accessibility reports it after a change:
+    /// Chromium updates its tree asynchronously, so a read right after
+    /// setting can still show the old value for a moment.
+    func settledValue(_ element: AXUIElement, expecting: String? = nil, changedFrom: String? = nil, timeout: Double = 0.6) async -> String? {
+        let started = Date()
+        var value = element.string(kAXValueAttribute)
+        while Date().timeIntervalSince(started) < timeout {
+            if let expecting, value == expecting { return value }
+            if let changedFrom, value != changedFrom { return value }
+            if expecting == nil, changedFrom == nil { return value }
+            await Input.pause(0.05)
+            value = element.string(kAXValueAttribute)
+        }
+        return value
+    }
 
     private var briefFocusEnabled: Bool {
         ProcessInfo.processInfo.environment["SKFIY_BRIEF_FOCUS"] == "1"

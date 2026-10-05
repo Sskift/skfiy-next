@@ -69,23 +69,19 @@ python3 scripts/compat_baseline.py --report                                    #
 | Chrome（扩展） | popup | — 未测 | ✅ 通过 | ✅ 通过 |
 | Electron | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
 | Electron | click | — 未测 | ✅ 通过 | ❌ 失败 |
-| Electron | type | — 未测 | ❌ 失败 | ❌ 失败 |
-| Electron | scroll | — 未测 | ❌ 失败 | ✅ 通过 |
+| Electron | type | — 未测 | ✅ 通过 | ❌ 失败 |
+| Electron | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
 | Electron | popup | — 未测 | ✅ 通过 | ❌ 失败 |
 
 **运行记录**
 
-- background（Chrome（应用工具）, Chrome（扩展）, Finder, TextEdit）：2026-10-05 00:17，macOS 26.6.1，会话锁定=False，锁态采样 455 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 3 次；证据 `eval/results/compat-background-20261005-001726-fe299114e7`（本机，不入库）
-- background（Preview）：2026-10-05 00:20，macOS 26.6.1，会话锁定=False，锁态采样 53 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-002035-0d9d91b611`（本机，不入库）
-- background（Electron）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 101 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 1 次；证据 `eval/results/compat-background-20261005-002200-6071205215`（本机，不入库）
 - front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 1 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-front-20261005-002245-a543ee33fa`（本机，不入库）
-- locked（Chrome（应用工具）, Chrome（扩展）, Electron）：2026-10-05 00:25，macOS 26.6.1，会话锁定=True，锁态采样 450 次（锁定 450，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-002505-6a9344d055`（本机，不入库）
-- locked（Preview, TextEdit）：2026-10-05 00:31，macOS 26.6.1，会话锁定=True，锁态采样 289 次（锁定 289，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-003143-1ff80e09db`（本机，不入库）
-- locked（Finder）：2026-10-05 00:33，macOS 26.6.1，会话锁定=True，锁态采样 93 次（锁定 93，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-003324-f62cf8ea7d`（本机，不入库）
+- locked（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 03:05，macOS 26.6.1，会话锁定=True，锁态采样 529 次（锁定 529，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-030527-850e957617`（本机，不入库）
+- background（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 17:46，macOS 26.6.1，会话锁定=False，锁态采样 364 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-174652-6f084ae9b8`（本机，不入库）
 
 **失败、拒绝、跳过与未测的原因**
 
-- TextEdit · click · locked：typed marker not on the clicked row (y 155 vs 38.0)
+- TextEdit · click · locked：typed marker not on the clicked row (y 156 vs 38.0)
 - TextEdit · popup · locked：This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.
 - Preview · popup · background：no sheet appeared; skfiy: menu item "Go to Page…" disabled in the background
 - Preview · popup · locked：no sheet appeared
@@ -97,17 +93,15 @@ python3 scripts/compat_baseline.py --report                                    #
 - Chrome（应用工具） · type · locked：page input value ''
 - Chrome（应用工具） · popup · locked：the page did not open its alert
 - Electron · click · locked：page clicks 0 -> 0
-- Electron · type · background：page input value ''
 - Electron · type · locked：page input value ''
-- Electron · scroll · background：page scrollY 0 -> 0
 - Electron · popup · locked：the page did not open its alert
 - front 未测：front mode brings apps forward; pass --allow-front (only while the user is away)
 <!-- compat-table:end -->
 
 ## 基线发现（2026-10-05，macOS 26.6.1，单块 Retina 内置屏）
 
-1. **Electron：后台启动、窗口从未成为 key window 时，键盘输入丢失。** 点输入框经辅助功能聚焦成功，但应用报告没有焦点元素，随后投递的按键全部丢失（单独运行 4/4 次）。Chrome for Testing 同样的步骤能输入。
-2. **Electron：网页的辅助功能树不稳定。** 单独运行 4/4 次能拿到网页元素；整套连续运行时 2/2 次只有窗口按钮，没有网页元素，只能退回截图坐标，而 Chromium 丢弃发往后台窗口的指针事件，点击、输入、弹窗随之失败。滚动也有 1/4 次没有生效。
+1. **Electron：后台启动、窗口从未成为 key window 时，键盘输入会丢失（已处理）。** 点输入框经辅助功能聚焦成功，但应用报告没有焦点元素，随后投递的按键可能全部丢失。现在 skfiy 记住点击聚焦的输入框；按键没有改变它的值时，改为经辅助功能在光标处插入，或把文字放到光标处后设置整个值（Chromium 会向页面发出 input 事件，页面照常收到）。Chromium 的辅助功能树是异步更新的，设值后会稍等读回的值跟上，再判断是否成功（此前 `set_value` 会因读回旧值而误报“页面拒绝了”）。2026-10-05 17:46 后台复测 Electron 5/5、整套 28 通过 2 按设计拒绝。
+2. **Electron：网页的辅助功能树不稳定。** 多数运行能拿到网页元素；偶尔（此前整套连续运行 2/2 次，2026-10-05 又在单独运行中出现 1 次）只有窗口按钮，没有网页元素，只能退回截图坐标，而 Chromium 丢弃发往后台窗口的指针事件，点击、输入、弹窗随之失败。之后连续 3 次（单独 2 次、整套 1 次）都正常。原因未查清，仍列为限制。
 3. **按坐标滚动的“页”取的是坐标下那个元素的高度。** 在网页里坐标落在一行文字上，“2 页”只滚了 80 px；Finder 列表里 2 页只把滚动条从 0.40 移到 0.46。被判为通过，是因为确实滚动了，但滚动量与参数不符。
 4. **作用于当前文档的菜单命令在后台被禁用**（TextEdit 打印、预览“前往页面…”、Finder“显示简介”）。skfiy 如实说明并指向 `run_in_front`，表中记为“拒绝”。TextEdit 的弹窗用后台可触发的“关闭未命名文档→保留确认表单”测到，表单出现在树里，按编号点“删除”可关闭。
 5. **测试窗口出现在用户窗口之上。** Chrome for Testing 和 Electron 后台启动后，它们的窗口会排到最上层（不激活应用）。窗口守护在每次运行中把用户的窗口放回最上层 1–3 次；skfiy 自身工具调用期间则由 `keepingFront` 处理。
