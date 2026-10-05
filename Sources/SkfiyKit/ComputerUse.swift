@@ -2607,6 +2607,6 @@ func isChromium(_ app: NSRunningApplication) -> Bool {
                     "com.vivaldi.vivaldi", "company.thebrowser.", "com.operasoftware.", "ai.perplexity.comet"]
     let frameworks = (app.bundleURL?.path ?? "") + "/Contents/Frameworks/"
     return prefixes.contains { bundleID.hasPrefix($0) }
-        || ["Chromium Framework.framework", "Chromium Embedded Framework.framework"]
+        || ["Chromium Framework.framework", "Chromium Embedded Framework.framework", "Electron Framework.framework"]
             .contains { FileManager.default.fileExists(atPath: frameworks + $0) }
 }
