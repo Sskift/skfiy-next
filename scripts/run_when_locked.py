@@ -77,8 +77,9 @@ def main():
                 started = time.time()
                 completed = subprocess.run(command.replace('{bin}', str(snapshot)), shell=True, cwd=ROOT,
                                            capture_output=True, text=True, timeout=1800)
+            end = session()
             row = {'command': command, 'started': started, 'seconds': round(time.time() - started, 1),
-                   'exit': completed.returncode, 'lockedAtEnd': session()['locked'],
+                   'exit': completed.returncode, 'lockedAtEnd': end['locked'], 'displayAsleepAtEnd': end.get('displayAsleep'),
                    'tail': (completed.stdout + completed.stderr)[-3000:]}
             with log.open('a') as handle:
                 handle.write(json.dumps(row, ensure_ascii=False) + '\n')

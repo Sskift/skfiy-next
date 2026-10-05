@@ -141,4 +141,20 @@ struct CapabilitiesTests {
         #expect(!BrowserBridge.browserAlive("/tmp/999999.sock"))
         #expect(!BrowserBridge.browserAlive("/tmp/not-a-pid.sock"))
     }
+
+    @Test func anAsleepDisplayIsWokenWhileLockedOrSaidSo() {
+        // Locked in direct mode: capture still works, the display is woken first.
+        let wake = CapabilityReport.evaluate(facts(.locked, mode: .direct) { $0.displayAsleep = true }, lockedTools: DirectLockedUse.lockedTools)
+        #expect(wake["screenshot"]?.available == true && wake["screenshot"]?.limits.contains { $0.contains("wakes it to the lock screen") } == true)
+        #expect(wake["pointer"]?.available == true)
+        // Waking turned off: no screenshot, no pointer, and why.
+        let off = CapabilityReport.evaluate(facts(.locked, mode: .direct) { $0.displayAsleep = true; $0.wakeDisplay = false },
+                                            lockedTools: DirectLockedUse.lockedTools)
+        #expect(off["screenshot"]?.available == false && off["screenshot"]?.detail.contains("SKFIY_LOCKED_WAKE_DISPLAY=0") == true)
+        #expect(off["ocr"]?.available == false && off["pointer"]?.available == false && !off.tools.contains("click"))
+        #expect(off.changes(since: wake).contains("screenshot"))
+        // Unlocked: an asleep display is the user's choice; not woken.
+        let unlocked = CapabilityReport.evaluate(facts { $0.displayAsleep = true })
+        #expect(unlocked["screenshot"]?.available == false && unlocked["ax"]?.available == true)
+    }
 }

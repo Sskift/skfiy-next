@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import IOKit.pwr_mgt
 import ScreenCaptureKit
 
 /// A single app-owned window. Frames use global screen points with a top-left
@@ -124,6 +125,7 @@ func resized(_ image: CGImage, width: Int, height: Int) -> CGImage? {
 func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> (CGImage, CaptureGeometry) {
     try Task.checkCancellation()
     try directLockedCapturePermission()
+    try await DisplayWake.require(for: window.frame)
     guard window.pid > 0, window.id != kCGNullWindowID,
           maxScale.isFinite, maxScale > 0 else {
         throw ToolError("The selected window or screenshot scale is invalid.")
@@ -217,4 +219,73 @@ private func directLockedWindow(_ window: SCWindow, pid: pid_t, metadata: [CGWin
         if let alpha = details[kCGWindowAlpha as String] as? Double, !alpha.isFinite || alpha <= 0 { return nil }
     }
     return DirectLockedWindow(id: window.windowID, pid: pid, title: window.title ?? "", frame: frame)
+}
+
+
+/// Window capture needs the display on: with it asleep, as it soon is on a
+/// locked Mac, ScreenCaptureKit fails with an internal error. While macOS is
+/// locked in direct mode, the display is woken to the lock screen (which
+/// shows nothing of the user's) and kept on until two minutes after the last
+/// capture; SKFIY_LOCKED_WAKE_DISPLAY=0 turns that off. Unlocked, a display
+/// that is asleep is left asleep: the user may have turned it off.
+@MainActor
+enum DisplayWake {
+    static var enabled: Bool { ProcessInfo.processInfo.environment["SKFIY_LOCKED_WAKE_DISPLAY"] != "0" }
+    private static var keepOn: IOPMAssertionID = 0
+    private static var release: Task<Void, Never>?
+    /// When skfiy last woke a display, for the capability report.
+    private(set) static var lastWoken: Date?
+
+    static func asleep(_ frame: CGRect) -> Bool {
+        CGDisplayIsAsleep(displayID(containing: CGPoint(x: frame.midX, y: frame.midY))) != 0
+    }
+
+    static var anyAsleep: Bool {
+        var count: UInt32 = 0
+        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+        guard CGGetOnlineDisplayList(16, &displays, &count) == .success, count > 0 else { return false }
+        return displays.prefix(Int(count)).contains { CGDisplayIsAsleep($0) != 0 }
+    }
+
+    /// Throws, saying why, when the display showing `frame` is asleep and
+    /// cannot be woken here; wakes it when it can.
+    static func require(for frame: CGRect) async throws {
+        let lockedDirect = DirectLockedUse.enabled && DirectLockedUse.lockState == .locked
+        if lockedDirect { hold() }
+        guard asleep(frame) else { return }
+        guard lockedDirect else {
+            throw ToolError("No screenshot: the display is asleep (off). Window capture needs it on; skfiy wakes it only while macOS is locked in direct mode.")
+        }
+        guard enabled else {
+            throw ToolError("No screenshot: the display is asleep (off), and SKFIY_LOCKED_WAKE_DISPLAY=0 keeps skfiy from waking it. Window capture needs the display on.")
+        }
+        var activity: IOPMAssertionID = 0
+        IOPMAssertionDeclareUserActivity("skfiy direct locked use: window capture" as CFString, kIOPMUserActiveLocal, &activity)
+        lastWoken = Date()
+        for _ in 0..<40 where asleep(frame) {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard !asleep(frame) else {
+            throw ToolError("No screenshot: the display is asleep (off) and did not wake within 4 s. Window capture needs it on.")
+        }
+        // The window server needs a moment to draw again after waking.
+        try await Task.sleep(nanoseconds: 400_000_000)
+    }
+
+    /// Keeps the display from going to sleep until two minutes after the
+    /// last capture, so a task does not lose it halfway.
+    private static func hold() {
+        guard enabled else { return }
+        if keepOn == 0 {
+            IOPMAssertionCreateWithName(kIOPMAssertPreventUserIdleDisplaySleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                                        "skfiy direct locked use" as CFString, &keepOn)
+        }
+        release?.cancel()
+        release = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            guard !Task.isCancelled else { return }
+            if keepOn != 0 { IOPMAssertionRelease(keepOn) }
+            keepOn = 0
+        }
+    }
 }

@@ -44,6 +44,10 @@ struct CapabilityInputs: Equatable {
     var hasFocusedElement: Bool?
     /// Locked direct mode: the age of the latest screenshot coordinates, when still valid.
     var screenshotAge: Double?
+    /// The display is asleep (off); window capture needs it on.
+    var displayAsleep = false
+    /// Direct locked use may wake an asleep display to the lock screen.
+    var wakeDisplay = true
 
     var connectedBrowsers: [String] = []
     var browserConnected = false
@@ -171,16 +175,25 @@ struct CapabilityReport {
         } else if !facts.screenRecording {
             screenshot = Capability(name: "screenshot", available: false, detail: "Screen Recording permission is missing for the app hosting skfiy (skfiy doctor).")
         } else if lockedDirect {
-            screenshot = facts.windows.isEmpty
-                ? Capability(name: "screenshot", available: false, detail: "No capturable window of the app in the locked session.")
-                : Capability(name: "screenshot", available: true, detail: "Single-window capture while macOS stays locked (get_app_state).",
-                             limits: facts.windows.count > 1 ? ["\(facts.windows.count) windows: pass window (title or id) to choose one."] : [])
+            var limits = facts.windows.count > 1 ? ["\(facts.windows.count) windows: pass window (title or id) to choose one."] : []
+            if facts.displayAsleep, facts.wakeDisplay {
+                limits.append("The display is off: the next capture wakes it to the lock screen (nothing of the user's shows) and keeps it on until 2 minutes after the last capture.")
+            }
+            if facts.windows.isEmpty {
+                screenshot = Capability(name: "screenshot", available: false, detail: "No capturable window of the app in the locked session.")
+            } else if facts.displayAsleep, !facts.wakeDisplay {
+                screenshot = Capability(name: "screenshot", available: false, detail: "The display is asleep (off), and SKFIY_LOCKED_WAKE_DISPLAY=0 keeps skfiy from waking it; window capture needs it on.")
+            } else {
+                screenshot = Capability(name: "screenshot", available: true, detail: "Single-window capture while macOS stays locked (get_app_state).", limits: limits)
+            }
         } else if facts.session == .locked {
             screenshot = Capability(name: "screenshot", available: false, detail: "macOS is locked.")
         } else if facts.hidden {
             screenshot = Capability(name: "screenshot", available: false, detail: "The app is hidden, and skfiy does not unhide it; element actions still work.")
         } else if shown?.minimized == true {
             screenshot = Capability(name: "screenshot", available: false, detail: "The window is minimized, and skfiy does not restore it; element actions still work.")
+        } else if facts.displayAsleep {
+            screenshot = Capability(name: "screenshot", available: false, detail: "The display is asleep (off); window capture needs it on, and skfiy does not wake it while the Mac is unlocked.")
         } else if !facts.windows.contains(where: { $0.onScreen && !$0.minimized }) {
             screenshot = Capability(name: "screenshot", available: false, detail: "None of the app's windows is on screen (another desktop, full screen, or no window).")
         } else {
@@ -344,6 +357,8 @@ extension ComputerUse {
         facts.accessibility = AXIsProcessTrusted()
         facts.screenRecording = CGPreflightScreenCaptureAccess()
         facts.clientCanAsk = clientCanAsk?() ?? (askUser != nil)
+        facts.displayAsleep = DisplayWake.anyAsleep
+        facts.wakeDisplay = DisplayWake.enabled
 
         if case .running(let app) = try directory.resolve(query), !app.isTerminated {
             let pid = app.processIdentifier

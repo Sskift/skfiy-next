@@ -205,7 +205,8 @@ class Session:
                 self.summary['windowGuardCorrections'] = len((self.directory / 'window-guard.jsonl').read_text().splitlines())
             locked = [s for s in self.samples if s.get('locked')]
             self.summary['lockSamples'] = {'count': len(self.samples), 'locked': len(locked),
-                                           'unknown': sum(1 for s in self.samples if not s.get('known'))}
+                                           'unknown': sum(1 for s in self.samples if not s.get('known')),
+                                           'displayAsleep': sum(1 for s in self.samples if s.get('displayAsleep'))}
             self.summary['ok'] = not error and all(c['ok'] for c in self.checks) and (
                 len(locked) == len(self.samples) if self.locked else not locked)
             self.summary['finished'] = time.time()

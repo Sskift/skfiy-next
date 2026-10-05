@@ -148,7 +148,9 @@ func session() -> [String: Any] {
     let known = dictionary["kCGSSessionOnConsoleKey"] as? Bool == true && dictionary["kCGSessionLoginDoneKey"] as? Bool == true
     let idle = [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .mouseMoved, .scrollWheel, .flagsChanged]
         .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+    // Window capture needs the display on; record whether it was asleep.
     return ["known": known, "locked": dictionary["CGSSessionScreenIsLocked"] as? Bool == true, "idleSeconds": idle,
+            "displayAsleep": CGDisplayIsAsleep(CGMainDisplayID()) != 0,
             "accessibility": AXIsProcessTrusted(), "screenCapture": CGPreflightScreenCaptureAccess(), "timestamp": Date().timeIntervalSince1970]
 }
 
