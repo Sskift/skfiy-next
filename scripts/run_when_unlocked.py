@@ -25,11 +25,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('binary', type=Path)
     parser.add_argument('--idle', type=float, default=90, help='seconds without user input before each suite')
+    parser.add_argument('--suites', type=Path, default=ROOT / 'scripts/unlocked_suites.txt', help='the list of suites to run')
     args = parser.parse_args()
     log = ROOT / 'eval/results/unlocked-runs.jsonl'
     snapshot = Path('/tmp/skfiy-compat/bin/skfiy-unlocked-run')
     snapshot.parent.mkdir(parents=True, exist_ok=True)
-    suites = [line.strip() for line in (ROOT / 'scripts/unlocked_suites.txt').read_text().splitlines()
+    suites = [line.strip() for line in args.suites.read_text().splitlines()
               if line.strip() and not line.startswith('#')]
     print(f'{len(suites)} suite(s); waiting for an unlocked, idle Mac', flush=True)
     for command in suites:

@@ -119,8 +119,12 @@ def main():
     parser.add_argument('--allow-unlocked', action='store_true')
     args = parser.parse_args()
     main_binary()
-    if not probe('session')['locked'] and not args.allow_unlocked:
+    state = probe('session')
+    if not state['locked'] and not args.allow_unlocked:
         print('skipped: the Mac is not locked (a virtual display would change the user\'s screen space; see --allow-unlocked)')
+        return
+    if not state['locked'] and state.get('displayAsleep'):
+        print('skipped: unlocked with the display asleep (skfiy rightly does not wake it, so nothing can be captured)')
         return
     original = probe('displays')['displays']
     try:
