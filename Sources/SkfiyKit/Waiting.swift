@@ -43,9 +43,13 @@ struct PixelFingerprint: Equatable, Sendable {
     /// The share of pixels that differ noticeably; 1 when the sizes differ.
     func changedFraction(from other: PixelFingerprint, tolerance: UInt8 = 16) -> Double {
         guard width == other.width, height == other.height, !pixels.isEmpty else { return 1 }
-        var changed = 0
-        for index in pixels.indices where abs(Int(pixels[index]) - Int(other.pixels[index])) > Int(tolerance) {
-            changed += 1
+        let limit = Int(tolerance)
+        let changed = pixels.withUnsafeBufferPointer { a in
+            other.pixels.withUnsafeBufferPointer { b in
+                var count = 0
+                for index in 0..<a.count where abs(Int(a[index]) - Int(b[index])) > limit { count += 1 }
+                return count
+            }
         }
         return Double(changed) / Double(pixels.count)
     }
@@ -55,11 +59,23 @@ struct PixelFingerprint: Equatable, Sendable {
     /// down to a few pixels, so a small label changing one word is seen.
     func changed(from other: PixelFingerprint, tolerance: UInt8 = 24) -> Bool {
         guard width == other.width, height == other.height, !pixels.isEmpty else { return true }
-        var count = 0, minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
-        for index in pixels.indices where abs(Int(pixels[index]) - Int(other.pixels[index])) > Int(tolerance) {
-            count += 1
-            let x = index % width, y = index / width
-            minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+        let limit = Int(tolerance)
+        // Row by row over the raw bytes: it runs on every look of a wait.
+        let (count, minX, minY, maxX, maxY) = pixels.withUnsafeBufferPointer { a in
+            other.pixels.withUnsafeBufferPointer { b -> (Int, Int, Int, Int, Int) in
+                var count = 0, minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
+                for y in 0..<height {
+                    let row = y * width
+                    for x in 0..<width where abs(Int(a[row + x]) - Int(b[row + x])) > limit {
+                        count += 1
+                        if x < minX { minX = x }
+                        if x > maxX { maxX = x }
+                        if y < minY { minY = y }
+                        maxY = y
+                    }
+                }
+                return (count, minX, minY, maxX, maxY)
+            }
         }
         guard count >= 4 else { return false }
         let caret = maxX - minX <= 3 && maxY - minY <= max(48, height / 10)
