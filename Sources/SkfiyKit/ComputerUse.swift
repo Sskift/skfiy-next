@@ -502,8 +502,12 @@ public final class ComputerUse {
         // (not every change is announced). SKFIY_WAIT_EVENTS=0 polls instead.
         let events = ProcessInfo.processInfo.environment["SKFIY_WAIT_EVENTS"] == "0" ? nil : AXChangeEvents(pid: app.processIdentifier)
         defer { events?.stop() }
-        if events != nil { engine.interval = 1 }
+        // Without notifications to go by (a canvas animating), stability is
+        // judged from pixels too, so look a little more often then.
+        if events != nil { engine.interval = text.isEmpty ? 0.5 : 1 }
         var looks = 0
+        var sawWindow = false
+        let watched = windowQuery?.isEmpty == false ? windowQuery : nil
         let started = Date()
         let result = await engine.run(
             now: { Date().timeIntervalSince(started) },
@@ -528,17 +532,28 @@ public final class ComputerUse {
             },
             observe: {
                 looks += 1
-                // A window that is not there (yet) proves nothing either way.
-                guard let snapshot = try? self.buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil) else {
+                let snapshot: Snapshot
+                do {
+                    snapshot = try self.buildSnapshot(app: app, appElement: appElement, windowQuery: watched)
+                } catch let error as ToolError where sawWindow && error.description.hasPrefix("No window") {
+                    throw WaitStopped("the window closed.")
+                } catch {
+                    // A window that is not there (yet) proves nothing either way.
                     return WaitObservation(text: nil, textFingerprint: UUID().uuidString)
                 }
+                sawWindow = true
                 var current = snapshot.text
                 if (args.values["ocr"] as? Bool) ?? snapshot.opaque,
                    let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
                    let lines = try? await self.recognizeText(pid: app.processIdentifier, region: region) {
                     current += "\n" + lines.map(\.text).joined(separator: "\n")
                 }
-                return WaitObservation(text: current, textFingerprint: current)
+                var observation = WaitObservation(text: current, textFingerprint: current)
+                if text.isEmpty, let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
+                   let shot = try? await captureApp(pid: app.processIdentifier, rect: region), let image = TextRecognition.decode(shot.data) {
+                    observation.fingerprint = PixelFingerprint(image, region: nil)
+                }
+                return observation
             })
         if case .cancelled = result { throw CancellationError() }
         if app.isTerminated { sessions[app.processIdentifier] = nil }
@@ -983,8 +998,17 @@ public final class ComputerUse {
         var captureNote: String?
         let shownWindow = snapshot.chosenWindow ?? appElement.element(kAXFocusedWindowAttribute)
         let minimized = shownWindow?.bool(kAXMinimizedAttribute) == true
+        // A window inspected by name may lie under another window of the same
+        // app: it is captured on its own, as while locked, not as a region.
+        let inspected = snapshot.chosenWindow.flatMap { independentWindow($0, pid: pid) }
         if app.isHidden || minimized {
             captureNote = "No screenshot: the app is \(app.isHidden ? "hidden" : "minimized"), and skfiy does not bring windows forward. Accessibility actions by element_index still work."
+        } else if let inspected {
+            do {
+                screenshot = try await captureDirectLockedWindow(inspected, maxScale: 1)
+            } catch let error as ToolError {
+                captureNote = error.description
+            }
         } else if let region = appRegion(pid: pid, focusedWindow: snapshot.focusedWindowFrame) {
             do {
                 screenshot = try await captureApp(pid: pid, rect: region)
@@ -1011,7 +1035,13 @@ public final class ComputerUse {
                 recognizedLines = reused
             } else {
                 do {
-                    let lines = try await recognizeText(pid: pid, region: screenshot.geometry.rect)
+                    let lines: [RecognizedText]
+                    if let inspected {
+                        let (hires, _) = try await captureDirectLockedImage(inspected, maxScale: backingScale(for: inspected.frame))
+                        lines = TextRecognition.sorted(try await TextRecognition.recognizeBoth(hires, showing: screenshot.geometry.rect))
+                    } else {
+                        lines = try await recognizeText(pid: pid, region: screenshot.geometry.rect)
+                    }
                     recognizedLines = textLines(lines, geometry: screenshot.geometry)
                 } catch {
                     recognizedLines = ["(Text recognition failed: \(error.localizedDescription))"]
@@ -1027,7 +1057,10 @@ public final class ComputerUse {
                 : "Showing the \(found.matches) line(s) matching \(quote(query, limit: 60)) with their containers, out of \(total); indices are those of the full tree.")
             snapshot.body = found.lines
         }
+        let previousZoom = sessions[pid]?.zoom
         sessions[pid] = AppSession(elements: snapshot.elements, geometry: screenshot?.geometry, window: snapshot.chosenWindow, epoch: keeping?.epoch)
+        // An older zoom_id is then refused as belonging to an older screenshot.
+        sessions[pid]?.zoom = previousZoom
         sessions[pid]?.windowID = shownWindow.flatMap(windowID(of:))
         sessions[pid]?.windowFrame = shownWindow?.frame
         let version = StateVersions.next()
@@ -1065,6 +1098,12 @@ public final class ComputerUse {
         header.append("Changes since \(since): \(diff.summary). Lines not listed are unchanged, with the same indices; new elements got new indices.")
         let text = (header.filter { !$0.isEmpty } + [""] + diff.render()).joined(separator: "\n")
         return ToolResult(text: text, image: pixelsSame ? nil : screenshot?.data, imageMimeType: screenshot?.mimeType ?? "image/jpeg")
+    }
+
+    /// A window as the window server knows it, for capturing it on its own.
+    func independentWindow(_ window: AXUIElement, pid: pid_t) -> DirectLockedWindow? {
+        guard let id = windowID(of: window), let frame = window.frame else { return nil }
+        return DirectLockedWindow(id: id, pid: pid, title: window.string(kAXTitleAttribute) ?? "", frame: frame)
     }
 
     /// Recognizes the text shown in `region` of an app, from a capture at the
@@ -1956,6 +1995,7 @@ public final class ComputerUse {
             throw ToolError("No state for \(app.localizedName ?? query) yet. Call get_app_state first.")
         }
         try checkWindowID(args, session: session)
+        if let index = try args.elementIndex() { try checkElementWindow(index, session: session, app: app) }
         return (app, session)
     }
 
@@ -2400,6 +2440,25 @@ public final class ComputerUse {
         guard abs(now.minX - then.minX) < 1, abs(now.minY - then.minY) < 1, abs(now.width - then.width) < 1, abs(now.height - then.height) < 1 else {
             throw ToolError("The window moved or changed size since the latest screenshot (it was \(then), now \(now)), so its x/y would land elsewhere. Call get_app_state again; nothing was done.")
         }
+    }
+
+    /// An element index from a window that was closed meanwhile: a closed
+    /// AppKit window can live on off screen, its buttons still pressable, and
+    /// its controls can move into a new window (closed and recreated). Either
+    /// way the model's picture of that window is out of date.
+    func checkElementWindow(_ index: Int, session: AppSession, app: NSRunningApplication) throws {
+        guard let shown = session.windowID, !app.isHidden, let element = session.elements[safe: index],
+              let window = element.element(kAXWindowAttribute), window.bool(kAXMinimizedAttribute) != true else { return }
+        let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow], shown) as? [[String: Any]] ?? []
+        guard rows.first?[kCGWindowIsOnscreen as String] as? Bool != true else { return }
+        // Not on screen: closed, unless the app still lists it (another Space).
+        let listed = AXUIElementCreateApplication(app.processIdentifier).elements(kAXWindowsAttribute).contains { windowID(of: $0) == shown }
+        guard !listed else { return }
+        let now = windowID(of: window)
+        if now == shown || now == nil {
+            throw ToolError("The window of the latest get_app_state (id \(shown)) was closed, and element [\(index)] was in it. Call get_app_state again; nothing was done.")
+        }
+        throw ToolError("The window of the latest get_app_state (id \(shown)) was closed; element [\(index)] is now in window id \(now!) (closed and recreated). Call get_app_state again; nothing was done.")
     }
 
     /// window_id, when given, must be the window the latest screenshot showed.

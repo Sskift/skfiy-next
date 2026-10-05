@@ -211,6 +211,8 @@ def textedit_flow(flows, browser):
             output = Path(path).with_name(f'processed-{run}.txt')
             proof = {'file': str(output), 'contains': f'Words: {words}'}
             agent.record('process', 'pending', proof)
+            # A new connection knows nothing of the app yet: look first.
+            agent.call('get_app_state', app='TextEdit', window=file_name)
             agent.call('type_text', app='TextEdit', text=f'Words: {words}\n')
             saved = agent.call('save_document', app='TextEdit', path=str(output), document=file_name)
             time.sleep(1)

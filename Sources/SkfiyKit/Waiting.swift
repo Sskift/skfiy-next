@@ -193,9 +193,11 @@ struct WaitEngine {
         }
     }
 
+    /// Pixels and text (the tree) both count: a canvas animates without the
+    /// tree changing, a label changes without many pixels changing.
     private func changed(_ a: WaitObservation, _ b: WaitObservation) -> Bool {
         if let x = a.fingerprint, let y = b.fingerprint {
-            return y.changed(from: x)
+            return y.changed(from: x) || (a.textFingerprint != nil && a.textFingerprint != b.textFingerprint)
         }
         return a.textFingerprint != b.textFingerprint
     }
