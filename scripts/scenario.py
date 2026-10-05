@@ -27,15 +27,18 @@ from smoke_locked import Client, Evidence, ROOT, require  # noqa: E402,F401
 
 BIN = Path('/tmp/skfiy-compat/bin')
 SOURCES = {'AXProbe': 'scripts/fixtures/AXProbe.swift', 'Launch': 'scripts/fixtures/Launch.swift',
-           'WindowGuard': 'scripts/fixtures/WindowGuard.swift', 'ScenarioFixture': 'scripts/fixtures/ScenarioFixture.swift'}
+           'WindowGuard': 'scripts/fixtures/WindowGuard.swift', 'ScenarioFixture': 'scripts/fixtures/ScenarioFixture.swift',
+           'VirtualDisplay': ('scripts/fixtures/VirtualDisplay.swift', 'scripts/fixtures/VirtualDisplay.h')}
 
 
 def tool(name):
-    """A helper binary, rebuilt when its source is newer."""
+    """A helper binary, rebuilt when its source (or Objective-C header) is newer."""
     BIN.mkdir(parents=True, exist_ok=True)
-    binary, source = BIN / name, ROOT / SOURCES[name]
-    if not binary.exists() or binary.stat().st_mtime < source.stat().st_mtime:
-        subprocess.run(['/usr/bin/swiftc', '-O', str(source), '-o', str(binary)], check=True, capture_output=True, timeout=300)
+    sources = SOURCES[name] if isinstance(SOURCES[name], tuple) else (SOURCES[name],)
+    binary, paths = BIN / name, [ROOT / source for source in sources]
+    if not binary.exists() or binary.stat().st_mtime < max(path.stat().st_mtime for path in paths):
+        headers = [argument for path in paths[1:] for argument in ('-import-objc-header', str(path))]
+        subprocess.run(['/usr/bin/swiftc', '-O', *headers, str(paths[0]), '-o', str(binary)], check=True, capture_output=True, timeout=300)
     return binary
 
 

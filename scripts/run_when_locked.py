@@ -45,6 +45,7 @@ def main():
     parser.add_argument('binary', type=Path)
     parser.add_argument('--settle', type=float, default=20, help='seconds the Mac must stay locked first')
     parser.add_argument('--once', action='store_true', help='exit after one locked period')
+    parser.add_argument('--suites', type=Path, default=ROOT / 'scripts/locked_suites.txt', help='the list of suites to run')
     args = parser.parse_args()
     log = ROOT / 'eval/results/locked-runs.jsonl'
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,7 @@ def main():
         snapshot = Path('/tmp/skfiy-compat/bin/skfiy-locked-run')
         snapshot.unlink(missing_ok=True)
         shutil.copy2(args.binary, snapshot)
-        suites = [line.strip() for line in (ROOT / 'scripts/locked_suites.txt').read_text().splitlines()
+        suites = [line.strip() for line in args.suites.read_text().splitlines()
                   if line.strip() and not line.startswith('#')]
         print(f'locked: running {len(suites)} suite(s)', flush=True)
         for command in suites:

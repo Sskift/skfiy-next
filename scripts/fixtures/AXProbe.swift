@@ -154,6 +154,33 @@ func session() -> [String: Any] {
             "accessibility": AXIsProcessTrusted(), "screenCapture": CGPreflightScreenCaptureAccess(), "timestamp": Date().timeIntervalSince1970]
 }
 
+/// Online displays in global top-left points, with their pixels per point.
+func displays() -> [String: Any] {
+    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+    var count: UInt32 = 0
+    _ = CGGetOnlineDisplayList(16, &ids, &count)
+    return ["displays": ids.prefix(Int(count)).map { id -> [String: Any] in
+        let bounds = CGDisplayBounds(id)
+        let mode = CGDisplayCopyDisplayMode(id)
+        return ["id": Int(id), "x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height,
+                "scale": mode.map { Double($0.pixelWidth) / Double(max($0.width, 1)) } ?? 0,
+                "main": CGDisplayIsMain(id) != 0, "asleep": CGDisplayIsAsleep(id) != 0]
+    }]
+}
+
+/// The window server's frames of an app's windows (global top-left points):
+/// what is on screen, even before the app itself hears its windows moved.
+func windows(_ pid: pid_t) -> [String: Any] {
+    let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+    return ["windows": list.compactMap { info -> [String: Any]? in
+        guard info[kCGWindowOwnerPID as String] as? Int == Int(pid), info[kCGWindowLayer as String] as? Int == 0,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds) else { return nil }
+        return ["id": info[kCGWindowNumber as String] as? Int ?? 0, "x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height,
+                "onScreen": info[kCGWindowIsOnscreen as String] as? Bool ?? false]
+    }]
+}
+
 func image(_ path: String) -> CGImage? {
     guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -192,9 +219,11 @@ switch arguments.first {
 case "dump" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(dump(pid_t(arguments[1])!))
 case "front": output(front())
 case "session": output(session())
+case "displays": output(displays())
+case "windows" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(windows(pid_t(arguments[1])!))
 case "ocr" where arguments.count == 2: output(ocr(arguments[1]))
 case "red" where arguments.count == 2: output(red(arguments[1]))
 default:
-    FileHandle.standardError.write(Data("usage: AXProbe dump <pid> | front | session | ocr <image> | red <image>\n".utf8))
+    FileHandle.standardError.write(Data("usage: AXProbe dump <pid> | front | session | displays | windows <pid> | ocr <image> | red <image>\n".utf8))
     exit(2)
 }

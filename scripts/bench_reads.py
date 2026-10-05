@@ -139,10 +139,14 @@ def run_textedit(s, incremental):
         s.check('TextEdit: wait_for sees the marker', not waited['is_error'], waited['text'][:160])
         line = re.search(r'"Bench[^"]*" x=(\d+) y=(\d+)', first['text'])
         if line:
-            call('scroll down', 'scroll', app='TextEdit', x=int(line[1]), y=int(line[2]), direction='down', pages=1)
+            scrolled = call('scroll down', 'scroll', app='TextEdit', x=int(line[1]), y=int(line[2]), direction='down', pages=1)
             moved = look('look after scrolling')
-            s.check('TextEdit: scrolling is reported as changed lines', ('Changes since' in moved['text'] or 'Most of the window' in moved['text'])
-                    if incremental else 'Bench line' in moved['text'], moved['text'][-200:])
+            # As with the click: the action's own result can already show the
+            # new lines (then the look after it is rightly "unchanged").
+            shown = lambda text: {m for m in re.findall(r'Bench line (\d+)', text)}
+            in_result = bool(shown(scrolled['text']) - shown(first['text']))
+            s.check('TextEdit: scrolling is reported as changed lines', in_result or (('Changes since' in moved['text'] or 'Most of the window' in moved['text'])
+                    if incremental else 'Bench line' in moved['text']), moved['text'][-200:])
         for _ in range(2):
             look('look again, nothing changed')
     finally:

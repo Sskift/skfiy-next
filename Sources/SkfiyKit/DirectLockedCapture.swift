@@ -261,6 +261,9 @@ enum DisplayWake {
         }
         var activity: IOPMAssertionID = 0
         IOPMAssertionDeclareUserActivity("skfiy direct locked use: window capture" as CFString, kIOPMUserActiveLocal, &activity)
+        // Only to wake it: held, it would keep the display on for as long as
+        // skfiy runs; hold() keeps it on for the two minutes instead.
+        defer { if activity != 0 { IOPMAssertionRelease(activity) } }
         lastWoken = Date()
         for _ in 0..<40 where asleep(frame) {
             try await Task.sleep(nanoseconds: 100_000_000)

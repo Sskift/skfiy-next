@@ -9,7 +9,7 @@
 //   dir/state.json     the latest state (atomic), dir/events.jsonl every event
 //
 // Commands: text(value, after), clear(after), animate(seconds), open_window(title),
-// close_window(title), move(title, dx, dy), resize(title, width, height),
+// close_window(title), move(title, dx, dy), place(title, x, y), resize(title, width, height),
 // recreate(title), hide, unhide, swap, tiny(code), key(title), quit.
 import AppKit
 import CoreGraphics
@@ -275,6 +275,13 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 let origin = window.frame.origin
                 // dy is in top-left screen coordinates, as skfiy reports frames.
                 window.setFrameOrigin(NSPoint(x: origin.x + ((command["dx"] as? Double) ?? 0), y: origin.y - ((command["dy"] as? Double) ?? 0)))
+            }
+        case "place":
+            // x, y: the window's top-left corner in global top-left screen points,
+            // as skfiy reports frames; any display, including ones left of or above the main.
+            if let window = window(title), let primary = NSScreen.screens.first {
+                let x = (command["x"] as? Double) ?? 0, y = (command["y"] as? Double) ?? 0
+                window.setFrameOrigin(NSPoint(x: x, y: primary.frame.maxY - y - window.frame.height))
             }
         case "resize":
             if let window = window(title) {

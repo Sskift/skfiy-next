@@ -1110,10 +1110,12 @@ public final class ComputerUse {
     }
 
     /// Recognizes the text shown in `region` of an app, from a capture at the
-    /// display's full resolution (small text reads better).
+    /// full resolution of the display it is on (small text reads better).
+    /// Not more: a 2× capture of a window on a 1× display gave every
+    /// recognized position shrunk by the same factor (positions off by
+    /// 200 pt on the right of the window).
     func recognizeText(pid: pid_t, region: CGRect) async throws -> [RecognizedText] {
-        let backing = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-        let shot = try await captureApp(pid: pid, rect: region, maxScale: Double(backing))
+        let shot = try await captureApp(pid: pid, rect: region, maxScale: backingScale(for: region))
         guard let image = TextRecognition.decode(shot.data) else { return [] }
         return TextRecognition.sorted(try await TextRecognition.recognizeBoth(image, showing: shot.geometry.rect))
     }

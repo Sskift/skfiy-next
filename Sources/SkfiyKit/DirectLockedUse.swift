@@ -318,9 +318,9 @@ final class DirectLockedUse {
         let app = try application(args)
         let pid = app.processIdentifier
         states[pid] = nil
-        let windows = try await windows(of: app)
+        var windows = try await windows(of: app)
         let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let window = try choose(windows, query: query, selected: selected)
+        var window = try choose(windows, query: query, selected: selected)
         let recognize = (args.values["ocr"] as? Bool) ?? true
         let since = nonEmpty(args.string("since")?.trimmingCharacters(in: .whitespaces))
         let base = since.flatMap { version in history[pid]?.last { $0.record.version == version } }
@@ -333,7 +333,16 @@ final class DirectLockedUse {
         }
         let shot = captured.shot
         try check(generation: captureGeneration)
-        guard shot.geometry.rect == window.frame else { throw ToolError("The selected window changed before capture. Refresh get_app_state.") }
+        if shot.geometry.rect != window.frame {
+            // It moved between listing and capture (just opened, or placed
+            // anew while the display woke): the capture, checked against the
+            // window list before and after it, shows where it is now.
+            windows = try await self.windows(of: app)
+            guard let now = windows.first(where: { $0.id == window.id }), now.frame == shot.geometry.rect else {
+                throw ToolError("The selected window changed before capture. Refresh get_app_state.")
+            }
+            window = now
+        }
         // The same window at the same place with the same pixels reads the
         // same: the last recognition is reused instead of running again.
         let windowKey = "\(window.id)@\(window.frame.minX),\(window.frame.minY),\(window.frame.width),\(window.frame.height)"

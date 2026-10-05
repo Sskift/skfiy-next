@@ -597,8 +597,9 @@ class Finder(Case):
         verified = bool(before and len(after) == len(before) and any(abs(a - b) > 0.01 for a, b in zip(after, before)))
         numbers = lambda text: sorted({int(m[1]) for label, _, _ in ocr_lines(text) if (m := re.search(r'item-(\d\d)', label))})
         shown_before, shown_after = numbers(state['text']), numbers(self.state()['text'])
-        if not before:
-            # Accessibility is not truthful while locked: compare the file names shown.
+        if not before or not after:
+            # Accessibility is not truthful while locked (the bars can vanish from
+            # the tree between two reads): compare the file names shown.
             verified = bool(shown_before and shown_after and shown_after != shown_before)
         self.outcome('scroll', result, verified, f'vertical scroll bars {[round(v, 2) for v in before]} -> {[round(v, 2) for v in after]}; '
                      f'items shown {shown_before[:1]}…{shown_before[-1:]} -> {shown_after[:1]}…{shown_after[-1:]}', 'coordinates')

@@ -12,8 +12,10 @@ seconds) for it to go to sleep by itself; never turns it off. Then:
 - by default: get_app_capabilities says the next capture wakes it,
   get_app_state wakes the display to the lock screen and returns the
   screenshot with the window's text, and the Mac stays locked;
-- after skfiy exits, its "prevent display sleep" assertion is gone, so the
-  display can go back to sleep.
+- the "user activity" that woke the display is let go at once; only the
+  "prevent display sleep" hold stays, and two minutes after the last capture
+  it is let go too, with skfiy still running;
+- after skfiy exits, no assertion of its is left.
 """
 import argparse
 import re
@@ -67,6 +69,11 @@ def main():
         after = probe('session')
         s.check('the display is on now, the Mac still locked', not after.get('displayAsleep') and after['locked'], after)
         s.check('skfiy holds the display on while it works', bool(skfiy_assertions()), skfiy_assertions())
+        s.check('the user activity that woke it is let go at once', not [a for a in skfiy_assertions() if 'window capture' in a],
+                skfiy_assertions())
+        time.sleep(128)
+        s.check('two minutes after the last capture, skfiy lets the display sleep again (still running)',
+                not skfiy_assertions() and s.client.proc.poll() is None, skfiy_assertions())
         s.client.close()  # skfiy exits
         time.sleep(2)
         s.check('after skfiy exits, it no longer holds the display on', not skfiy_assertions(), skfiy_assertions())
