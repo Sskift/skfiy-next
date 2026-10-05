@@ -26,31 +26,6 @@
    "windowGuardCorrections": 0
   },
   {
-   "mode": "locked",
-   "evidence": "eval/results/compat-locked-20261005-030527-850e957617",
-   "started": 1791140727.128963,
-   "macOS": "26.6.1",
-   "lockSamples": {
-    "count": 529,
-    "locked": 529,
-    "unknown": 0
-   },
-   "session": {
-    "known": true,
-    "locked": true
-   },
-   "cases": [
-    "chrome",
-    "chrome-extension",
-    "electron",
-    "finder",
-    "preview",
-    "textedit"
-   ],
-   "frontViolations": 0,
-   "windowGuardCorrections": 0
-  },
-  {
    "mode": "background",
    "evidence": "eval/results/compat-background-20261005-174652-6f084ae9b8",
    "started": 1791193612.132672,
@@ -63,6 +38,50 @@
    "session": {
     "known": true,
     "locked": false
+   },
+   "cases": [
+    "chrome-extension",
+    "finder",
+    "preview",
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 0
+  },
+  {
+   "mode": "background",
+   "evidence": "eval/results/compat-background-20261005-175413-00be05d389",
+   "started": 1791194053.963428,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 124,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "chrome",
+    "electron"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 2
+  },
+  {
+   "mode": "locked",
+   "evidence": "eval/results/compat-locked-20261006-003734-58d051aa44",
+   "started": 1791218254.163959,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 501,
+    "locked": 501,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": true
    },
    "cases": [
     "chrome",
@@ -84,8 +103,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); heading found",
-   "seconds": 4.24,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 4.61,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "electron",
@@ -94,8 +113,8 @@
    "status": "pass",
    "path": "ax-index",
    "detail": "page clicks 0 -> 1",
-   "seconds": 0.8,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 0.83,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "electron",
@@ -103,9 +122,9 @@
    "op": "type",
    "status": "pass",
    "path": "ax-index+keyboard",
-   "detail": "page input value 'typed6f084a'",
-   "seconds": 0.98,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "detail": "page input value 'typed00be05'",
+   "seconds": 1.68,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "electron",
@@ -114,8 +133,8 @@
    "status": "pass",
    "path": "coordinates",
    "detail": "page scrollY 0 -> 80",
-   "seconds": 0.81,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 0.86,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "electron",
@@ -124,8 +143,8 @@
    "status": "pass",
    "path": "ax-index",
    "detail": "alert shown in state; closed with OK by element_index: yes",
-   "seconds": 0.79,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 0.8,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "textedit",
@@ -284,8 +303,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); heading found",
-   "seconds": 1.34,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 1.15,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "chrome",
@@ -294,8 +313,8 @@
    "status": "pass",
    "path": "ax-index",
    "detail": "page clicks 0 -> 1",
-   "seconds": 0.89,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 0.82,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "chrome",
@@ -303,9 +322,9 @@
    "op": "type",
    "status": "pass",
    "path": "ax-index+keyboard",
-   "detail": "page input value 'typed6f084a'",
-   "seconds": 1.06,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "detail": "page input value 'typed00be05'",
+   "seconds": 1.0,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "chrome",
@@ -315,7 +334,7 @@
    "path": "coordinates",
    "detail": "page scrollY 0 -> 80",
    "seconds": 0.86,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "chrome",
@@ -324,8 +343,8 @@
    "status": "pass",
    "path": "ax-index",
    "detail": "alert shown in state; closed with OK by element_index: yes",
-   "seconds": 0.8,
-   "run": "compat-background-20261005-174652-6f084ae9b8"
+   "seconds": 0.78,
+   "run": "compat-background-20261005-175413-00be05d389"
   },
   {
    "case": "chrome-extension",
@@ -384,8 +403,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); first lines visible",
-   "seconds": 1.48,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.0,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "textedit",
@@ -394,8 +413,8 @@
    "status": "fail",
    "path": "coordinates",
    "detail": "typed marker not on the clicked row (y 156 vs 38.0)",
-   "seconds": 1.94,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.02,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "textedit",
@@ -404,8 +423,8 @@
    "status": "pass",
    "path": "keyboard",
    "detail": "marker visible in a fresh screenshot (independent OCR; AX unreadable while locked)",
-   "seconds": 1.98,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.17,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "textedit",
@@ -414,8 +433,8 @@
    "status": "pass",
    "path": "coordinates",
    "detail": "first visible line 1 -> 57",
-   "seconds": 2.16,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.18,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "textedit",
@@ -424,8 +443,8 @@
    "status": "refused",
    "path": "keyboard",
    "detail": "This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.",
-   "seconds": 0.19,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 0.21,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "preview",
@@ -435,7 +454,7 @@
    "path": "capture",
    "detail": "1 image(s); page text recognized",
    "seconds": 0.84,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "preview",
@@ -445,7 +464,7 @@
    "path": "coordinates",
    "detail": "the search field took the typing",
    "seconds": 1.26,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "preview",
@@ -454,8 +473,8 @@
    "status": "pass",
    "path": "keyboard",
    "detail": "search field reads \"page 4\"",
-   "seconds": 1.38,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.39,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "preview",
@@ -464,8 +483,8 @@
    "status": "pass",
    "path": "coordinates",
    "detail": "pages visible [2, 3, 4] -> [3, 5, 6]; vertical bars [] -> []",
-   "seconds": 3.31,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.77,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "preview",
@@ -475,7 +494,7 @@
    "path": "keyboard",
    "detail": "no sheet appeared",
    "seconds": 1.35,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "finder",
@@ -484,8 +503,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); files listed",
-   "seconds": 1.17,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.04,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "finder",
@@ -494,8 +513,8 @@
    "status": "fail",
    "path": "coordinates",
    "detail": "selected: nothing readable",
-   "seconds": 1.92,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.76,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "finder",
@@ -505,7 +524,7 @@
    "path": "keyboard",
    "detail": "This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.",
    "seconds": 0.17,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "finder",
@@ -514,8 +533,8 @@
    "status": "pass",
    "path": "coordinates",
    "detail": "vertical scroll bars [] -> []; items shown [1]…[16] -> [35]…[49]",
-   "seconds": 2.31,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.42,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "finder",
@@ -524,8 +543,8 @@
    "status": "refused",
    "path": "keyboard",
    "detail": "This app has multiple or different active windows, so the keyboard destination cannot be verified while locked. Leave one window open before locking, or unlock manually.",
-   "seconds": 0.19,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 0.18,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome",
@@ -534,8 +553,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); heading found",
-   "seconds": 0.93,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.03,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome",
@@ -544,8 +563,8 @@
    "status": "fail",
    "path": "coordinates",
    "detail": "page clicks 0 -> 0",
-   "seconds": 1.48,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.54,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome",
@@ -554,8 +573,8 @@
    "status": "fail",
    "path": "coordinates+keyboard",
    "detail": "page input value ''",
-   "seconds": 1.67,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.65,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome",
@@ -564,8 +583,8 @@
    "status": "pass",
    "path": "coordinates",
    "detail": "page scrollY 0 -> 1770",
-   "seconds": 2.31,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.45,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome",
@@ -574,8 +593,8 @@
    "status": "fail",
    "path": "coordinates",
    "detail": "the page did not open its alert",
-   "seconds": 1.44,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.54,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome-extension",
@@ -584,8 +603,8 @@
    "status": "pass",
    "path": "extension",
    "detail": "1 image(s) (debugger capture of a background tab); heading found",
-   "seconds": 0.34,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 0.37,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome-extension",
@@ -595,7 +614,7 @@
    "path": "extension",
    "detail": "page clicks 0 -> 1",
    "seconds": 0.28,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome-extension",
@@ -603,9 +622,9 @@
    "op": "type",
    "status": "pass",
    "path": "extension",
-   "detail": "page input value 'typed850e95'",
-   "seconds": 0.27,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "detail": "page input value 'typed58d051'",
+   "seconds": 0.29,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome-extension",
@@ -614,8 +633,8 @@
    "status": "pass",
    "path": "extension",
    "detail": "page scrollY 0 -> 1525",
-   "seconds": 0.27,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 0.28,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "chrome-extension",
@@ -624,8 +643,8 @@
    "status": "pass",
    "path": "extension",
    "detail": "alert answered and reported in the state; page popup=closed",
-   "seconds": 0.27,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 0.29,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "electron",
@@ -634,8 +653,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); heading found",
-   "seconds": 0.96,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 0.88,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "electron",
@@ -644,8 +663,8 @@
    "status": "fail",
    "path": "coordinates",
    "detail": "page clicks 0 -> 0",
-   "seconds": 1.48,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.5,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "electron",
@@ -654,8 +673,8 @@
    "status": "fail",
    "path": "coordinates+keyboard",
    "detail": "page input value ''",
-   "seconds": 1.62,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 1.63,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "electron",
@@ -664,8 +683,8 @@
    "status": "pass",
    "path": "coordinates",
    "detail": "page scrollY 0 -> 1298",
-   "seconds": 2.09,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "seconds": 2.12,
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "electron",
@@ -675,7 +694,7 @@
    "path": "coordinates",
    "detail": "the page did not open its alert",
    "seconds": 1.51,
-   "run": "compat-locked-20261005-030527-850e957617"
+   "run": "compat-locked-20261006-003734-58d051aa44"
   },
   {
    "case": "textedit",

@@ -76,8 +76,9 @@ python3 scripts/compat_baseline.py --report                                    #
 **运行记录**
 
 - front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 1 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-front-20261005-002245-a543ee33fa`（本机，不入库）
-- locked（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 03:05，macOS 26.6.1，会话锁定=True，锁态采样 529 次（锁定 529，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261005-030527-850e957617`（本机，不入库）
-- background（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 17:46，macOS 26.6.1，会话锁定=False，锁态采样 364 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-174652-6f084ae9b8`（本机，不入库）
+- background（Chrome（扩展）, Finder, Preview, TextEdit）：2026-10-05 17:46，macOS 26.6.1，会话锁定=False，锁态采样 364 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-174652-6f084ae9b8`（本机，不入库）
+- background（Chrome（应用工具）, Electron）：2026-10-05 17:54，macOS 26.6.1，会话锁定=False，锁态采样 124 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 2 次；证据 `eval/results/compat-background-20261005-175413-00be05d389`（本机，不入库）
+- locked（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-06 00:37，macOS 26.6.1，会话锁定=True，锁态采样 501 次（锁定 501，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261006-003734-58d051aa44`（本机，不入库）
 
 **失败、拒绝、跳过与未测的原因**
 
