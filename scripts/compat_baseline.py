@@ -158,6 +158,10 @@ class Run:
         self.client = None
         self.violations = []
         self.lock_samples = []
+        # Front mode: when it started, the user's front app, and why it stopped early.
+        self.front_started = None
+        self.front_user = None
+        self.user_back = None
         self.sampling = True
         self.sampler = threading.Thread(target=self.sample_lock, daemon=True)
         self.sampler.start()
@@ -169,10 +173,28 @@ class Run:
     def sample_lock(self):
         while self.sampling:
             try:
-                self.lock_samples.append(probe('session'))
+                sample = probe('session')
+                self.lock_samples.append(sample)
+                self.watch_user(sample)
             except Exception as error:  # recorded as an unknown sample
                 self.lock_samples.append({'known': False, 'error': str(error), 'timestamp': time.time()})
             time.sleep(0.25)
+
+    def watch_user(self, sample):
+        """Front mode: any keyboard, mouse or trackpad input after it started means
+        the user is back. Nothing more is sent (skfiy is ended) and the user's
+        front app comes back at once; what is left is recorded as untested."""
+        if self.mode != 'front' or self.front_started is None or self.user_back:
+            return
+        idle = sample.get('hidIdleSeconds')
+        if idle is None or idle >= time.time() - self.front_started:
+            return
+        self.user_back = f'the user came back (input {idle:.1f} s ago); front mode stopped'
+        self.evidence.record('user_back', reason=self.user_back)
+        if self.client:
+            self.client.proc.kill()
+        if self.front_user:
+            sh(TOOLS['Front'], 'activate', self.front_user['frontPID'], check=False)
 
     def start_client(self):
         environment = {'SKFIY_LOCKED_USE': 'direct'} if self.mode == 'locked' else {}
@@ -300,10 +322,16 @@ class Case:
             self.cleanup()
             return
         for op in OPS:
+            if self.run.user_back:
+                self.run.record(self.key, op, 'untested', self.run.user_back)
+                continue
             try:
                 getattr(self, 'op_' + op)()
             except Exception as error:
-                self.run.record(self.key, op, 'fail', f'harness error: {type(error).__name__}: {error}')
+                if self.run.user_back:  # cut off when skfiy was ended
+                    self.run.record(self.key, op, 'untested', self.run.user_back)
+                else:
+                    self.run.record(self.key, op, 'fail', f'harness error: {type(error).__name__}: {error}')
         self.cleanup()
 
     def cleanup(self):
@@ -904,8 +932,14 @@ def run_mode(binary, mode, cases, allow_front):
         else:
             run.start_client()
             front_user = probe('front')
+            if mode == 'front':
+                run.front_user, run.front_started = front_user, time.time()
             for key in cases:
                 case = CASE_TYPES[key](run)
+                if run.user_back:
+                    for op in OPS:
+                        run.record(key, op, 'untested', run.user_back)
+                    continue
                 if mode == 'front':
                     # Bring the target forward for the duration of the case only.
                     case_front(case, front_user)
@@ -933,7 +967,7 @@ def case_front(case, user):
 
     def prepare():
         original_prepare()
-        if case.pid:
+        if case.pid and not case.run.user_back:
             sh(TOOLS['Front'], 'activate', case.pid)
     case.prepare = prepare
     try:

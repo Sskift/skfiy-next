@@ -149,7 +149,9 @@ func session() -> [String: Any] {
     let idle = [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .mouseMoved, .scrollWheel, .flagsChanged]
         .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
     // Window capture needs the display on; record whether it was asleep.
-    return ["known": known, "locked": dictionary["CGSSessionScreenIsLocked"] as? Bool == true, "idleSeconds": idle,
+    // Hardware input only: events skfiy posts to a process do not count.
+    let hidIdle = CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
+    return ["known": known, "locked": dictionary["CGSSessionScreenIsLocked"] as? Bool == true, "idleSeconds": idle, "hidIdleSeconds": hidIdle,
             "displayAsleep": CGDisplayIsAsleep(CGMainDisplayID()) != 0,
             "accessibility": AXIsProcessTrusted(), "screenCapture": CGPreflightScreenCaptureAccess(), "timestamp": Date().timeIntervalSince1970]
 }
