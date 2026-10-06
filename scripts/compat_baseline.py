@@ -186,7 +186,7 @@ class Run:
         front app comes back at once; what is left is recorded as untested."""
         if self.mode != 'front' or self.front_started is None or self.user_back:
             return
-        idle = sample.get('hidIdleSeconds')
+        idle = sample.get('idleSeconds')  # the user's keys, clicks, moves, scrolls; not skfiy's events
         if idle is None or idle >= time.time() - self.front_started:
             return
         self.user_back = f'the user came back (input {idle:.1f} s ago); front mode stopped'
@@ -203,6 +203,8 @@ class Run:
 
     def call(self, tool, **arguments):
         """A tool call; in background mode, also checks that the front app stayed."""
+        if self.user_back:  # skfiy was ended: send nothing more
+            return {'is_error': True, 'text': self.user_back, 'images': [], 'seconds': 0}
         before = probe('front') if self.mode == 'background' else None
         started = time.monotonic()
         result = self.client.call(tool, allow_error=True, rpc_timeout=60, **arguments)

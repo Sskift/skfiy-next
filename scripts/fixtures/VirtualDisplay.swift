@@ -31,9 +31,12 @@ func locked() -> Bool {
     (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true
 }
 
-/// Seconds since the last hardware input (synthesized events do not count).
+/// Seconds since the user's last key, click, move or scroll. Not "any event"
+/// of the HID state: the mouse events skfiy sends to the test app come from
+/// that state's source and reset it with nobody there.
 func userIdle() -> Double {
-    CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
+    [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .mouseMoved, .scrollWheel, .flagsChanged]
+        .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
 }
 
 /// Apps (other than skfiy) keeping the display awake: someone may be watching.
