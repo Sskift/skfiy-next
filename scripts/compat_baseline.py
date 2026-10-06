@@ -140,6 +140,19 @@ def tree_index(text, pattern):
     return None
 
 
+def leftovers_only(app, titles, nonce, pattern):
+    """Whether the windows not of this run are all test documents an earlier,
+    interrupted run left open (named with its own nonce, e.g. compat-<nonce>.txt).
+    Then the app is the test's own and is quit, unsaved test text and all."""
+    others = [title for title in titles if nonce not in title]
+    if not others or not all(re.fullmatch(pattern, title) for title in others):
+        return False
+    for pid in pids_of(app):
+        sh('kill', str(pid), check=False)
+    wait_until(lambda: not pids_of(app), timeout=5)
+    return not pids_of(app)
+
+
 def pids_of(name):
     out = sh('pgrep', '-x', name, check=False).split()
     return [int(pid) for pid in out]
@@ -349,7 +362,7 @@ class TextEdit(Case):
     def precondition(self):
         for pid in pids_of('TextEdit'):
             titles = [w['title'] for w in probe('dump', str(pid))['windows'] if w['role'] == 'AXWindow']
-            if any(self.nonce not in title for title in titles):
+            if any(self.nonce not in title for title in titles) and not leftovers_only('TextEdit', titles, self.nonce, r'compat-[0-9a-f]{10}\.txt'):
                 return 'TextEdit has the user\'s documents open; typing could reach them'
         return None
 
@@ -476,7 +489,7 @@ class Preview(Case):
     def precondition(self):
         for pid in pids_of('Preview'):
             titles = [w['title'] for w in probe('dump', str(pid))['windows'] if w['role'] == 'AXWindow']
-            if any(self.nonce not in title for title in titles):
+            if any(self.nonce not in title for title in titles) and not leftovers_only('Preview', titles, self.nonce, r'preview-[0-9a-f]{10}\.pdf.*'):
                 return 'Preview has the user\'s documents open; typing could reach them'
         return None
 

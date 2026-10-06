@@ -152,9 +152,14 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
     if CaptureStall.active {
         return try await captureInHelper(pid: pid, rect: rect, maxScale: maxScale)
     }
-    let content: SCShareableContent
+    var content: SCShareableContent
     do {
         content = try await ShareableContentCache.shared.content(containing: pid, alsoShowing: panelServices)
+        // A display connected since the list was fetched is not in it: fetch once more.
+        if !content.displays.contains(where: { $0.displayID == displayID }) {
+            await ShareableContentCache.shared.invalidate()
+            content = try await ShareableContentCache.shared.content(containing: pid, alsoShowing: panelServices)
+        }
     } catch is CaptureStall {
         guard CaptureStall.active else {
             throw ToolError("No screenshot: screen capture did not answer within 5 s. The accessibility tree still works.")
