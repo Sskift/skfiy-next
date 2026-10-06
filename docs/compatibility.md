@@ -42,43 +42,44 @@ python3 scripts/compat_baseline.py --report                                    #
 <!-- compat-table:start -->
 | 应用 | 操作 | 解锁·前台 | 解锁·后台 | 锁屏 direct |
 | --- | --- | --- | --- | --- |
-| TextEdit | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
-| TextEdit | click | — 未测 | ✅ 通过 | ❌ 失败 |
-| TextEdit | type | — 未测 | ✅ 通过 | ✅ 通过 |
+| TextEdit | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| TextEdit | click | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| TextEdit | type | ✅ 通过 | ✅ 通过 | ✅ 通过 |
 | TextEdit | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
 | TextEdit | popup | — 未测 | ✅ 通过 | ⛔ 拒绝 |
-| Preview | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
-| Preview | click | — 未测 | ✅ 通过 | ✅ 通过 |
-| Preview | type | — 未测 | ✅ 通过 | ✅ 通过 |
-| Preview | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
-| Preview | popup | — 未测 | ⛔ 拒绝 | ❌ 失败 |
-| Finder | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
-| Finder | click | — 未测 | ✅ 通过 | ❌ 失败 |
-| Finder | type | — 未测 | ✅ 通过 | ⛔ 拒绝 |
-| Finder | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
-| Finder | popup | — 未测 | ⛔ 拒绝 | ⛔ 拒绝 |
-| Chrome（应用工具） | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
-| Chrome（应用工具） | click | — 未测 | ✅ 通过 | ❌ 失败 |
-| Chrome（应用工具） | type | — 未测 | ✅ 通过 | ❌ 失败 |
-| Chrome（应用工具） | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
-| Chrome（应用工具） | popup | — 未测 | ✅ 通过 | ❌ 失败 |
-| Chrome（扩展） | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
-| Chrome（扩展） | click | — 未测 | ✅ 通过 | ✅ 通过 |
-| Chrome（扩展） | type | — 未测 | ✅ 通过 | ✅ 通过 |
-| Chrome（扩展） | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
-| Chrome（扩展） | popup | — 未测 | ✅ 通过 | ✅ 通过 |
-| Electron | screenshot | — 未测 | ✅ 通过 | ✅ 通过 |
-| Electron | click | — 未测 | ✅ 通过 | ❌ 失败 |
-| Electron | type | — 未测 | ✅ 通过 | ❌ 失败 |
-| Electron | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
-| Electron | popup | — 未测 | ✅ 通过 | ❌ 失败 |
+| Preview | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Preview | click | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Preview | type | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Preview | scroll | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Preview | popup | ✅ 通过 | ⛔ 拒绝 | ❌ 失败 |
+| Finder | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Finder | click | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| Finder | type | ✅ 通过 | ✅ 通过 | ⛔ 拒绝 |
+| Finder | scroll | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Finder | popup | ✅ 通过 | ⛔ 拒绝 | ⛔ 拒绝 |
+| Chrome（应用工具） | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Chrome（应用工具） | click | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| Chrome（应用工具） | type | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| Chrome（应用工具） | scroll | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Chrome（应用工具） | popup | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| Chrome（扩展） | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | click | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | type | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | scroll | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Chrome（扩展） | popup | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Electron | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Electron | click | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| Electron | type | ✅ 通过 | ✅ 通过 | ❌ 失败 |
+| Electron | scroll | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| Electron | popup | ✅ 通过 | ✅ 通过 | ❌ 失败 |
 
 **运行记录**
 
-- front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-05 00:22，macOS 26.6.1，会话锁定=False，锁态采样 1 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-front-20261005-002245-a543ee33fa`（本机，不入库）
 - background（Chrome（扩展）, Finder, Preview, TextEdit）：2026-10-05 17:46，macOS 26.6.1，会话锁定=False，锁态采样 364 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-174652-6f084ae9b8`（本机，不入库）
 - background（Chrome（应用工具）, Electron）：2026-10-05 17:54，macOS 26.6.1，会话锁定=False，锁态采样 124 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 2 次；证据 `eval/results/compat-background-20261005-175413-00be05d389`（本机，不入库）
 - locked（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-06 00:37，macOS 26.6.1，会话锁定=True，锁态采样 501 次（锁定 501，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261006-003734-58d051aa44`（本机，不入库）
+- front（TextEdit）：2026-10-06 23:22，macOS 26.6.1，会话锁定=False，锁态采样 27 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 1 次；证据 `eval/results/compat-front-20261006-232209-277ac0f3f2`（本机，不入库）
+- front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-06 23:32，macOS 26.6.1，会话锁定=False，锁态采样 283 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 5 次；证据 `eval/results/compat-front-20261006-233251-4309ff6162`（本机，不入库）
 
 **失败、拒绝、跳过与未测的原因**
 
@@ -96,7 +97,7 @@ python3 scripts/compat_baseline.py --report                                    #
 - Electron · click · locked：page clicks 0 -> 0
 - Electron · type · locked：page input value ''
 - Electron · popup · locked：the page did not open its alert
-- front 未测：front mode brings apps forward; pass --allow-front (only while the user is away)
+- front 未测：TextEdit has the user's documents open; typing could reach them
 <!-- compat-table:end -->
 
 ## 基线发现（2026-10-05，macOS 26.6.1，单块 Retina 内置屏）
@@ -116,7 +117,10 @@ python3 scripts/compat_baseline.py --report                                    #
 8. **TextEdit：坐标点击不移动光标**（随后输入的标记落在文档开头，不在被点的第 10 行）；输入和滚动有效。快捷键在锁屏时能生效（cmd+n 新建了文档），但随即出现第二个窗口，按设计拒绝后续键盘输入。
 9. **预览：点击搜索栏、输入、滚动有效**；“前往页面…”快捷键（cmd+alt+g）没有效果。
 10. **Finder：坐标点击没有选中文件**（以 Finder 自己经 Apple Event 报告的选中项为准）；滚动有效。Finder 另开着一个窗口时，键盘输入按设计拒绝（目标窗口无法确认）。
-11. **锁屏时 OCR 质量明显下降**：direct 模式在 1 倍截图上识别文字，单词被拆开、字符误识（如 “6a9344d055” 识别成 “бa9344d055”）；解锁时的 OCR 用 2 倍截图。这影响锁屏下按文字定位和等待文字出现，留待目标 3、4 处理。
+11. **锁屏时 OCR 质量明显下降**：direct 模式在 1 倍截图上识别文字，单词被拆开、字符误识（如 “6a9344d055” 识别成 “бa9344d055”）；解锁时的 OCR 用 2 倍截图。这影响锁屏下按文字定位和等待文字出现；已在目标 3、4 中解决：锁屏也按显示器原始分辨率截图识别，并合并高、低分辨率和快速识别的结果。
 12. **锁屏时辅助功能读到的不是应用的真实状态**：TextEdit 只报告一个名为 “TextEdit” 的窗口、没有文本区，焦点在应用本身。锁屏核验因此改用窗口服务器元数据、页面回报、Finder 的 Apple Event 和独立 OCR；点击是否生效由随后输入落在哪一行来判断，输入被拒时该点击记为“未测”。
 
-前台状态尚未实测：须在用户离开且解锁时运行，测试脚本不会自行触发。
+前台状态（2026-10-06 23:22–23:34，用户同意后在其离开且解锁时运行，锁态采样全部为未锁定）：
+
+13. **前台时各应用的五类操作基本都能做到**：预览、Finder、Chrome、Electron、扩展通道全部通过；TextEdit 截图、点击、输入通过，滚动和弹窗待补测（见下）。后台按设计拒绝的“作用于当前文档的菜单命令”（预览“前往页面…”、Finder“显示简介”）在前台都有效，与 `run_in_front` 的定位一致。Electron 在前台时网页的辅助功能树完整，点击、输入、弹窗都按元素编号完成。
+14. **前台模式的保护**：测试只把自己的测试应用提到前面，每个应用测完立即把前台还给用户原来的应用；运行中检测到用户的按键、点击、移动或滚动就立刻结束测试用的 skfiy、还回前台，剩下的记为未测。第一次运行时这项检测误用了“硬件状态任意事件”的空闲计时，skfiy 自己发给测试应用的鼠标事件会刷新它，于是 TextEdit 做完三项就误停了，测试文档也留在了 TextEdit 里；下一次运行因此把 TextEdit 判为“开着用户的文档”而整组跳过。两处都已修正：改用只统计真实输入的计时；只开着往次遗留测试文档的 TextEdit 或预览会先被退出。

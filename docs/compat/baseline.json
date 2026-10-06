@@ -1,31 +1,6 @@
 {
  "runs": [
   {
-   "mode": "front",
-   "evidence": "eval/results/compat-front-20261005-002245-a543ee33fa",
-   "started": 1791130965.746007,
-   "macOS": "26.6.1",
-   "lockSamples": {
-    "count": 1,
-    "locked": 0,
-    "unknown": 0
-   },
-   "session": {
-    "known": true,
-    "locked": false
-   },
-   "cases": [
-    "chrome",
-    "chrome-extension",
-    "electron",
-    "finder",
-    "preview",
-    "textedit"
-   ],
-   "frontViolations": 0,
-   "windowGuardCorrections": 0
-  },
-  {
    "mode": "background",
    "evidence": "eval/results/compat-background-20261005-174652-6f084ae9b8",
    "started": 1791193612.132672,
@@ -93,6 +68,51 @@
    ],
    "frontViolations": 0,
    "windowGuardCorrections": 0
+  },
+  {
+   "mode": "front",
+   "evidence": "eval/results/compat-front-20261006-232209-277ac0f3f2",
+   "started": 1791300129.1267781,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 27,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 1
+  },
+  {
+   "mode": "front",
+   "evidence": "eval/results/compat-front-20261006-233251-4309ff6162",
+   "started": 1791300771.367429,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 283,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "chrome",
+    "chrome-extension",
+    "electron",
+    "finder",
+    "preview",
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 5
   }
  ],
  "results": [
@@ -700,31 +720,31 @@
    "case": "textedit",
    "mode": "front",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); first lines visible",
+   "seconds": 1.76,
+   "run": "compat-front-20261006-232209-277ac0f3f2"
   },
   {
    "case": "textedit",
    "mode": "front",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "caret at 278, line 10 spans 261-289",
+   "seconds": 0.79,
+   "run": "compat-front-20261006-232209-277ac0f3f2"
   },
   {
    "case": "textedit",
    "mode": "front",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "typed into 'TextEdit line 010MARK277AC0 277ac0f3f2'",
+   "seconds": 0.77,
+   "run": "compat-front-20261006-232209-277ac0f3f2"
   },
   {
    "case": "textedit",
@@ -732,9 +752,9 @@
    "op": "scroll",
    "status": "untested",
    "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "detail": "TextEdit has the user's documents open; typing could reach them",
    "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "textedit",
@@ -742,259 +762,259 @@
    "op": "popup",
    "status": "untested",
    "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
+   "detail": "TextEdit has the user's documents open; typing could reach them",
    "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "preview",
    "mode": "front",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); page text recognized",
+   "seconds": 1.2,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "preview",
    "mode": "front",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "focused element: AXTextField",
+   "seconds": 0.91,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "preview",
    "mode": "front",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "search field reads \"page 4\"",
+   "seconds": 0.8,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "preview",
    "mode": "front",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "pages visible [1, 2, 3, 4] -> [5, 6]; vertical bars [0, 0.6] -> [1, 0.95]",
+   "seconds": 1.72,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "preview",
    "mode": "front",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "Go to Page sheet appeared; dismissed",
+   "seconds": 0.95,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "finder",
    "mode": "front",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); files listed",
+   "seconds": 1.7,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "finder",
    "mode": "front",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "selected: item-05-4309.txt",
+   "seconds": 0.77,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "finder",
    "mode": "front",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "selected after type-select: item-42-4309.txt",
+   "seconds": 1.02,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "finder",
    "mode": "front",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "vertical scroll bars [0, 0.4] -> [0, 0.46]; items shown [27]…[42] -> [31]…[45]",
+   "seconds": 0.84,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "finder",
    "mode": "front",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "Get Info window opened",
+   "seconds": 0.84,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome",
    "mode": "front",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); heading found",
+   "seconds": 1.43,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome",
    "mode": "front",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.87,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome",
    "mode": "front",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index+keyboard",
+   "detail": "page input value 'typed4309ff'",
+   "seconds": 1.06,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome",
    "mode": "front",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "page scrollY 0 -> 80",
+   "seconds": 0.84,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome",
    "mode": "front",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "alert shown in state; closed with OK by element_index: yes",
+   "seconds": 0.82,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome-extension",
    "mode": "front",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "extension",
+   "detail": "1 image(s) (debugger capture of a background tab); heading found",
+   "seconds": 0.34,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome-extension",
    "mode": "front",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "extension",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.29,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome-extension",
    "mode": "front",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "extension",
+   "detail": "page input value 'typed4309ff'",
+   "seconds": 0.29,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome-extension",
    "mode": "front",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "extension",
+   "detail": "page scrollY 0 -> 1525",
+   "seconds": 0.29,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "chrome-extension",
    "mode": "front",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "extension",
+   "detail": "alert answered and reported in the state; page popup=closed",
+   "seconds": 0.3,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "electron",
    "mode": "front",
    "op": "screenshot",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "capture",
+   "detail": "1 image(s); heading found",
+   "seconds": 3.26,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "electron",
    "mode": "front",
    "op": "click",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "page clicks 0 -> 1",
+   "seconds": 0.8,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "electron",
    "mode": "front",
    "op": "type",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index+keyboard",
+   "detail": "page input value 'typed4309ff'",
+   "seconds": 1.07,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "electron",
    "mode": "front",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "page scrollY 0 -> 80",
+   "seconds": 0.85,
+   "run": "compat-front-20261006-233251-4309ff6162"
   },
   {
    "case": "electron",
    "mode": "front",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "front mode brings apps forward; pass --allow-front (only while the user is away)",
-   "seconds": null,
-   "run": "compat-front-20261005-002245-a543ee33fa"
+   "status": "pass",
+   "path": "ax-index",
+   "detail": "alert shown in state; closed with OK by element_index: yes",
+   "seconds": 0.83,
+   "run": "compat-front-20261006-233251-4309ff6162"
   }
  ]
 }
