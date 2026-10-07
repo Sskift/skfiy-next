@@ -1889,9 +1889,31 @@ public final class ComputerUse {
         let imeWouldCompose = frontmostProcessID() == pid && Input.inputMethodActive()
         if imeWouldCompose || text.count > 200, let focused, focused.isSettable(kAXSelectedTextAttribute) {
             let before = focused.string(kAXValueAttribute)
-            if (try? focused.set(kAXSelectedTextAttribute, text as CFString)) != nil,
+            // Some apps (TextEdit) take text set through accessibility without
+            // counting it as an edit: the document stays unchanged, and closing
+            // it drops the text without asking. So a space goes in after the
+            // text and is taken back with a real Delete key press, which they
+            // do count (an input method lets Delete through).
+            if (try? focused.set(kAXSelectedTextAttribute, (text + " ") as CFString)) != nil,
                before == nil || focused.string(kAXValueAttribute) != before {
-                return try await afterAction(app, "Entered \(text.count) character(s) (accessibility).\(note)")
+                let inserted = await settledValue(focused, changedFrom: before)
+                if let backspace = try? parseKeyChord("backspace") {
+                    await Input.press(backspace, to: pid)
+                }
+                let after = await settledValue(focused, changedFrom: inserted)
+                if let inserted, after == inserted {
+                    // The key did not arrive: take the space back through
+                    // accessibility too, and say the app may not see an edit.
+                    if let value = focused.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() {
+                        var range = CFRange(location: 0, length: 0)
+                        AXValueGetValue(value as! AXValue, .cfRange, &range)
+                        if range.location > 0, (try? setSelection(focused, CFRange(location: range.location - 1, length: 1))) != nil {
+                            try? focused.set(kAXSelectedTextAttribute, "" as CFString)
+                        }
+                    }
+                    return try await afterAction(app, "Entered \(text.count) character(s) (accessibility). The app may not count text entered this way as a change; save explicitly before closing the document.\(note)")
+                }
+                return try await afterAction(app, "Entered \(text.count) character(s) (accessibility, then a Delete key press so the app counts it as a change).\(note)")
             }
         }
         let before = focused?.string(kAXValueAttribute)

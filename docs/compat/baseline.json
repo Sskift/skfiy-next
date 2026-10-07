@@ -71,26 +71,6 @@
   },
   {
    "mode": "front",
-   "evidence": "eval/results/compat-front-20261006-232209-277ac0f3f2",
-   "started": 1791300129.1267781,
-   "macOS": "26.6.1",
-   "lockSamples": {
-    "count": 27,
-    "locked": 0,
-    "unknown": 0
-   },
-   "session": {
-    "known": true,
-    "locked": false
-   },
-   "cases": [
-    "textedit"
-   ],
-   "frontViolations": 0,
-   "windowGuardCorrections": 1
-  },
-  {
-   "mode": "front",
    "evidence": "eval/results/compat-front-20261006-233251-4309ff6162",
    "started": 1791300771.367429,
    "macOS": "26.6.1",
@@ -108,11 +88,30 @@
     "chrome-extension",
     "electron",
     "finder",
-    "preview",
-    "textedit"
+    "preview"
    ],
    "frontViolations": 0,
    "windowGuardCorrections": 5
+  },
+  {
+   "mode": "front",
+   "evidence": "eval/results/compat-front-20261007-092311-462bb1ebdc",
+   "started": 1791336191.907679,
+   "macOS": "26.6.1",
+   "lockSamples": {
+    "count": 50,
+    "locked": 0,
+    "unknown": 0
+   },
+   "session": {
+    "known": true,
+    "locked": false
+   },
+   "cases": [
+    "textedit"
+   ],
+   "frontViolations": 0,
+   "windowGuardCorrections": 2
   }
  ],
  "results": [
@@ -723,8 +722,8 @@
    "status": "pass",
    "path": "capture",
    "detail": "1 image(s); first lines visible",
-   "seconds": 1.76,
-   "run": "compat-front-20261006-232209-277ac0f3f2"
+   "seconds": 1.77,
+   "run": "compat-front-20261007-092311-462bb1ebdc"
   },
   {
    "case": "textedit",
@@ -732,9 +731,9 @@
    "op": "click",
    "status": "pass",
    "path": "coordinates",
-   "detail": "caret at 278, line 10 spans 261-289",
-   "seconds": 0.79,
-   "run": "compat-front-20261006-232209-277ac0f3f2"
+   "detail": "caret at 279, line 10 spans 261-289",
+   "seconds": 0.86,
+   "run": "compat-front-20261007-092311-462bb1ebdc"
   },
   {
    "case": "textedit",
@@ -742,29 +741,29 @@
    "op": "type",
    "status": "pass",
    "path": "keyboard",
-   "detail": "typed into 'TextEdit line 010MARK277AC0 277ac0f3f2'",
-   "seconds": 0.77,
-   "run": "compat-front-20261006-232209-277ac0f3f2"
+   "detail": "typed into 'TextEdit line 010 MARK462BB1462bb1ebdc'",
+   "seconds": 0.85,
+   "run": "compat-front-20261007-092311-462bb1ebdc"
   },
   {
    "case": "textedit",
    "mode": "front",
    "op": "scroll",
-   "status": "untested",
-   "path": "",
-   "detail": "TextEdit has the user's documents open; typing could reach them",
-   "seconds": null,
-   "run": "compat-front-20261006-233251-4309ff6162"
+   "status": "pass",
+   "path": "coordinates",
+   "detail": "first visible line 1 -> 52",
+   "seconds": 1.04,
+   "run": "compat-front-20261007-092311-462bb1ebdc"
   },
   {
    "case": "textedit",
    "mode": "front",
    "op": "popup",
-   "status": "untested",
-   "path": "",
-   "detail": "TextEdit has the user's documents open; typing could reach them",
-   "seconds": null,
-   "run": "compat-front-20261006-233251-4309ff6162"
+   "status": "pass",
+   "path": "keyboard",
+   "detail": "keep-document sheet appeared; answered Delete, document gone (by element_index)",
+   "seconds": 0.89,
+   "run": "compat-front-20261007-092311-462bb1ebdc"
   },
   {
    "case": "preview",

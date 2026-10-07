@@ -45,8 +45,8 @@ python3 scripts/compat_baseline.py --report                                    #
 | TextEdit | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
 | TextEdit | click | ✅ 通过 | ✅ 通过 | ❌ 失败 |
 | TextEdit | type | ✅ 通过 | ✅ 通过 | ✅ 通过 |
-| TextEdit | scroll | — 未测 | ✅ 通过 | ✅ 通过 |
-| TextEdit | popup | — 未测 | ✅ 通过 | ⛔ 拒绝 |
+| TextEdit | scroll | ✅ 通过 | ✅ 通过 | ✅ 通过 |
+| TextEdit | popup | ✅ 通过 | ✅ 通过 | ⛔ 拒绝 |
 | Preview | screenshot | ✅ 通过 | ✅ 通过 | ✅ 通过 |
 | Preview | click | ✅ 通过 | ✅ 通过 | ✅ 通过 |
 | Preview | type | ✅ 通过 | ✅ 通过 | ✅ 通过 |
@@ -78,8 +78,8 @@ python3 scripts/compat_baseline.py --report                                    #
 - background（Chrome（扩展）, Finder, Preview, TextEdit）：2026-10-05 17:46，macOS 26.6.1，会话锁定=False，锁态采样 364 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-background-20261005-174652-6f084ae9b8`（本机，不入库）
 - background（Chrome（应用工具）, Electron）：2026-10-05 17:54，macOS 26.6.1，会话锁定=False，锁态采样 124 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 2 次；证据 `eval/results/compat-background-20261005-175413-00be05d389`（本机，不入库）
 - locked（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-06 00:37，macOS 26.6.1，会话锁定=True，锁态采样 501 次（锁定 501，未知 0），前台被改变 0 次，测试窗口被压回下层 0 次；证据 `eval/results/compat-locked-20261006-003734-58d051aa44`（本机，不入库）
-- front（TextEdit）：2026-10-06 23:22，macOS 26.6.1，会话锁定=False，锁态采样 27 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 1 次；证据 `eval/results/compat-front-20261006-232209-277ac0f3f2`（本机，不入库）
-- front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview, TextEdit）：2026-10-06 23:32，macOS 26.6.1，会话锁定=False，锁态采样 283 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 5 次；证据 `eval/results/compat-front-20261006-233251-4309ff6162`（本机，不入库）
+- front（Chrome（应用工具）, Chrome（扩展）, Electron, Finder, Preview）：2026-10-06 23:32，macOS 26.6.1，会话锁定=False，锁态采样 283 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 5 次；证据 `eval/results/compat-front-20261006-233251-4309ff6162`（本机，不入库）
+- front（TextEdit）：2026-10-07 09:23，macOS 26.6.1，会话锁定=False，锁态采样 50 次（锁定 0，未知 0），前台被改变 0 次，测试窗口被压回下层 2 次；证据 `eval/results/compat-front-20261007-092311-462bb1ebdc`（本机，不入库）
 
 **失败、拒绝、跳过与未测的原因**
 
@@ -97,7 +97,6 @@ python3 scripts/compat_baseline.py --report                                    #
 - Electron · click · locked：page clicks 0 -> 0
 - Electron · type · locked：page input value ''
 - Electron · popup · locked：the page did not open its alert
-- front 未测：TextEdit has the user's documents open; typing could reach them
 <!-- compat-table:end -->
 
 ## 基线发现（2026-10-05，macOS 26.6.1，单块 Retina 内置屏）
@@ -120,7 +119,8 @@ python3 scripts/compat_baseline.py --report                                    #
 11. **锁屏时 OCR 质量明显下降**：direct 模式在 1 倍截图上识别文字，单词被拆开、字符误识（如 “6a9344d055” 识别成 “бa9344d055”）；解锁时的 OCR 用 2 倍截图。这影响锁屏下按文字定位和等待文字出现；已在目标 3、4 中解决：锁屏也按显示器原始分辨率截图识别，并合并高、低分辨率和快速识别的结果。
 12. **锁屏时辅助功能读到的不是应用的真实状态**：TextEdit 只报告一个名为 “TextEdit” 的窗口、没有文本区，焦点在应用本身。锁屏核验因此改用窗口服务器元数据、页面回报、Finder 的 Apple Event 和独立 OCR；点击是否生效由随后输入落在哪一行来判断，输入被拒时该点击记为“未测”。
 
-前台状态（2026-10-06 23:22–23:34，用户同意后在其离开且解锁时运行，锁态采样全部为未锁定）：
+前台状态（2026-10-06 23:22 至 10-07 09:23，用户同意后在其离开且解锁时运行，锁态采样全部为未锁定）：
 
-13. **前台时各应用的五类操作基本都能做到**：预览、Finder、Chrome、Electron、扩展通道全部通过；TextEdit 截图、点击、输入通过，滚动和弹窗待补测（见下）。后台按设计拒绝的“作用于当前文档的菜单命令”（预览“前往页面…”、Finder“显示简介”）在前台都有效，与 `run_in_front` 的定位一致。Electron 在前台时网页的辅助功能树完整，点击、输入、弹窗都按元素编号完成。
+13. **前台时 6 个应用（含扩展通道）的五类操作全部通过**，30/30。后台按设计拒绝的“作用于当前文档的菜单命令”（预览“前往页面…”、Finder“显示简介”）在前台都有效，与 `run_in_front` 的定位一致。Electron 在前台时网页的辅助功能树完整，点击、输入、弹窗都按元素编号完成。
 14. **前台模式的保护**：测试只把自己的测试应用提到前面，每个应用测完立即把前台还给用户原来的应用；运行中检测到用户的按键、点击、移动或滚动就立刻结束测试用的 skfiy、还回前台，剩下的记为未测。第一次运行时这项检测误用了“硬件状态任意事件”的空闲计时，skfiy 自己发给测试应用的鼠标事件会刷新它，于是 TextEdit 做完三项就误停了，测试文档也留在了 TextEdit 里；下一次运行因此把 TextEdit 判为“开着用户的文档”而整组跳过。两处都已修正：改用只统计真实输入的计时；只开着往次遗留测试文档的 TextEdit 或预览会先被退出。
+15. **TextEdit 不把经辅助功能插入的文字算作修改**（前台列发现）。前台且输入法处于激活状态时，skfiy 为避免按键被输入法组字，改经辅助功能把文字插到光标处；超过 200 字的文字在后台也走这条路。TextEdit 显示了这些文字，却不认为文档有改动：新建文档输入后关闭，不问是否保留就直接关掉，文字随之丢失。前台列的弹窗一项因此失败（2026-10-07 09:16）。现在经辅助功能插入时，文字后多插一个空格，再用一次真实的删除键删掉它；应用把删除键当作修改，文档随之标为已改动。删除键没有生效时，空格也经辅助功能删掉，并提示应用可能没把这次输入算作修改。新增 `scripts/test_text_entry.py`（后台、TextEdit）：修复前 250 字经辅助功能输入后关闭不提示；修复后 4/4 通过，内容一字不差、关闭时都询问是否保留。修复后前台列 TextEdit 重跑 5/5（09:23）。
