@@ -74,6 +74,9 @@ struct VerifyObservation {
     var value: String?
     /// Something that makes the action's target no longer the same (app quit, lock change).
     var interruption: String?
+    /// Why the target cannot show an effect even if there was one (a covered
+    /// Chromium window is not updated): no change then means nothing.
+    var unobservable: String?
 
     func differs(from other: VerifyObservation) -> Bool {
         if let a = pixels, let b = other.pixels, a.changed(from: b) { return true }
@@ -146,9 +149,15 @@ extension ActionExpectation {
                 return Verdict(status: .targetChanged, detail: change, seconds: now() - started)
             }
             if now() - started >= timeout {
-                return changed
-                    ? Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))", seconds: now() - started)
-                    : Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started)
+                if changed {
+                    let stale = current.unobservable.map { "; but \($0), so what it shows may be out of date" } ?? ""
+                    return Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))\(stale)", seconds: now() - started)
+                }
+                // Not no_effect: the action may well have worked unseen.
+                if let reason = current.unobservable {
+                    return Verdict(status: .timeout, detail: "nothing could be observed (\(reason)), so whether it took effect is unknown", seconds: now() - started)
+                }
+                return Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started)
             }
             do { try await sleep(interval) } catch {
                 return Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started)

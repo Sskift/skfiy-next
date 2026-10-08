@@ -51,6 +51,18 @@ struct CapabilityInputs: Equatable {
 
     var connectedBrowsers: [String] = []
     var browserConnected = false
+
+    /// A Flutter app (RustDesk...): its tree needs AXEnhancedUserInterface,
+    /// set by the first get_app_state; background clicks do nothing in it.
+    var flutter = false
+    /// Unlocked: the app's key window, where keys go, when it is not the inspected one.
+    var keyWindowElsewhere: String?
+    /// The inspected window is a remote session (RustDesk): input goes to another computer.
+    var remoteSession = false
+    /// The inspected window of a Chromium app is completely covered, so it is not updated.
+    var coveredChromium = false
+    /// The app's key window is a remote session: key events would go to another computer.
+    var remoteKeyWindow = false
 }
 
 struct Capability: Equatable {
@@ -153,11 +165,21 @@ struct CapabilityReport {
             channels.append(Capability(name: "ax", available: false, detail: "Accessibility permission is missing for the app hosting skfiy (skfiy doctor)."))
         } else if facts.windows.isEmpty {
             channels.append(Capability(name: "ax", available: true, detail: "Only the menu bar: the app has no windows.", limits: ["Open a window with the menu bar or a shortcut such as cmd+n."]))
+        } else if facts.accessibilityElements == 0, facts.flutter {
+            channels.append(Capability(name: "ax", available: true, detail: "A Flutter app: its controls (buttons, fields, text) appear in the tree once get_app_state has asked for them; call get_app_state.",
+                                       limits: ["set_value does not change Flutter text fields: click the field by element_index, then type_text."]))
         } else if facts.accessibilityElements == 0 {
             channels.append(Capability(name: "ax", available: false, detail: "The window publishes no accessibility elements (custom-drawn UI or an embedded web view).",
-                                       limits: ["Menu bar items still have element indices.", "Use OCR text positions with x/y instead."]))
+                                       limits: ["Menu bar items still have element indices.", "Use OCR text positions with x/y instead."]
+                                        + (facts.coveredChromium ? ["The window is completely covered, and Chromium builds no tree for a window it does not draw: uncovering any corner of it brings the page's elements."] : [])))
         } else {
             var limits: [String] = []
+            if facts.flutter {
+                limits.append("set_value does not change Flutter text fields: click the field by element_index, then type_text.")
+            }
+            if facts.coveredChromium {
+                limits.append("The window is completely covered, so Chromium is not updating its tree: it may be out of date.")
+            }
             if facts.chromium && !facts.webContent {
                 limits.append("No web content in the tree yet: Chromium builds it after the first get_app_state; call get_app_state again.")
             }
@@ -196,6 +218,9 @@ struct CapabilityReport {
             screenshot = Capability(name: "screenshot", available: false, detail: "The display is asleep (off); window capture needs it on, and skfiy does not wake it while the Mac is unlocked.")
         } else if !facts.windows.contains(where: { $0.onScreen && !$0.minimized }) {
             screenshot = Capability(name: "screenshot", available: false, detail: "None of the app's windows is on screen (another desktop, full screen, or no window).")
+        } else if facts.coveredChromium {
+            screenshot = Capability(name: "screenshot", available: true, detail: "ScreenCaptureKit capture of the app's own windows, even when covered.",
+                                    limits: ["This window is completely covered, and Chromium stops drawing a covered window: its screenshot is its last drawn frame and does not show the effect of actions. Uncovering any corner of it (the user) makes it current again."])
         } else {
             screenshot = Capability(name: "screenshot", available: true, detail: "ScreenCaptureKit capture of the app's own windows, even when covered.")
         }
@@ -220,10 +245,19 @@ struct CapabilityReport {
             channels.append(Capability(name: "pointer", available: false, detail: "macOS is locked."))
         } else if facts.hidden {
             channels.append(Capability(name: "pointer", available: false, detail: "The app is hidden; use element actions or the keyboard."))
+        } else if facts.remoteSession {
+            channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
+                                       limits: ["Screenshots and text recognition of it work."]))
         } else {
             var limits: [String] = []
             if facts.chromium || facts.webContent {
                 limits.append("Web content ignores pointer events in background windows: prefer element_index or the browser_* tools; click with focus: true (asks once) or run_in_front for pixels.")
+            }
+            if facts.coveredChromium {
+                limits.append("The window is completely covered: once Chromium stops drawing it, it also ignores wheel input, and the screenshot cannot show whether a scroll worked.")
+            }
+            if facts.flutter {
+                limits.append("Flutter ignores background mouse clicks: click controls by element_index (an x/y click is matched to the control there when there is one), or run_in_front.")
             }
             channels.append(Capability(name: "pointer", available: screenshot.available,
                                        detail: screenshot.available ? "Mouse events posted to the app at screenshot x/y, without moving the cursor." : "Needs a screenshot: " + screenshot.detail,
@@ -245,8 +279,15 @@ struct CapabilityReport {
                              limits: ["Leave one window open before locking, or unlock manually."]))
         } else if facts.session == .locked {
             channels.append(Capability(name: "keyboard", available: false, detail: "macOS is locked."))
+        } else if facts.remoteSession || facts.remoteKeyWindow {
+            channels.append(Capability(name: "keyboard", available: false,
+                                       detail: (facts.remoteSession ? "This window is" : "The app's key window, where key events go, is") + " a RustDesk remote session: keys there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
+                                       limits: facts.remoteSession ? [] : ["Click a text field of the app's main window by element_index first: skfiy then makes that window the key window, without raising it."]))
         } else {
             var limits: [String] = []
+            if let key = facts.keyWindowElsewhere {
+                limits.append("Keys go to the app's key window \(quote(key, limit: 60)), not to the inspected window, until a text field of the inspected window is clicked (element_index; skfiy then makes it the key window, without raising it). Shortcuts that act on another window are refused rather than sent there.")
+            }
             if facts.hasFocusedElement == false {
                 limits.append("The app reports no focused element: keys may be lost until a field is clicked.")
             }
@@ -364,9 +405,10 @@ extension ComputerUse {
             facts.appName = app.localizedName ?? query
             facts.bundleID = app.bundleIdentifier
             facts.pid = pid
-            facts.hidden = app.isHidden
+            facts.hidden = appIsHidden(app)
             facts.frontmost = frontmostProcessID() == pid
             facts.chromium = isChromium(app)
+            facts.flutter = isFlutter(app)
             facts.browserApp = facts.chromium && Self.isBrowserBundle(app.bundleIdentifier)
             if isProtectedInterface(app) {
                 facts.protection = .system
@@ -434,6 +476,14 @@ extension ComputerUse {
             let (count, web) = Self.contentElements(in: chosen, budget: 600)
             facts.accessibilityElements = count
             facts.webContent = web
+            facts.remoteSession = RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: pair.1.title)
+            facts.coveredChromium = chromiumWindowFrozen(app, window: pair.1.id)
+            if let focused, !CFEqual(focused, chosen) {
+                facts.keyWindowElsewhere = (focused.string(kAXTitleAttribute) ?? "") + (windowID(of: focused).map { " (id \($0))" } ?? "")
+            }
+        }
+        if let focused {
+            facts.remoteKeyWindow = RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: focused.string(kAXTitleAttribute) ?? "")
         }
         facts.hasFocusedElement = appElement.element(kAXFocusedUIElementAttribute) != nil
     }

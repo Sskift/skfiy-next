@@ -121,8 +121,10 @@ func resized(_ image: CGImage, width: Int, height: Int) -> CGImage? {
 /// Captures exactly the selected window, without switching desktops,
 /// unlocking the session, or falling back to a display capture. Fresh SCK
 /// objects and matching ownership are required for each screenshot.
+/// `modelLimits` keeps the image within what the model takes; without it
+/// (for zooming and text recognition) the window comes at `maxScale`.
 @MainActor
-func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> (CGImage, CaptureGeometry) {
+func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1, modelLimits: Bool = true) async throws -> (CGImage, CaptureGeometry) {
     try Task.checkCancellation()
     try directLockedCapturePermission()
     try await DisplayWake.require(for: window.frame)
@@ -140,7 +142,7 @@ func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1
         }
 
         let filter = SCContentFilter(desktopIndependentWindow: target)
-        let scale = captureScale(for: current.frame.size, maxScale: maxScale)
+        let scale = modelLimits ? captureScale(for: current.frame.size, maxScale: maxScale) : maxScale
         guard scale.isFinite, scale > 0 else {
             throw ToolError("The selected window has invalid screenshot dimensions.")
         }

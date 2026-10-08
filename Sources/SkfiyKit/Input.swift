@@ -537,11 +537,16 @@ final class FrontGuard: @unchecked Sendable {
     private let target: pid_t?
     private let started = Date()
 
+    private let onlyTarget: Bool
+
     /// `target` is the app being operated: it never gets to keep the front,
-    /// since the user is not working in it.
-    init(userApp: pid_t, target: pid_t?) {
+    /// since the user is not working in it. With `onlyTarget` (a tool that
+    /// sends no input, so nothing it does activates another app) any other
+    /// app coming forward is the user's doing, and is left there.
+    init(userApp: pid_t, target: pid_t?, onlyTarget: Bool = false) {
         self.userApp = userApp
         self.target = target
+        self.onlyTarget = onlyTarget
         Thread.detachNewThread { [self] in
             while isActive {
                 poll()
@@ -571,7 +576,7 @@ final class FrontGuard: @unchecked Sendable {
         guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp,
               front != FrontGrant.granted() else { return }
         // Another app may be the user's own choice; the target app never is.
-        guard front == target || !userMayHaveSwitched(since: started),
+        guard front == target || !onlyTarget && !userMayHaveSwitched(since: started),
               let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }
         lock.lock()
         let allowed = handBacks < 3  // never fight an app that keeps activating

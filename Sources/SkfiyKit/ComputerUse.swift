@@ -32,6 +32,9 @@ struct AppSession {
     /// map to the screen only while it stays there.
     var windowID: CGWindowID?
     var windowFrame: CGRect?
+    /// The screenshot showed that window on its own (it was inspected by
+    /// name or id), not the app's windows as they overlap in its region.
+    var independent = false
     /// The pixels of the latest screenshot the model was given: an action
     /// that leaves them as they were sends no new one.
     var shownFingerprint: PixelFingerprint?
@@ -70,6 +73,9 @@ public final class ComputerUse {
     var sessions: [pid_t: AppSession] = [:]
     private var zoomCount = 0
     private var accessibilityEnabled: Set<pid_t> = []
+    /// Flutter apps whose AXEnhancedUserInterface skfiy turned on: app-wide
+    /// and costly for them, so it is turned off again when skfiy disconnects.
+    private var enhancedInterfaceSet: Set<pid_t> = []
     /// Apps the user allowed brief focus for, this session.
     private var focusApproved: Set<pid_t> = []
     /// What cmd+c / cmd+x copied (or read_clipboard took, with the user's
@@ -110,7 +116,16 @@ public final class ComputerUse {
     public func disconnect() {
         lockedUse?.disconnect()
         _ = directLockedUse.status(end: true)
+        restoreEnhancedInterface()
         forgetApps()
+    }
+
+    /// Turns Flutter's semantics back off where skfiy turned them on.
+    func restoreEnhancedInterface() {
+        for pid in enhancedInterfaceSet where NSRunningApplication(processIdentifier: pid)?.isTerminated == false {
+            _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+        }
+        enhancedInterfaceSet.removeAll()
     }
 
     /// Element indices, earlier looks, and what was enabled or approved per
@@ -226,7 +241,7 @@ public final class ComputerUse {
             case "get_desktop_status":
                 if DirectLockedUse.enabled { return directLockedUse.status() }
                 return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: \(lockedUse?.status ?? "disabled; start skfiy mcp --locked-use to opt in").\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
-            case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
+            case "get_app_state": return try await keepingFront(args, readOnly: true) { try await self.getAppState(args) }
             case "get_app_capabilities": return try await appCapabilities(args)
             case "click": return try await keepingFront(args) { try await self.click(args) }
             case "perform_secondary_action": return try await keepingFront(args) { try await self.performSecondaryAction(args) }
@@ -271,7 +286,7 @@ public final class ComputerUse {
     /// back to the user's app; afterwards the user's top window is put back on
     /// top and menus that popped up are closed. Nothing is undone when the user
     /// clicked or pressed a modifier meanwhile, since that may have been them.
-    private func keepingFront(_ args: Arguments, _ body: () async throws -> ToolResult) async throws -> ToolResult {
+    private func keepingFront(_ args: Arguments, readOnly: Bool = false, _ body: () async throws -> ToolResult) async throws -> ToolResult {
         // loginwindow and the guardian's covers must never become restoration
         // targets. The guardian owns presentation during temporary unlock.
         if lockedUse?.protected == true { return try await body() }
@@ -285,7 +300,7 @@ public final class ComputerUse {
         }
         let userTop = topWindow().flatMap { $0.pid == before ? $0.id : nil }
         let overlaysBefore = Set(target.map { overlayWindows(of: $0.processIdentifier) } ?? [])
-        let guardian = FrontGuard(userApp: before, target: target?.processIdentifier)
+        let guardian = FrontGuard(userApp: before, target: target?.processIdentifier, onlyTarget: readOnly)
         var result: ToolResult
         do {
             result = try await body()
@@ -425,7 +440,9 @@ public final class ComputerUse {
         // The window may have moved since: then the screenshot's pixels no longer
         // say where things are, and nothing should be mapped from them.
         let window = session.window ?? AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
-        if let now = appRegion(pid: pid, focusedWindow: window?.frame), now != geometry.rect {
+        if session.independent {
+            try checkWindowUnmoved(session)
+        } else if let now = appRegion(pid: pid, focusedWindow: window?.frame), now != geometry.rect {
             sessions[pid]?.zoom = nil
             throw ToolError("The window moved or changed size since the latest screenshot (it showed \(geometry.rect), now \(now)). Call get_app_state again; its old coordinates are not used.")
         }
@@ -435,7 +452,8 @@ public final class ComputerUse {
         let topLeft = geometry.toScreen(x: region.minX, y: region.minY)
         let bottomRight = geometry.toScreen(x: region.maxX, y: region.maxY)
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
-        let shot = try await captureApp(pid: pid, rect: rect, maxScale: backing)
+        // An inspected window is cut from a capture of it alone, as it was shown.
+        let shot = try await captureView(pid: pid, window: inspectedWindow(pid), rect: rect, maxScale: backing)
         guard let capture = TextRecognition.decode(shot.data),
               let cut = cutZoom(from: capture, captureGeometry: shot.geometry, screenshot: geometry, region: region, factor: factor) else {
             throw ToolError("Could not cut that region from the window.")
@@ -529,14 +547,17 @@ public final class ComputerUse {
                 }
                 sawWindow = true
                 var current = snapshot.text
-                if args.bool("ocr") ?? snapshot.opaque,
-                   let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
-                   let lines = try? await self.recognizeText(pid: app.processIdentifier, region: region) {
+                // A window watched by name is read on its own, not with the
+                // app's windows above it.
+                let watchedWindow = snapshot.chosenWindow
+                let area = watchedWindow?.frame ?? appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame)
+                if args.bool("ocr") ?? snapshot.opaque, let area,
+                   let lines = try? await self.recognizeView(pid: app.processIdentifier, window: watchedWindow, rect: area) {
                     current += "\n" + lines.map(\.text).joined(separator: "\n")
                 }
                 var observation = WaitObservation(text: current, textFingerprint: current)
-                if text.isEmpty, let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
-                   let shot = try? await captureApp(pid: app.processIdentifier, rect: region), let image = TextRecognition.decode(shot.data) {
+                if text.isEmpty, let area,
+                   let shot = try? await self.captureView(pid: app.processIdentifier, window: watchedWindow, rect: area), let image = TextRecognition.decode(shot.data) {
                     observation.fingerprint = PixelFingerprint(image, region: nil)
                 }
                 return observation
@@ -548,7 +569,12 @@ public final class ComputerUse {
         if case .stopped = result { throw ToolError(outcome) }
         var state = try await getAppState(args)
         state.text = outcome + "\n" + state.text
-        if case .timedOut = result { state.isError = true }
+        if case .timedOut = result {
+            state.isError = true
+            if chromiumWindowFrozen(app, window: sessions[app.processIdentifier]?.windowID) {
+                state.text = "The window is completely covered by other windows, so Chromium has not been updating it: what was waited for may have happened unseen (see below).\n" + state.text
+            }
+        }
         return state
     }
 
@@ -614,13 +640,24 @@ public final class ComputerUse {
                 clickPoint = try screenPoint(args, "x", "y", session: session)
                 action = "click at (\(formatNumber(try args.double("x") ?? 0)), \(formatNumber(try args.double("y") ?? 0)))"
             }
-            try checkPointerTarget(app)
+            try checkPointerTarget(app, allowRemote: true)
         } else {
             throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
         }
         let chord = try key.map(parseKeyChord)
-        // cmd+c, cmd+x and cmd+v work on skfiy's clipboard here too.
-        let clipboardKey = chord.flatMap { chord in chord.modifiers == .command ? chord.baseCharacter.flatMap { "cxv".contains($0) ? $0 : nil } : nil }
+        // A RustDesk remote session passes what it gets to the remote computer.
+        let appElementNow = AXUIElementCreateApplication(pid)
+        let remoteWindow: AXUIElement? = {
+            if let clickPoint, let id = pointerWindow(pid: pid, at: clickPoint), let window = axWindow(id, pid: pid) { return window }
+            return appElementNow.element(kAXFocusedWindowAttribute)
+        }()
+        let remoteTitle = remoteWindow.flatMap { window -> String? in
+            let title = window.string(kAXTitleAttribute) ?? ""
+            return RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: title) ? title : nil
+        }
+        // cmd+c, cmd+x and cmd+v work on skfiy's clipboard here too (not in a
+        // remote session, where they are the remote computer's).
+        let clipboardKey = remoteTitle != nil ? nil : chord.flatMap { chord in chord.modifiers == .command ? chord.baseCharacter.flatMap { "cxv".contains($0) ? $0 : nil } : nil }
         if clipboardKey == "v", clipboard == nil {
             throw ToolError("skfiy's clipboard is empty, so there is nothing to paste. Copy with cmd+c first, or take what the user copied with read_clipboard.")
         }
@@ -635,7 +672,10 @@ public final class ComputerUse {
         }
         let user = NSRunningApplication(processIdentifier: userApp)?.localizedName ?? "your app"
         let reason = args.string("reason").map { " (\($0))" } ?? ""
-        let message = "skfiy wants to bring \(name) to the front for about a second to \(action)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
+        var message = "skfiy wants to bring \(name) to the front for about a second to \(action)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
+        if let remoteTitle {
+            message += " This goes to RustDesk's remote session \(quote(remoteTitle, limit: 80)), so the remote computer receives it; RustDesk may keep your keyboard for the remote computer until you click elsewhere."
+        }
         switch await askUser(message) {
         case nil:
             throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them (or no answer came). Tell the user what needs doing instead.")
@@ -701,7 +741,7 @@ public final class ComputerUse {
         let lent = system.changeCount
         var how: String
         if let clickPoint {
-            guard front() == pid, let window = windowID(of: pid, at: clickPoint) ?? focusedWindowID(of: pid) else {
+            guard front() == pid, let window = pointerWindow(pid: pid, at: clickPoint) else {
                 await restore()
                 throw ToolError("\(name) lost the front, or has no window at that point, so nothing was clicked.")
             }
@@ -980,13 +1020,17 @@ public final class ComputerUse {
                                          keeping: keeping?.elements)
         var screenshot: Screenshot?
         var captureNote: String?
-        let shownWindow = snapshot.chosenWindow ?? appElement.element(kAXFocusedWindowAttribute)
+        let shownWindow = snapshot.shownWindow
         let minimized = shownWindow?.bool(kAXMinimizedAttribute) == true
         // A window inspected by name may lie under another window of the same
         // app: it is captured on its own, as while locked, not as a region.
         let inspected = snapshot.chosenWindow.flatMap { independentWindow($0, pid: pid) }
-        if app.isHidden || minimized {
-            captureNote = "No screenshot: the app is \(app.isHidden ? "hidden" : "minimized"), and skfiy does not bring windows forward. Accessibility actions by element_index still work."
+        let hidden = appIsHidden(app)
+        let inspectedPresence = inspected.map { presence(of: $0.id, app: app) }
+        if hidden || minimized {
+            captureNote = "No screenshot: " + (hidden ? "the app is hidden" : "the window is minimized") + ", and skfiy does not bring windows forward (that would put them over the user's screen). Accessibility actions by element_index still work" + (hidden ? ", and so does the keyboard." : ".")
+        } else if inspectedPresence == .otherDesktop {
+            captureNote = "No screenshot: the window is on another desktop (Space) or in a full-screen space, and skfiy does not switch desktops. Accessibility actions by element_index still work."
         } else if let inspected {
             do {
                 screenshot = try await captureDirectLockedWindow(inspected, maxScale: 1)
@@ -1048,6 +1092,10 @@ public final class ComputerUse {
         sessions[pid]?.windowID = shownWindow.flatMap(windowID(of:))
         sessions[pid]?.windowFrame = shownWindow?.frame
         sessions[pid]?.shownFingerprint = fingerprint
+        sessions[pid]?.independent = inspected != nil && screenshot != nil
+        if screenshot != nil, chromiumWindowFrozen(app, window: sessions[pid]?.windowID) {
+            snapshot.header.append(frozenNote(app))
+        }
         let version = StateVersions.next()
         if args.string("find") == nil {
             stateHistory[pid] = StateRecord.appending(StateRecord(version: version, epoch: sessions[pid]!.epoch, window: windowKey, lines: snapshot.body,
@@ -1130,6 +1178,8 @@ public final class ComputerUse {
         var windows: [String: String] = [:]
         /// The window publishes no accessibility elements.
         var opaque = false
+        /// The window shown: the chosen one, else the focused (or main, or first) one.
+        var shownWindow: AXUIElement?
         var text: String { (header.filter { !$0.isEmpty } + [""] + body).joined(separator: "\n") }
     }
 
@@ -1271,9 +1321,21 @@ public final class ComputerUse {
             windowTitles[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
         if let window = focusedWindow {
+            var keyboard = ""
+            if chosenWindow != nil {
+                let key = axElement(values[kAXFocusedWindowAttribute])
+                if let key, CFEqual(key, window) {
+                    keyboard = " — inspected without raising it; it is the app's key window, so keyboard input goes here"
+                } else {
+                    let keyTitle = key.map { quote($0.string(kAXTitleAttribute) ?? "", limit: 60) + (windowID(of: $0).map { " (id \($0))" } ?? "") }
+                    keyboard = " — inspected without raising it; keyboard input goes to the app's key window \(keyTitle ?? "(none)") until you click a text field here (by element_index; skfiy then makes this the key window without raising it)"
+                }
+            }
             header.append("Window: \(quote(window.string(kAXTitleAttribute) ?? "", limit: 120))"
-                + (windowID(of: window).map { " (id \($0))" } ?? "")
-                + (chosenWindow != nil ? " — inspected without raising it; keyboard input still goes to the app's focused window" : ""))
+                + (windowID(of: window).map { " (id \($0))" } ?? "") + keyboard)
+            if RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: window.string(kAXTitleAttribute) ?? "") {
+                header.append("This window is a RustDesk remote session: it shows another computer, and input to it goes there. Screenshots and text recognition work; skfiy sends it no background clicks or keys (use run_in_front, which asks the user). The app's own controls are in its main window (get_app_state with window: \"RustDesk\").")
+            }
         }
         if let focusedElement, let index = elements.firstIndex(where: { CFEqual($0, focusedElement) }) {
             header.append("Keyboard focus: [\(index)]")
@@ -1282,7 +1344,7 @@ public final class ComputerUse {
             header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Its text is recognized from the screenshot below, with positions for x/y clicks; also use the menu bar and keyboard shortcuts.")
         }
         return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow,
-                        windows: windowTitles, opaque: opaqueWindow)
+                        windows: windowTitles, opaque: opaqueWindow, shownWindow: focusedWindow)
     }
 
     /// A window by id, by exact title, or by part of its title. Windows that
@@ -1471,9 +1533,9 @@ public final class ComputerUse {
         }
         // The agent cursor goes there first, so the user sees where it acts.
         if let shown = point ?? element?.frame.map({ CGPoint(x: $0.midX, y: $0.midY) }) {
-            await VirtualCursor.move(to: shown, pid: pid)
+            await VirtualCursor.move(to: shown, pid: pid, window: pointerWindow(pid: pid, at: shown, element: point == nil ? element : nil))
         }
-        if let element, let how = try accessibilityClick(element, at: point, button: button, count: count, modifiers: modifiers, exact: point == nil) {
+        if let element, let how = try await accessibilityClick(element, at: point, button: button, count: count, modifiers: modifiers, exact: point == nil) {
             VirtualCursor.show(.click(count: count, button: button), pid: pid)
             return try await afterAction(app, "Clicked \(described): \(how).")
         }
@@ -1485,8 +1547,11 @@ public final class ComputerUse {
         } else {
             throw ToolError("Nothing to click.")
         }
+        // Checked before the cursor moves there: nothing happens on a refusal.
+        let indexed = point == nil ? element : nil
+        try checkPointerTarget(app, window: indexed.flatMap(containingWindow(of:)))
         if point == nil { await VirtualCursor.move(to: target, pid: pid) }
-        let how = try await pointerClick(app, at: target, button: button, count: count, modifiers: modifiers,
+        let how = try await pointerClick(app, at: target, element: indexed, button: button, count: count, modifiers: modifiers,
                                          focus: args.bool("focus") ?? false)
         VirtualCursor.show(.click(count: count, button: button), pid: pid)
         return try await afterAction(app, "Clicked \(described): \(how).")
@@ -1503,19 +1568,29 @@ public final class ComputerUse {
         count: Int,
         modifiers: Modifiers,
         exact: Bool
-    ) throws -> String? {
+    ) async throws -> String? {
         guard modifiers.isEmpty else { return nil }
         let role = element.string(kAXRoleAttribute) ?? ""
         switch (button, count) {
         case (.left, 1):
+            // A file name in a list row (Finder) is a text field: a click on a
+            // row that is not selected selects it, as a real click does.
+            if !exact, Self.textRoles.contains(role), let row = ancestor(of: element, levels: 3, where: {
+                $0.string(kAXRoleAttribute) == "AXRow" && $0.isSettable(kAXSelectedAttribute)
+            }), row.bool(kAXSelectedAttribute) == false {
+                let status = guardedAXSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+                try throwIfRefused(status)
+                if status == .success { return "selected the row (accessibility)" }
+            }
             if Self.textRoles.contains(role) {
                 try throwIfRefused(guardedAXSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue))
                 if let pid = element.pid { typingTargets[pid] = element }
                 // A click lands the caret under the pointer; by index, at the end.
                 let length = (element.string(kAXValueAttribute) as NSString?)?.length ?? 0
                 let location = point.flatMap { textIndex(in: element, at: $0) } ?? length
+                let keyboard = await makeFieldWindowKey(element)
                 setCaret(element, location)
-                return "focused the field and placed the caret (accessibility)"
+                return "focused the field and placed the caret (accessibility)" + keyboard
             }
             // In web content AXPress only dispatches a click event: plain text or a
             // canvas would not take focus the way a real click does, so those
@@ -1566,18 +1641,29 @@ public final class ComputerUse {
     private func pointerClick(
         _ app: NSRunningApplication,
         at point: CGPoint,
+        element: AXUIElement? = nil,
         button: MouseButton,
         count: Int,
         modifiers: Modifiers,
         focus: Bool
     ) async throws -> String {
-        try checkPointerTarget(app)
         let pid = app.processIdentifier
-        guard let window = windowID(of: pid, at: point) ?? focusedWindowID(of: pid) else {
+        guard let window = pointerWindow(pid: pid, at: point, element: element) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
         }
+        let windowElement = element.flatMap(containingWindow(of:)) ?? axWindow(window, pid: pid)
+        try checkPointerTarget(app, window: windowElement)
         let chromium = isChromium(app)
+        let flutter = isFlutter(app)
         var note = ""
+        if flutter, frontmostProcessID() != pid {
+            // Measured with RustDesk: Flutter views ignore every kind of
+            // background click; brief focus was not tried (it defocuses the user).
+            guard await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers) else {
+                throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
+            }
+            return "sent a background mouse click, but Flutter apps (such as RustDesk) ignore mouse clicks while they are in the background, so expect no effect. Click their controls by element_index instead (get_app_state lists them), or use run_in_front with the same x/y (asks the user)."
+        }
         if frontmostProcessID() != pid, briefFocusEnabled || focus {
             switch await briefFocusPermission(app) {
             case true?:
@@ -1677,6 +1763,11 @@ public final class ComputerUse {
         guard element.isSettable(kAXValueAttribute) else {
             throw ToolError("Element [\(index)] \(describe(element)) has no settable value. Click it and use type_text, or use its actions.")
         }
+        if Self.textRoles.contains(role), isFlutter(app) {
+            // Measured with RustDesk: the value reads back as set, but only
+            // Flutter's invisible stand-in field changes, not what the app has.
+            throw ToolError("[\(index)] \(describe(element)) is a text field of a Flutter app, which ignores values set through accessibility (the field would only appear to change). Nothing was changed. Click it by element_index (that focuses it, and makes its window the key window), then use type_text; press cmd+a first to replace what is there.")
+        }
         if let frame = element.frame {
             await VirtualCursor.move(to: CGPoint(x: frame.midX, y: frame.midY), pid: app.processIdentifier)
             VirtualCursor.show(.keys("⌨︎"), pid: app.processIdentifier)
@@ -1699,13 +1790,28 @@ public final class ComputerUse {
             // focus, so move focus to the target first and make sure it took.
             _ = try? element.set(kAXFocusedAttribute, kCFBooleanTrue)
             await Input.pause(0.05)
-            guard element.bool(kAXFocusedAttribute) == true else {
+            // Chromium sets the value of the element itself; its tree only
+            // reports the focus late in a window that is covered or not key.
+            guard element.bool(kAXFocusedAttribute) == true || isChromium(app) else {
                 throw ToolError("Could not focus [\(index)] \(describe(element)) to set its value; nothing was changed. Click it and use type_text instead.")
             }
         }
         try element.set(kAXValueAttribute, newValue)
-        if webText, let now = await settledValue(element, expecting: text), now != text {
-            return try await afterAction(app, "Tried to set the value of [\(index)] \(describe(element)), but it now reads \(quote(now, limit: 60)); the page may have reformatted or rejected it.")
+        if webText {
+            // Chromium updates the tree of a window that is not the key window
+            // (or is covered) late, or not at all: then the read-back proves nothing.
+            let elementWindow = containingWindow(of: element).flatMap(windowID(of:))
+            let lagging = elementWindow != focusedWindowID(of: app.processIdentifier) || chromiumWindowFrozen(app, window: elementWindow)
+            var now = await settledValue(element, expecting: text)
+            if lagging, now != text {
+                await Input.pause(0.6)
+                now = await settledValue(element, expecting: text)
+            }
+            if let now, now != text {
+                return try await afterAction(app, lagging
+                    ? "Set the value of [\(index)] \(describe(element)), but could not confirm it: accessibility still reads \(quote(now, limit: 60)), and Chromium updates it late (or not at all) in a window that is not the app's key window or is covered. Check the page itself before setting it again."
+                    : "Tried to set the value of [\(index)] \(describe(element)), but it now reads \(quote(now, limit: 60)); the page may have reformatted or rejected it.")
+            }
         }
         return try await afterAction(app, "Set the value of [\(index)] \(describe(element)).")
     }
@@ -1777,7 +1883,13 @@ public final class ComputerUse {
         // Wheel events, a page being about 85% of what shows of the element
         // (or of the window), at least 40 pt. Not AXScroll*ByPage: TextEdit
         // reports failure for it yet scrolls, the wrong way.
-        try checkPointerTarget(app)
+        try checkPointerTarget(app, window: element.flatMap(containingWindow(of:)), allowRemote: true)
+        guard let window = pointerWindow(pid: pid, at: point, element: element) else {
+            throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
+        }
+        // Chromium drops wheel input to a fully covered window once it stops
+        // drawing it (it does so a little while after the window is covered).
+        let frozen = chromiumWindowFrozen(app, window: window)
         let area = element?.frame.map { frame -> CGRect in
             let visible = frame.intersection(session.geometry?.rect ?? frame)
             return visible.isNull || visible.width < 1 ? frame : visible
@@ -1789,24 +1901,22 @@ public final class ComputerUse {
         case "left": (-distance, 0)
         default: (distance, 0)
         }
-        guard let window = windowID(of: pid, at: point) ?? focusedWindowID(of: pid) else {
-            throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
-        }
         await VirtualCursor.move(to: point, pid: pid, window: window)
         await Input.scroll(at: point, dx: delta.0, dy: delta.1, pid: pid, windowID: window)
         VirtualCursor.show(.scroll(dx: delta.0, dy: delta.1), pid: pid)
-        return try await afterAction(app, "Scrolled \(described) \(direction) \(formatNumber(pages)) page(s) (wheel event sent to the app in the background).")
+        return try await afterAction(app, "Scrolled \(described) \(direction) \(formatNumber(pages)) page(s) (wheel event sent to the app in the background)."
+            + (frozen ? " It may have done nothing: Chromium ignores wheel input to a window that is completely covered once it stops drawing it." : ""))
     }
 
     func drag(_ args: Arguments) async throws -> ToolResult {
         let (app, session) = try target(args)
         let start = try screenPoint(args, "from_x", "from_y", session: session)
         let end = try screenPoint(args, "to_x", "to_y", session: session)
-        try checkPointerTarget(app)
         let pid = app.processIdentifier
-        guard let window = windowID(of: pid, at: start) ?? focusedWindowID(of: pid) else {
+        guard let window = pointerWindow(pid: pid, at: start) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at the start point.")
         }
+        try checkPointerTarget(app, window: axWindow(window, pid: pid))
         var how = "background mouse events"
         let focus = args.bool("focus") ?? false
         await VirtualCursor.move(to: start, pid: pid, window: window)
@@ -1819,7 +1929,7 @@ public final class ComputerUse {
             await Input.drag(from: start, to: end, pid: pid, windowID: window)
         }
         VirtualCursor.show(.release, pid: pid)
-        return try await afterAction(app, "Dragged from (\(formatNumber(try args.double("from_x") ?? 0)), \(formatNumber(try args.double("from_y") ?? 0))) to (\(formatNumber(try args.double("to_x") ?? 0)), \(formatNumber(try args.double("to_y") ?? 0))) (\(how)).")
+        return try await afterAction(app, "Dragged from (\(formatNumber(try args.double("from_x") ?? 0)), \(formatNumber(try args.double("from_y") ?? 0))) to (\(formatNumber(try args.double("to_x") ?? 0)), \(formatNumber(try args.double("to_y") ?? 0))) (\(how))." + (how.hasPrefix("background") ? " Some views ignore background drags (TextEdit's text, for one): check the screenshot, and select text with select_text instead." : ""))
     }
 
     func pressKey(_ args: Arguments) async throws -> ToolResult {
@@ -1832,21 +1942,36 @@ public final class ComputerUse {
         }
         try checkInputTarget(app)
         let pid = app.processIdentifier
+        // Key events go to the app's key window, which may not be the window
+        // the model works in: it is made the key window, or no key is sent.
+        let keyboard = try await keyboardTarget(app, args)
         await VirtualCursor.typing(VirtualCursor.keycaps(key), pid: pid)
+        if !keyboard.reachesIntended {
+            // Shortcuts done through accessibility work on any window.
+            if let how = try emulateShortcut(chord, pid: pid, window: keyboard.intendedWindow, text: keyboard.text) {
+                return try await afterAction(app, "Pressed \(key) in \(quote(keyboard.intendedTitle, limit: 60)): \(how) (accessibility; the app's key window \(quote(keyboard.keyTitle, limit: 60)) was left alone).")
+            }
+            if let text = keyboard.text, let how = try await clipboardShortcut(chord, pid: pid, text: text, menu: false) {
+                return try await afterAction(app, "Pressed \(key): \(how).")
+            }
+            throw ToolError(keyboard.refusal(app: app.localizedName ?? "the app"))
+        }
         if let seconds = try args.double("hold_seconds") {
             guard (0.05...10).contains(seconds), count == 1 else {
                 throw ToolError("hold_seconds must be between 0.05 and 10, without repeat.")
             }
             await Input.hold(chord, seconds: seconds, to: pid)
-            return try await afterAction(app, "Held \(key) for \(formatNumber(seconds)) s (sent to the app in the background).")
+            return try await afterAction(app, "Held \(key) for \(formatNumber(seconds)) s (sent to the app in the background).\(keyboard.note)")
         }
+        let text = keyboard.text ?? focusedTextElement(pid)
+        let window = keyboard.intendedWindow ?? AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
 
         // A background app ignores menu key equivalents, so run the menu item
         // itself. Items that depend on the focused document or text (Save,
         // Select All, Close) are disabled while the app is in the background;
         // the common ones are done through accessibility instead.
-        if let how = try await clipboardShortcut(chord, pid: pid) {
-            return try await afterAction(app, "Pressed \(key): \(how).")
+        if let how = try await clipboardShortcut(chord, pid: pid, text: text) {
+            return try await afterAction(app, "Pressed \(key): \(how).\(keyboard.note)")
         }
         var disabledItem: String?
         if !chord.modifiers.isDisjoint(with: [.command, .control]) {
@@ -1860,14 +1985,14 @@ public final class ComputerUse {
                         pressed += 1
                     }
                     if pressed == count {
-                        return try await afterAction(app, "Pressed \(key) by invoking the menu item \(quote(item.title, limit: 60)).")
+                        return try await afterAction(app, "Pressed \(key) by invoking the menu item \(quote(item.title, limit: 60)).\(keyboard.note)")
                     }
                 } else {
                     disabledItem = item.title
                 }
             }
-            if let how = try emulateShortcut(chord, pid: pid) {
-                return try await afterAction(app, "Pressed \(key): \(how) (accessibility).")
+            if let how = try emulateShortcut(chord, pid: pid, window: window, text: text) {
+                return try await afterAction(app, "Pressed \(key): \(how) (accessibility).\(keyboard.note)")
             }
         }
         // Keys sent to the frontmost app pass through its input method (Pinyin
@@ -1878,7 +2003,7 @@ public final class ComputerUse {
             return try await afterAction(app, "Entered \(quote(text, limit: 10)) (accessibility).")
         }
         await Input.press(chord, repeat: count, to: pid)
-        var message = "Pressed \(key)" + (count > 1 ? " ×\(count)" : "") + " (sent to the app in the background)."
+        var message = "Pressed \(key)" + (count > 1 ? " ×\(count)" : "") + " (sent to the app in the background)." + keyboard.note
         if let disabledItem {
             message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut did nothing. Commands that act on the current selection or document (formatting, Save, Undo…) only work in the frontmost app, and toolbar buttons for them are ignored in the background too. skfiy does not bring apps forward on its own; use run_in_front, which asks the user first, or say what is left to do instead of retrying."
         }
@@ -1893,22 +2018,41 @@ public final class ComputerUse {
         }
         try checkInputTarget(app)
         let pid = app.processIdentifier
+        // Key events go to the app's key window, which may not be the window
+        // the model works in: it is made the key window, or the text goes
+        // into its field through accessibility, or nothing is sent.
+        let keyboard = try await keyboardTarget(app, args)
+        // Flutter takes text set through accessibility only in an invisible
+        // stand-in field, so for it keys are the only way.
+        let flutter = isFlutter(app)
         await VirtualCursor.typing("⌨︎", pid: pid)
+        if !keyboard.reachesIntended {
+            guard !flutter, let field = keyboard.text, field.isSettable(kAXSelectedTextAttribute) else {
+                throw ToolError(keyboard.refusal(app: app.localizedName ?? "the app"))
+            }
+            lastInputWasSecret = field.string(kAXSubroleAttribute) == "AXSecureTextField"
+            let before = field.string(kAXValueAttribute)
+            try field.set(kAXSelectedTextAttribute, text as CFString)
+            guard await settledValue(field, changedFrom: before) != before || before == nil else {
+                throw ToolError("Keyboard input would go to the app's key window \(quote(keyboard.keyTitle, limit: 60)), so skfiy tried to insert the text into \(describe(field)) of \(quote(keyboard.intendedTitle, limit: 60)) through accessibility, but its value did not change\(keyboard.why). " + keyboard.refusal(app: app.localizedName ?? "the app"))
+            }
+            return try await afterAction(app, "Entered \(text.count) character(s) into \(describe(field)) of \(quote(keyboard.intendedTitle, limit: 60)) through accessibility: key events would have gone to the app's key window \(quote(keyboard.keyTitle, limit: 60)) instead\(keyboard.why). The app may not count text entered this way as a change; save explicitly before closing the document.")
+        }
         // Background Chromium (Electron) reports no focused element even
         // right after a click focused a field: that field is meant.
-        let focused = focusedElement(pid) ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
+        let focused = focusedElement(pid) ?? keyboard.text ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
         lastInputWasSecret = focused?.string(kAXSubroleAttribute) == "AXSecureTextField"
-        var note = ""
+        var note = keyboard.note
         if let focused, !isTextLike(focused) {
-            note = " Keyboard focus is on \(describe(focused)), not a text field; click the field first if the text went missing."
+            note += " Keyboard focus is on \(describe(focused)), not a text field; click the field first if the text went missing."
         } else if focused == nil {
-            note = " The app reports no focused element; click the field first if the text went missing."
+            note += " The app reports no focused element; click the field first if the text went missing."
         }
 
         // Insert directly when the frontmost app's input method would compose
         // keystrokes, or when the text is long enough that keystrokes are slow.
         let imeWouldCompose = frontmostProcessID() == pid && Input.inputMethodActive()
-        if imeWouldCompose || text.count > 200, let focused, focused.isSettable(kAXSelectedTextAttribute) {
+        if imeWouldCompose || text.count > 200, !flutter, let focused, focused.isSettable(kAXSelectedTextAttribute) {
             let before = focused.string(kAXValueAttribute)
             // Some apps (TextEdit) take text set through accessibility without
             // counting it as an edit: the document stays unchanged, and closing
@@ -1940,7 +2084,7 @@ public final class ComputerUse {
             throw ToolError("Stopped after \(typed) of \(text.count) character(s): " + EmergencyStop.refusal)
         }
         await Input.pause(0.15)
-        if let focused, let before, focused.string(kAXValueAttribute) == before {
+        if !flutter, let focused, let before, focused.string(kAXValueAttribute) == before {
             // The app ignored background keystrokes: insert at the caret
             // through accessibility, or set the field's value with the text
             // put where the caret is.
@@ -2039,12 +2183,17 @@ public final class ComputerUse {
             }
         }
         try checkInputTarget(app)
+        // Typed keys go to the app's key window: only when the pop-up is in it.
+        let names = options.map { quote($0.title, limit: 40) }.joined(separator: ", ")
+        let popupWindow = containingWindow(of: popup).flatMap(windowID(of:))
+        guard popupWindow == nil || popupWindow == focusedWindowID(of: app.processIdentifier) else {
+            throw ToolError("Could not choose \(quote(option, limit: 60)) through accessibility, and typing its name would go to the app's key window, not to the window of this pop-up, so nothing was typed. The value is still \(quote(popup.string(kAXValueAttribute) ?? "?", limit: 60)).\(names.isEmpty ? "" : " Options: \(names).")")
+        }
         _ = try? popup.set(kAXFocusedAttribute, kCFBooleanTrue)
         await Input.pause(0.1)
         await Input.type(option, to: app.processIdentifier)
         await Input.pause(0.3)
         if selected() { return "focused it and typed the option name" }
-        let names = options.map { quote($0.title, limit: 40) }.joined(separator: ", ")
         throw ToolError("Could not choose \(quote(option, limit: 60)); the value is still \(quote(popup.string(kAXValueAttribute) ?? "?", limit: 60)).\(names.isEmpty ? "" : " Options: \(names).")")
     }
 
@@ -2086,20 +2235,13 @@ public final class ComputerUse {
         return (app, session)
     }
 
-    private func checkInputTarget(_ app: NSRunningApplication) throws {
+    func checkInputTarget(_ app: NSRunningApplication) throws {
         try lockedUse?.check()
         guard !isScreenLocked() else {
             throw ToolError("The screen is locked. No input was sent.")
         }
         guard !app.isTerminated else {
             throw ToolError("\(app.localizedName ?? "The app") has quit.")
-        }
-    }
-
-    private func checkPointerTarget(_ app: NSRunningApplication) throws {
-        try checkInputTarget(app)
-        if app.isHidden {
-            throw ToolError("\(app.localizedName ?? "The app") is hidden, and skfiy does not unhide windows. Use element_index actions or the keyboard.")
         }
     }
 
@@ -2136,22 +2278,48 @@ public final class ComputerUse {
 
     /// Chromium and Electron build their accessibility tree only for
     /// assistive clients that ask for it.
-    private func enableAccessibility(_ app: NSRunningApplication, _ appElement: AXUIElement) async {
+    func enableAccessibility(_ app: NSRunningApplication, _ appElement: AXUIElement) async {
         let pid = app.processIdentifier
         guard !accessibilityEnabled.contains(pid) else { return }
         accessibilityEnabled.insert(pid)
         var enabled = guardedAXSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success
-        if isChromium(app) {
+        let chromium = isChromium(app)
+        let flutter = isFlutter(app)
+        if chromium {
             enabled = guardedAXSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) == .success || enabled
+        } else if flutter {
+            // Flutter builds its semantics tree only once AppKit posts the
+            // enhanced-user-interface notification. NSApplication answers the
+            // set with kAXErrorNotImplemented, yet stores it and posts it.
+            let before = appElement.bool("AXEnhancedUserInterface")
+            _ = guardedAXSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            if appElement.bool("AXEnhancedUserInterface") == true {
+                enabled = true
+                if before != true { enhancedInterfaceSet.insert(pid) }
+            }
         }
         guard enabled else { return }
-        // The web tree is built lazily after the first request; wait for it.
+        // The web tree (and Flutter's semantics) is built lazily after the first request; wait for it.
         for _ in 0..<12 {
             await Input.pause(0.25)
-            if let window = appElement.element(kAXFocusedWindowAttribute), containsWebArea(window, budget: 400) {
+            if let window = appElement.element(kAXFocusedWindowAttribute) ?? appElement.elements(kAXWindowsAttribute).first,
+               flutter ? containsFlutterSemantics(window) : containsWebArea(window, budget: 400) {
                 return
             }
         }
+        // Chromium builds no tree for a window it is not drawing (fully
+        // covered): ask again next time instead of taking the window as opaque.
+        if chromium, chromiumWindowFrozen(app, window: focusedWindowID(of: pid)) {
+            accessibilityEnabled.remove(pid)
+        }
+    }
+
+    /// Whether Flutter has published semantics nodes (anything beyond its view's group).
+    private func containsFlutterSemantics(_ window: AXUIElement) -> Bool {
+        let content: Set<String> = ["AXStaticText", "AXButton", "AXTextField", "AXTextArea", "AXImage", "AXLink", "AXCheckBox", "AXSlider"]
+        return window.descendant(limit: 400, where: { element in
+            content.contains(element.string(kAXRoleAttribute) ?? "") && element.string(kAXSubroleAttribute).map { !$0.hasSuffix("Button") || $0 == "AXButton" } ?? true
+        }) != nil
     }
 
     /// Whether `root` or one of the first elements below it is web content.
@@ -2169,38 +2337,63 @@ public final class ComputerUse {
             sessions[pid] = nil
             return ToolResult(text: message + "\nThe app quit.")
         }
-        let window = sessions[pid]?.window ?? AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
-        guard !app.isHidden, let region = appRegion(pid: pid, focusedWindow: window?.frame) else {
+        // A background Electron app may report no focused window: then its main or first one.
+        let appElement = AXUIElementCreateApplication(pid)
+        let window = sessions[pid]?.window ?? appElement.element(kAXFocusedWindowAttribute) ?? appElement.element(kAXMainWindowAttribute)
+            ?? appElement.elements(kAXWindowsAttribute).first { $0.string(kAXRoleAttribute) == kAXWindowRole }
+        if appIsHidden(app) || window?.bool(kAXMinimizedAttribute) == true {
+            return ToolResult(text: message + "\nNo screenshot: " + (appIsHidden(app) ? "the app is hidden" : "the window is minimized") + ", and skfiy does not bring windows forward. Call get_app_state for its tree.")
+        }
+        guard let region = appRegion(pid: pid, focusedWindow: window?.frame) else {
             return ToolResult(text: message + "\nNo screenshot: the app has no visible window now. Call get_app_state to see its state.")
         }
+        let id = window.flatMap(windowID(of:))
+        // Chromium neither draws nor updates a window that is fully covered:
+        // an unchanged picture says nothing about the action's effect.
+        let frozen = chromiumWindowFrozen(app, window: id)
         do {
-            let screenshot = try await captureApp(pid: pid, rect: region)
+            // A window inspected by name is captured on its own, as get_app_state
+            // did: as a region, another window of the app above it (RustDesk's
+            // remote session over its main window) would show instead.
+            let independent = sessions[pid]?.window.flatMap { independentWindow($0, pid: pid) }
+            let screenshot: Screenshot
+            if let independent {
+                screenshot = try await captureDirectLockedWindow(independent, maxScale: 1)
+            } else {
+                screenshot = try await captureApp(pid: pid, rect: region)
+            }
             let fingerprint = TextRecognition.decode(screenshot.data).flatMap { PixelFingerprint($0, region: nil) }
             if let session = sessions[pid], session.geometry == screenshot.geometry,
                let shown = session.shownFingerprint, let now = fingerprint, !now.changed(from: shown) {
+                if frozen {
+                    return ToolResult(text: message + "\nThe screenshot is unchanged, but that proves nothing: " + frozenNote(app) + " Its x/y still hold.")
+                }
                 // The model already has this picture; a second copy would only take up its context.
                 return ToolResult(text: message + "\nThe window looks the same as in the latest screenshot, so none is attached; its x/y still hold. Element indices are unchanged; call get_app_state for a fresh tree.")
             }
             sessions[pid]?.geometry = screenshot.geometry
-            sessions[pid]?.windowID = window.flatMap(windowID(of:))
+            sessions[pid]?.windowID = id
             sessions[pid]?.windowFrame = window?.frame
             sessions[pid]?.shownFingerprint = fingerprint
+            sessions[pid]?.independent = independent != nil
             return ToolResult(
-                text: message + "\n" + screenshotLine(screenshot.geometry) + " Element indices are unchanged; call get_app_state for a fresh tree.",
+                text: message + "\n" + screenshotLine(screenshot.geometry) + " Element indices are unchanged; call get_app_state for a fresh tree."
+                    + (frozen ? " " + frozenNote(app) : ""),
                 image: screenshot.data,
                 imageMimeType: screenshot.mimeType
             )
         } catch let error as ToolError {
-            return ToolResult(text: message + "\n(No screenshot: \(error.description))")
+            let reason = error.description.hasPrefix("No screenshot: ") ? String(error.description.dropFirst("No screenshot: ".count)) : error.description
+            return ToolResult(text: message + "\n(No screenshot: \(reason))")
         }
     }
 
-    private func focusedElement(_ pid: pid_t) -> AXUIElement? {
+    func focusedElement(_ pid: pid_t) -> AXUIElement? {
         AXUIElementCreateApplication(pid).element(kAXFocusedUIElementAttribute)
     }
 
     /// A text field, or anything else with a text selection.
-    private func isTextLike(_ element: AXUIElement) -> Bool {
+    func isTextLike(_ element: AXUIElement) -> Bool {
         Self.textRoles.contains(element.string(kAXRoleAttribute) ?? "") || element.value(kAXSelectedTextRangeAttribute) != nil
     }
 
@@ -2210,12 +2403,28 @@ public final class ComputerUse {
     }
 
     /// The app's own element under a screen point; works for covered windows.
+    /// Accessibility answers for the app's topmost window there: when the
+    /// latest screenshot showed a window on its own and another window of the
+    /// app lies over it at that point, the element is looked up in the
+    /// screenshot's window instead (nothing of the other one was meant).
     func hitTest(pid: pid_t, at point: CGPoint) -> AXUIElement? {
         var element: AXUIElement?
         let status = AXUIElementCopyElementAtPosition(
             AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &element
         )
-        return status == .success ? element : nil
+        let hit = status == .success ? element : nil
+        let shallow = { (element: AXUIElement) in element.string(kAXRoleAttribute) == kAXWindowRole }
+        if let session = sessions[pid], session.independent, let shown = session.windowID,
+           pointerWindow(pid: pid, at: point) == shown {
+            if let hit, containingWindow(of: hit).flatMap(windowID(of:)) == shown, !shallow(hit) { return hit }
+            guard let window = session.window ?? axWindow(shown, pid: pid) else { return nil }
+            return deepestElement(in: window, at: point) ?? (window.frame?.contains(point) == true ? window : nil)
+        }
+        // Flutter answers with the window itself; its controls are found by frame.
+        if let hit, shallow(hit), let app = NSRunningApplication(processIdentifier: pid), isFlutter(app) {
+            return deepestElement(in: hit, at: point) ?? hit
+        }
+        return hit
     }
 
     private func ancestor(of element: AXUIElement, levels: Int, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
@@ -2270,13 +2479,13 @@ public final class ComputerUse {
     }
 
     /// The selected range of a text element, when it reports one.
-    private func selectedRange(_ element: AXUIElement) -> CFRange? {
+    func selectedRange(_ element: AXUIElement) -> CFRange? {
         guard let value = element.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var range = CFRange(location: 0, length: 0)
         return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
     }
 
-    private func setSelection(_ element: AXUIElement, _ range: CFRange) throws {
+    func setSelection(_ element: AXUIElement, _ range: CFRange) throws {
         var selection = range
         guard let value = AXValueCreate(.cfRange, &selection) else {
             throw ToolError("Could not build the selection range.")
@@ -2289,12 +2498,15 @@ public final class ComputerUse {
     /// clipboard. Anything else (files, cells, images) goes through the app's
     /// own Copy, Cut or Paste command, with the user's clipboard lent for that
     /// moment and put straight back.
-    private func clipboardShortcut(_ chord: KeyChord, pid: pid_t) async throws -> String? {
+    /// `text` is the field to copy from or paste into; without one (or with
+    /// rich contents) the app's own menu command is used, unless `menu` is
+    /// false (it would act on the app's key window, not the one meant).
+    private func clipboardShortcut(_ chord: KeyChord, pid: pid_t, text: AXUIElement?, menu: Bool = true) async throws -> String? {
         guard chord.modifiers == .command, let character = chord.baseCharacter, "cxv".contains(character) else { return nil }
-        let text = focusedTextElement(pid)
         switch character {
         case "c", "x":
             guard let text else {
+                guard menu else { return nil }
                 return try await copyThroughSystemClipboard(chord, pid: pid, cut: character == "x")
             }
             guard let selected = text.string(kAXSelectedTextAttribute), !selected.isEmpty else {
@@ -2314,6 +2526,7 @@ public final class ComputerUse {
                 try text.set(kAXSelectedTextAttribute, string as CFString)
                 return "pasted \(quote(string, limit: 60)) from skfiy's own clipboard (accessibility; the user's clipboard is untouched)"
             }
+            guard menu else { return nil }
             return try await pasteThroughSystemClipboard(clipboard, chord, pid: pid)
         }
     }
@@ -2432,10 +2645,10 @@ public final class ComputerUse {
         return ToolResult(text: text)
     }
 
-    private func emulateShortcut(_ chord: KeyChord, pid: pid_t) throws -> String? {
+    /// cmd+a, cmd+w and cmd+m through accessibility, on `window` (the window
+    /// the model works in) and its text field.
+    private func emulateShortcut(_ chord: KeyChord, pid: pid_t, window: AXUIElement?, text: AXUIElement?) throws -> String? {
         guard chord.modifiers == .command, let character = chord.baseCharacter else { return nil }
-        let text = focusedTextElement(pid)
-        let window = AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
         switch character {
         case "a":
             guard let text else { return nil }
@@ -2527,6 +2740,16 @@ public final class ComputerUse {
     func checkWindowUnmoved(_ session: AppSession) throws {
         guard let id = session.windowID, let then = session.windowFrame else { return }
         let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []
+        // Minimized, hidden or on another desktop is not closed: say which.
+        if rows.first?[kCGWindowIsOnscreen as String] as? Bool != true,
+           let pid = sessions.first(where: { $0.value.windowID == id })?.key,
+           let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated {
+            let presence = presence(of: id, app: app)
+            if let refusal = presence.refusal(window: axWindow(id, pid: pid)?.string(kAXTitleAttribute) ?? "", id: id,
+                                                                 app: app.localizedName ?? "The app") {
+                throw ToolError(refusal)
+            }
+        }
         guard let row = rows.first, let bounds = row[kCGWindowBounds as String] as? NSDictionary,
               let now = CGRect(dictionaryRepresentation: bounds) else {
             throw ToolError("The window of the latest screenshot (id \(id)) closed; if the app opened a new one, it has another id. Call get_app_state again; nothing was done.")
@@ -2541,7 +2764,7 @@ public final class ComputerUse {
     /// its controls can move into a new window (closed and recreated). Either
     /// way the model's picture of that window is out of date.
     func checkElementWindow(_ index: Int, session: AppSession, app: NSRunningApplication) throws {
-        guard let shown = session.windowID, !app.isHidden, let element = session.elements[safe: index],
+        guard let shown = session.windowID, !appIsHidden(app), let element = session.elements[safe: index],
               let window = element.element(kAXWindowAttribute), window.bool(kAXMinimizedAttribute) != true else { return }
         let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow], shown) as? [[String: Any]] ?? []
         guard rows.first?[kCGWindowIsOnscreen as String] as? Bool != true else { return }
@@ -2650,6 +2873,18 @@ func formatNumber(_ value: Double) -> String {
 /// Bundle id prefixes of Chromium-based browsers, which can run the extension.
 let chromiumBrowserPrefixes = ["com.google.chrome", "org.chromium.", "com.microsoft.edgemac", "com.brave.browser",
                                "com.vivaldi.vivaldi", "company.thebrowser.", "com.operasoftware.", "ai.perplexity.comet"]
+
+/// Flutter macOS apps (RustDesk...): their accessibility tree stays empty
+/// until AXEnhancedUserInterface is set, and their views ignore mouse events
+/// posted while the app is in the background.
+func isFlutter(_ app: NSRunningApplication) -> Bool {
+    isFlutter(bundlePath: app.bundleURL?.path)
+}
+
+func isFlutter(bundlePath: String?) -> Bool {
+    guard let bundlePath else { return false }
+    return FileManager.default.fileExists(atPath: bundlePath + "/Contents/Frameworks/FlutterMacOS.framework")
+}
 
 /// Chromium-based browsers (Chrome, Chrome for Testing, Edge, Brave, Arc...)
 /// and apps embedding Chromium, through CEF (NetEase Music) or Electron.
