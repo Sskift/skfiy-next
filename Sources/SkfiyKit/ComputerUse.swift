@@ -565,33 +565,23 @@ public final class ComputerUse {
         try checkInputTarget(app)
         let pid = app.processIdentifier
         let name = app.localizedName ?? query
-        // A shortcut, an item of an element's context menu, or a click.
-        let key = args.string("key")
-        let menuPath = args.string("menu_item").map { $0.components(separatedBy: CharacterSet(charactersIn: ">›")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
-        let index = try args.elementIndex()
-        let hasPoint = args.values["x"] != nil || args.values["y"] != nil
+        let request = try FrontRequest.parse(args)
+        let appSession = { () throws -> AppSession in
+            guard let session = self.sessions[pid] else { throw ToolError("No state for \(name) yet. Call get_app_state first.") }
+            return session
+        }
         var menuElement: AXUIElement?
         var clickPoint: CGPoint?
         let action: String
-        if let menuPath, !menuPath.isEmpty {
-            guard key == nil, !hasPoint, let index else {
-                throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
-            }
-            guard let session = sessions[pid] else {
-                throw ToolError("No state for \(name) yet. Call get_app_state first.")
-            }
-            let element = try session.element(index)
-            menuElement = element
-            action = "choose \(quote(menuPath.joined(separator: " › "), limit: 80)) from the menu of \(describe(element))"
-        } else if let key {
-            guard index == nil, !hasPoint else {
-                throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
-            }
+        switch request {
+        case .key(let key):
             action = "press \(key)"
-        } else if index != nil || hasPoint {
-            guard let session = sessions[pid] else {
-                throw ToolError("No state for \(name) yet. Call get_app_state first.")
-            }
+        case .menu(let index, let path):
+            let element = try appSession().element(index)
+            menuElement = element
+            action = "choose \(quote(path.joined(separator: " › "), limit: 80)) from the menu of \(describe(element))"
+        case .click(let index):
+            let session = try appSession()
             if let index {
                 let element = try session.element(index)
                 clickPoint = try await visibleCenter(of: element, session: session)
@@ -601,10 +591,8 @@ public final class ComputerUse {
                 action = "click at (\(formatNumber(try args.double("x") ?? 0)), \(formatNumber(try args.double("y") ?? 0)))"
             }
             try checkPointerTarget(app, allowRemote: true)
-        } else {
-            throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
         }
-        let chord = try key.map(parseKeyChord)
+        let chord = try request.key.map(parseKeyChord)
         // A RustDesk remote session passes what it gets to the remote computer.
         let appElementNow = AXUIElementCreateApplication(pid)
         let remoteWindow: AXUIElement? = {
@@ -683,56 +671,54 @@ public final class ComputerUse {
         for _ in 0..<40 where front() != pid {
             await Input.pause(0.05)
         }
-        guard front() == pid else {
-            await restore()
-            throw ToolError("\(name) did not come to the front, so nothing was pressed.")
-        }
-        // Make sure the shortcut lands in the app's document window.
-        if let window = appElement.element(kAXFocusedWindowAttribute) ?? appElement.elements(kAXWindowsAttribute).first {
-            _ = try? window.set(kAXMainAttribute, kCFBooleanTrue)
-        }
-        // Let the switch settle: the window becomes key and menus revalidate.
-        await Input.pause(0.3)
         let system = SystemClipboard()
-        let saved = clipboardKey.map { _ in system.read() }
-        if clipboardKey == "v", let clipboard {
-            system.write(clipboard)
-        }
-        let lent = system.changeCount
+        var saved: ClipboardContents?
+        var lent = 0
         var how: String
-        if let clickPoint {
-            guard front() == pid, let window = pointerWindow(pid: pid, at: clickPoint) else {
-                await restore()
-                throw ToolError("\(name) lost the front, or has no window at that point, so nothing was clicked.")
+        // Anything that fails from here on puts the user's clipboard back (when
+        // it was lent and nothing changed it since) and gives them the front.
+        do {
+            guard front() == pid else {
+                throw ToolError("\(name) did not come to the front, so nothing was pressed.")
             }
-            // Posted to the app, now active, so the user's cursor stays where it is.
-            guard await Input.click(at: clickPoint, pid: pid, windowID: window, button: .left, count: 1, modifiers: [], chromium: isChromium(app)) else {
-                await restore()
-                throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
+            // Make sure the shortcut lands in the app's document window.
+            if let window = appElement.element(kAXFocusedWindowAttribute) ?? appElement.elements(kAXWindowsAttribute).first {
+                _ = try? window.set(kAXMainAttribute, kCFBooleanTrue)
             }
-            how = "clicked there"
-        } else if let menuElement, let menuPath {
-            do {
-                how = try await chooseFromMenu(of: menuElement, path: menuPath, pid: pid)
-            } catch {
-                await restore()
-                throw error
+            // Let the switch settle: the window becomes key and menus revalidate.
+            await Input.pause(0.3)
+            saved = clipboardKey.map { _ in system.read() }
+            if clipboardKey == "v", let clipboard {
+                system.write(clipboard)
             }
-        } else if let chord, let item = menuItem(for: chord, pid: pid), item.enabled {
-            if guardedAXPerformAction(item.element, kAXPressAction as CFString) == .failure, let refusal = axMutationRefusal() {
-                if let saved, system.changeCount == lent { system.write(saved) }
-                await restore()
-                throw ToolError(refusal)
+            lent = system.changeCount
+            if let clickPoint {
+                guard front() == pid, let window = pointerWindow(pid: pid, at: clickPoint) else {
+                    throw ToolError("\(name) lost the front, or has no window at that point, so nothing was clicked.")
+                }
+                // Posted to the app, now active, so the user's cursor stays where it is.
+                guard await Input.click(at: clickPoint, pid: pid, windowID: window, button: .left, count: 1, modifiers: [], chromium: isChromium(app)) else {
+                    throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
+                }
+                how = "clicked there"
+            } else if let menuElement, case .menu(_, let path) = request {
+                how = try await chooseFromMenu(of: menuElement, path: path, pid: pid)
+            } else if let chord, let item = menuItem(for: chord, pid: pid), item.enabled {
+                if guardedAXPerformAction(item.element, kAXPressAction as CFString) == .failure, let refusal = axMutationRefusal() {
+                    throw ToolError(refusal)
+                }
+                how = "ran the menu item \(quote(item.title, limit: 60))"
+            } else if let chord, front() == pid {
+                // It is the front app now, so a keystroke like a real one reaches it.
+                await Input.pressToFrontApp(chord)
+                how = "pressed \(request.key ?? "")"
+            } else {
+                throw ToolError("\(name) lost the front before the shortcut, so nothing was pressed.")
             }
-            how = "ran the menu item \(quote(item.title, limit: 60))"
-        } else if let chord, front() == pid {
-            // It is the front app now, so a keystroke like a real one reaches it.
-            await Input.pressToFrontApp(chord)
-            how = "pressed \(key ?? "")"
-        } else {
+        } catch {
             if let saved, system.changeCount == lent { system.write(saved) }
             await restore()
-            throw ToolError("\(name) lost the front before the shortcut, so nothing was pressed.")
+            throw error
         }
         await Input.pause(0.3)
         if let saved, let clipboardKey {
@@ -2792,6 +2778,32 @@ public final class ComputerUse {
         let role = values[kAXRoleAttribute].flatMap(axString).map(withoutAXPrefix) ?? "element"
         let label = nonEmpty(values[kAXTitleAttribute].flatMap(axString)) ?? nonEmpty(values[kAXDescriptionAttribute].flatMap(axString))
         return label.map { "\(role) \(quote($0, limit: 60))" } ?? role
+    }
+}
+
+/// What run_in_front is asked to do: press a key, choose an item from an
+/// element's menu, or click an element (or x/y without one).
+enum FrontRequest: Equatable {
+    case key(String)
+    case menu(index: Int, path: [String])
+    case click(index: Int?)
+
+    var key: String? {
+        if case .key(let key) = self { return key }
+        return nil
+    }
+
+    /// One of: key; element_index with menu_item ("Share > Mail"); element_index or x/y alone.
+    static func parse(_ args: Arguments) throws -> FrontRequest {
+        let key = args.string("key")
+        let path = (args.string("menu_item") ?? "").components(separatedBy: CharacterSet(charactersIn: ">›"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let index = try args.elementIndex()
+        let point = args.values["x"] != nil || args.values["y"] != nil
+        if !path.isEmpty, key == nil, !point, let index { return .menu(index: index, path: path) }
+        if path.isEmpty, let key, index == nil, !point { return .key(key) }
+        if path.isEmpty, key == nil, index != nil || point { return .click(index: index) }
+        throw ToolError("Pass one of: key; element_index with menu_item; or element_index or x/y alone to click.")
     }
 }
 
