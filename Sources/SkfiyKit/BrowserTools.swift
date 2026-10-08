@@ -24,7 +24,7 @@ final class BrowserTools {
     var lastInputWasSecret = false
 
     static let notConnected = """
-    No browser is connected to skfiy. To enable the browser tools, run `make install` in the skfiy repository (or `skfiy install-browser-bridge`), then in Chrome open chrome://extensions, turn on Developer mode, click "Load unpacked", and choose ~/Library/Application Support/skfiy/browser-extension.
+    No browser is connected to skfiy. To enable the browser tools, run `skfiy setup` in a terminal, then in Chrome open chrome://extensions, turn on Developer mode, click "Load unpacked", and choose ~/Library/Application Support/skfiy/browser-extension.
     A running Chrome with no window open has its extensions unloaded until a window opens again.
     Until then, drive the browser with get_app_state and the other app tools.
     """
@@ -233,6 +233,9 @@ final class BrowserTools {
         var met = false
         while !met {
             if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
+            // A cancelled request stops here; otherwise the sleep below would
+            // return at once and the page be probed back to back until timeout.
+            try Task.checkCancellation()
             let probe = (try? await send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
             let loading = probe["loading"] as? Bool ?? true
             if text.isEmpty {
@@ -242,7 +245,7 @@ final class BrowserTools {
             }
             if !met {
                 if Date().timeIntervalSince(started) >= timeout { break }
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try await Task.sleep(nanoseconds: 250_000_000)
             }
         }
         let waited = formatNumber((Date().timeIntervalSince(started) * 10).rounded() / 10)
