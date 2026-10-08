@@ -117,7 +117,10 @@ def textedit(s):
         noop = s.call('press_key', app='TextEdit', key='F15', expect={'changed': True, 'timeout': 1.5})
         s.check('TextEdit: a key without effect is no_effect', verdict(noop) == 'no_effect' and 'Current state:' in noop['text'], noop['text'].splitlines()[0])
         state = s.call('get_app_state', app='TextEdit', window=path.name, ocr=True)
-        line = ocr_find(state['text'], 'Verify line 00')
+        # Recognition sometimes splits a word ("Verif y line 001"): any of the lines will do.
+        line = ocr_find(state['text'], 'line 00')
+        if not s.check('TextEdit: a line found to scroll at', line, state['text'][-300:]):
+            return
         scrolled = s.call('scroll', app='TextEdit', x=line[1], y=line[2], direction='down', pages=2, expect={'changed': True})
         s.check('TextEdit: scrolling verified as a change', verdict(scrolled) == 'verified', scrolled['text'].splitlines()[0])
         if not s.locked:

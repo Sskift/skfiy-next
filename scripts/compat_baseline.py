@@ -495,20 +495,29 @@ class Preview(Case):
     def pages_visible(self, text):
         return sorted({int(m[1]) for label, _, _ in ocr_lines(text) if (m := re.search(r'Preview page (\d)', label))})
 
+    def current_page(self, text):
+        """The page the window subtitle names ("Page 4 of 6"). The sidebar
+        thumbnails carry readable page text too, so the lowest page seen can
+        stay put while the document scrolls."""
+        pages = [int(m[1]) for label, _, _ in ocr_lines(text) if (m := re.fullmatch(r'Page (\d+) of \d+', label))]
+        return pages[0] if pages else None
+
     def op_scroll(self):
         state = self.state()
-        before = self.pages_visible(state['text'])
+        before, page_before = self.pages_visible(state['text']), self.current_page(state['text'])
         hit = ocr_find(state['text'], 'Preview page')
         if not hit:
             return self.run.record(self.key, 'scroll', 'fail', 'no page text to scroll at', 'coordinates')
         bars = lambda: [b['value'] for b in self.dump().get('scrollBars', []) if b['orientation'] == 'AXVerticalOrientation']
         bars_before = bars()
         result = self.act('scroll', x=hit[1], y=hit[2] + 80, direction='down', pages=3)
-        after = self.pages_visible(self.state()['text'])
+        text_after = self.state()['text']
+        after, page_after = self.pages_visible(text_after), self.current_page(text_after)
         bars_after = bars()
         moved = len(bars_after) == len(bars_before) and any(a - b > 0.01 for a, b in zip(bars_after, bars_before))
-        verified = moved or bool(before and after and min(after) > min(before))
-        self.outcome('scroll', result, verified, f'pages visible {before} -> {after}; vertical bars {[round(v, 2) for v in bars_before]} -> {[round(v, 2) for v in bars_after]}', 'coordinates')
+        verified = moved or bool(page_before and page_after and page_after > page_before) or bool(before and after and min(after) > min(before))
+        self.outcome('scroll', result, verified, f'current page {page_before} -> {page_after}; pages visible {before} -> {after}; '
+                     f'vertical bars {[round(v, 2) for v in bars_before]} -> {[round(v, 2) for v in bars_after]}', 'coordinates')
 
     def op_popup(self):
         result = self.act('press_key', key='cmd+alt+g')
