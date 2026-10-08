@@ -153,6 +153,8 @@ then run this installer again."
         source="$work/source"
     fi
     say "Building skfiy in $source (about a minute)…" >&2
+    # The binary carries the extension; refresh that copy in case browser-extension/ was edited.
+    if [ -f "$source/scripts/embed_extension.sh" ]; then bash "$source/scripts/embed_extension.sh" >&2; fi
     (cd "$source" && xcrun swift build -c release --product skfiy >&2) || die "the build failed; see the output above."
     printf '%s\n' "$source/.build/release/skfiy"
 }

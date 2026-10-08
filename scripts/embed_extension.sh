@@ -23,5 +23,4 @@ tmp=$(mktemp)
     echo "    ]"
     echo "}"
 } > "$tmp"
-mv "$tmp" "$out"
-echo "Wrote $out"
+if cmp -s "$tmp" "$out"; then rm -f "$tmp"; else mv "$tmp" "$out"; echo "Wrote $out"; fi

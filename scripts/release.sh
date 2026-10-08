@@ -17,6 +17,7 @@ if [ -n "${1:-}" ] && [ "${1#v}" != "$version" ]; then
     exit 1
 fi
 
+scripts/embed_extension.sh  # the binary carries browser-extension/; a no-op when it is current
 flags=(-c release --arch arm64 --arch x86_64 --product skfiy --scratch-path .build/universal)
 swift build "${flags[@]}"
 binary="$(swift build "${flags[@]}" --show-bin-path)/skfiy"

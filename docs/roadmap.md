@@ -368,7 +368,7 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 
 - `install.sh`（`curl -fsSL …/install.sh | bash`）：要求 macOS 14+，不用 sudo。有 GitHub release 时下载通用二进制并校验 sha256；没有时 clone 并编译，缺 Command Line Tools 时说明怎么装。之后经临时文件改名装到 `~/.local/bin`，再运行 `skfiy setup`。在 clone 里运行时直接编译当前代码，`make install` 现在就是它。
 - `skfiy setup`：可反复运行。
-  - 插件文件改为编进二进制（`EmbeddedExtension.swift`，由 `scripts/embed_extension.sh` 生成，单元测试逐字节核对与 `browser-extension/` 一致），只在内容变了时重写，并删掉多余文件。
+  - 插件文件改为编进二进制（`EmbeddedExtension.swift`，由 `scripts/embed_extension.sh` 生成，单元测试逐字节核对与 `browser-extension/` 一致；`make release` / `make install`、`install.sh` 的源码编译和 `scripts/release.sh` 编译前都会先重新生成，内容没变时不动文件），只在内容变了时重写，并删掉多余文件。
   - native host 清单只在内容变了时重写；没有 Chromium 浏览器只是一条说明，不算失败。
   - 用 `claude mcp get` 读出现有注册：已经指向这个二进制就不动；路径变了就先删再加，保留用户原有的 `-e` 设置；没有就 `claude mcp add --scope user`。Codex 只在传 `--codex` 时添加，已有的 Codex 条目会一直随更新保持正确。
   - 权限只检查不弹窗，并写出应该授予哪个应用（沿父进程链找到最外层的应用，而不是看 `TERM_PROGRAM`）。

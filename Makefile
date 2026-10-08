@@ -10,7 +10,8 @@ build:
 	swift build
 
 # Only the skfiy binary; the experimental guardian is built by `make locked-use`.
-release:
+# The embedded extension is refreshed first (a no-op unless browser-extension/ changed).
+release: embed-extension
 	swift build -c release --product skfiy
 
 test:
