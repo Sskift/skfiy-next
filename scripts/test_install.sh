@@ -167,6 +167,21 @@ if [ "${SKFIY_TEST_FROM_SOURCE:-}" = 1 ]; then
     check "from-source binary runs" as_user "$installed" --version
 fi
 
+echo "8b. Uninstalling a second copy leaves the main install alone"
+as_user bash install.sh --binary "$binary" --prefix "$work/copy" --no-setup > /dev/null 2>&1
+as_user "$work/copy/bin/skfiy" uninstall > "$work/out8b" 2>&1
+check "second copy's uninstall exits 0" test $? -eq 0
+check "second copy removed" test ! -e "$work/copy/bin/skfiy"
+check "claude entry of the main install kept" contains "$work/cli/claude.entry" "command=$installed"
+check "codex entry of the main install kept" contains "$work/cli/codex.entry" "command=$installed"
+check "native host of the main install kept" contains "$manifest" "\"path\" : \"$installed\""
+check "shared support folder kept" test -f "$extension/manifest.json"
+check "says what it kept" contains "$work/out8b" "another copy"
+as_user env SKFIY_SOURCE_DIR="$repo" "$installed" doctor --check > "$work/out8c" 2>&1
+check "installer variables are not called typos" lacks "$work/out8c" "a typo?"
+curl_help=$(cd "$work" && as_user bash -s -- --help < "$repo/install.sh" 2>&1)
+check "install.sh --help works when piped" test -n "$curl_help"
+
 echo "9. Uninstall"
 as_user bash install.sh --uninstall > "$work/out9" 2>&1
 check "uninstall exits 0" test $? -eq 0

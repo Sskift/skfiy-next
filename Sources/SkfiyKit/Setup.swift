@@ -269,7 +269,9 @@ public enum Setup {
             "SKFIY_CURSOR_IDLE", "SKFIY_ACTION_LOG", "SKFIY_SETTLE_SECONDS", "SKFIY_SCREENSHOT_FORMAT", "SKFIY_SCREENSHOT_OUT",
             "SKFIY_STOP_FILE", "SKFIY_FLOW_DIR", "SKFIY_WAIT_EVENTS", "SKFIY_FRONT_GRANT_FILE", "SKFIY_OCR_DUMP",
             "SKFIY_SIMULATE_CAPTURE_STALL", "SKFIY_UPLOAD_WITHOUT_ASKING", "SKFIY_INSTANCE", "SKFIY_GUARDIAN",
-            "SKFIY_PREFIX", "SKFIY_VERSION", "SKFIY_RELEASE_URL", "SKFIY_REPO"
+            // install.sh, scripts/test_install.sh and the locked-use build
+            "SKFIY_PREFIX", "SKFIY_VERSION", "SKFIY_RELEASE_URL", "SKFIY_REPO", "SKFIY_SOURCE_DIR", "SKFIY_TEST_FROM_SOURCE",
+            "SKFIY_SOCKET_ROOT", "SKFIY_PLUGINS", "SKFIY_RIGHTS", "SKFIY_SIGN_IDENTITY"
         ]
         for name in environment.keys.sorted() where name.hasPrefix("SKFIY_") && !known.contains(name) {
             lines.append(Line(.warning, "\(name) is set but skfiy does not read it (a typo?)"))
@@ -417,9 +419,21 @@ public enum Setup {
 
     /// `skfiy uninstall`: undoes setup and removes skfiy's files. The binary
     /// goes too unless `keepBinary`.
+    /// True when `path` is another skfiy binary that still exists, so what
+    /// points at it belongs to another install and uninstall leaves it alone.
+    static func isOtherInstall(_ path: String?, executable: String) -> Bool {
+        guard let path, !path.isEmpty else { return false }
+        let resolved = { ((BrowserBridge.expandingTilde($0) as NSString).resolvingSymlinksInPath as NSString).standardizingPath }
+        return resolved(path) != resolved(executable) && FileManager.default.isExecutableFile(atPath: resolved(path))
+    }
+
+    /// `skfiy uninstall`: undoes what setup did for this binary. Registrations
+    /// and host manifests that launch another skfiy binary still on disk are
+    /// left alone, and so are the shared folders while that install uses them.
     public static func uninstall(keepBinary: Bool) -> Int32 {
         let executable = SkfiyPaths.executable
         var failed = false
+        var others: Set<String> = []
         for client in [Client.claude, .codex] {
             guard let tool = findTool(client.rawValue) else { continue }
             guard let entry = currentEntry(client, tool: tool) else {
@@ -428,6 +442,11 @@ public enum Setup {
             }
             guard client == .codex || entry.userScope else {
                 print("! \(client.displayName): skfiy is registered for one project only; remove it there with `claude mcp remove skfiy`")
+                continue
+            }
+            guard !isOtherInstall(entry.command, executable: executable) else {
+                print("! \(client.displayName): skfiy runs \(abbreviated(entry.command)), another copy; left registered (uninstall with that copy)")
+                others.insert(entry.command)
                 continue
             }
             let arguments = client == .claude ? ["mcp", "remove", "--scope", "user", "skfiy"] : ["mcp", "remove", "skfiy"]
@@ -439,10 +458,18 @@ public enum Setup {
                 failed = true
             }
         }
-        for file in BrowserBridge.uninstall() {
+        let other = { isOtherInstall($0, executable: executable) }
+        for host in BrowserBridge.installedHosts() where other(host.executable) {
+            print("! Kept \(abbreviated(host.manifest)): it launches \(abbreviated(host.executable ?? "")), another copy")
+            others.insert(host.executable ?? "")
+        }
+        for file in BrowserBridge.uninstall(keep: other) {
             print("✓ Removed \(abbreviated(file))")
         }
-        for folder in [SkfiyPaths.support, SkfiyPaths.caches, SkfiyPaths.logs] where FileManager.default.fileExists(atPath: folder.path) {
+        if !others.isEmpty {
+            print("! Kept \(abbreviated(SkfiyPaths.support.path)) and skfiy's caches and logs: \(others.sorted().map(abbreviated).joined(separator: ", ")) still uses them")
+        }
+        for folder in [SkfiyPaths.support, SkfiyPaths.caches, SkfiyPaths.logs] where others.isEmpty && FileManager.default.fileExists(atPath: folder.path) {
             do {
                 try FileManager.default.removeItem(at: folder)
                 print("✓ Removed \(abbreviated(folder.path))")

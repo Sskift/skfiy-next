@@ -340,10 +340,12 @@ extension BrowserBridge {
         }
     }
 
-    /// Removes every skfiy host manifest; returns the files removed.
-    public static func uninstall(support: URL = SkfiyPaths.applicationSupport) -> [String] {
+    /// Removes the skfiy host manifests except those whose binary `keep`
+    /// accepts; returns the files removed.
+    public static func uninstall(support: URL = SkfiyPaths.applicationSupport,
+                                 keep: (String?) -> Bool = { _ in false }) -> [String] {
         installedHosts(support: support).compactMap { host in
-            (try? FileManager.default.removeItem(atPath: host.manifest)) == nil ? nil : host.manifest
+            keep(host.executable) || (try? FileManager.default.removeItem(atPath: host.manifest)) == nil ? nil : host.manifest
         }
     }
 

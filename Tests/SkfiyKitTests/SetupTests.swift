@@ -90,6 +90,7 @@ struct BridgeInstallTests {
         _ = try BrowserBridge.install(executable: "/opt/other/skfiy", support: support)
         #expect(BrowserBridge.installedHosts(support: support).map(\.executable) == ["/opt/other/skfiy"])
 
+        #expect(BrowserBridge.uninstall(support: support, keep: { $0 == "/opt/other/skfiy" }).isEmpty)
         #expect(BrowserBridge.uninstall(support: support) == written)
         #expect(BrowserBridge.installedHosts(support: support).isEmpty)
     }
@@ -160,6 +161,23 @@ struct SetupChecksTests {
         let old = Setup.settingWarnings(environment: ["SKFIY_LOCKED_USE": "1"])
         #expect(old.count == 1 && old[0].text.contains("direct"))
         #expect(Setup.settingWarnings(environment: ["SKFIY_CURSER": "0"]).first?.text.contains("SKFIY_CURSER") == true)
+        // The installer's and the locked-use build's own variables are not typos.
+        #expect(Setup.settingWarnings(environment: ["SKFIY_SOURCE_DIR": "/src", "SKFIY_TEST_FROM_SOURCE": "1", "SKFIY_SOCKET_ROOT": "/x",
+                                                    "SKFIY_PLUGINS": "/p", "SKFIY_RIGHTS": "r", "SKFIY_SIGN_IDENTITY": "-"]).isEmpty)
+    }
+
+    @Test func uninstallLeavesOtherInstallsAlone() throws {
+        let folder = temporaryFolder("copies")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let other = folder.appendingPathComponent("skfiy").path
+        #expect(FileManager.default.createFile(atPath: other, contents: Data(), attributes: [.posixPermissions: 0o755]))
+        #expect(Setup.isOtherInstall(other, executable: "/tmp/elsewhere/skfiy"))
+        #expect(!Setup.isOtherInstall(other, executable: other))
+        #expect(!Setup.isOtherInstall(folder.appendingPathComponent("./skfiy").path, executable: other))
+        // A registration left pointing at a deleted binary is ours to clean up.
+        #expect(!Setup.isOtherInstall(folder.appendingPathComponent("gone").path, executable: other))
+        #expect(!Setup.isOtherInstall(nil, executable: other))
     }
 
     @Test func knowsWhatIsOnPath() {

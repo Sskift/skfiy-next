@@ -373,7 +373,7 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
   - 用 `claude mcp get` 读出现有注册：已经指向这个二进制就不动；路径变了就先删再加，保留用户原有的 `-e` 设置；没有就 `claude mcp add --scope user`。Codex 只在传 `--codex` 时添加，已有的 Codex 条目会一直随更新保持正确。
   - 权限只检查不弹窗，并写出应该授予哪个应用（沿父进程链找到最外层的应用，而不是看 `TERM_PROGRAM`）。
   - 最后列出还剩的手动步骤。
-- `skfiy uninstall`：注销 Claude Code / Codex 条目，删除 native host 清单、`~/Library` 下 skfiy 的三个文件夹和二进制；Homebrew 安装的二进制留给 `brew uninstall`。
+- `skfiy uninstall`：注销 Claude Code / Codex 条目，删除 native host 清单、`~/Library` 下 skfiy 的三个文件夹和二进制；Homebrew 安装的二进制留给 `brew uninstall`。注册或清单指向另一份仍然存在的 skfiy 时不动它们，也保留共用的文件夹，免得卸载测试用的第二份时把主安装一起删掉。`--user-data-dir` 写到自定义配置目录的清单不在已知位置，要手动删。
 - `skfiy doctor` 成了检查清单：
   - 权限和宿主应用、PATH、Claude Code 注册的二进制；
   - 每个浏览器的 native host 指向哪里、目标是否存在；
@@ -402,14 +402,16 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 
 验证（2026-10-08，只跑了不碰界面的测试，没有运行真实应用的测试套件）：
 
-- `make test` 159 个单元测试全部通过。新增 13 个：`$HOME` 解析、内嵌插件与源码一致、插件安装/更新/保持不动、native host 安装与卸载、Claude Code 和 Codex 注册输出的解析、注册命令的增删改、设置检查、PATH、MCP 的设置未完成提示。
-- `make test-install`（`scripts/test_install.sh`）60/60：
+- `make test` 160 个单元测试全部通过。新增 14 个：`$HOME` 解析、内嵌插件与源码一致、插件安装/更新/保持不动、native host 安装与卸载、Claude Code 和 Codex 注册输出的解析、注册命令的增删改、设置检查（安装脚本和锁屏构建自己的变量不算拼错）、卸载时识别另一份安装、PATH、MCP 的设置未完成提示。
+- `make test-install`（`scripts/test_install.sh`，含 `SKFIY_TEST_FROM_SOURCE=1`）71/71：
   - 环境：临时 HOME，PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin` 和记录参数的假 `claude` / `codex`，真的 CLI 不可达。
   - 首次安装；再次运行不重复注册、不重写文件；`-e` 设置写入后保留；换安装位置后所有注册跟着改。
   - 从 `file://` 的 release 压缩包安装；校验和不对时什么也不装。
   - 没有浏览器和 CLI 时退出码为 0 并给出命令。
   - `doctor --check`；`stop --help` 不急停；`--from-source` 编译安装。
+  - 卸载用 `--prefix` 装的第二份时，主安装的注册、native host 和共用文件夹都还在；`SKFIY_SOURCE_DIR` 不再被当成拼错；`curl … | bash -s -- --help` 有输出。
   - 卸载后什么都不剩。
   - 前后对比真实的 `~/.local/bin/skfiy`、`~/Library/Application Support/skfiy` 下的插件文件、全部 native host 清单、`~/.claude.json` 里的 skfiy 条目和 `~/.codex/config.toml`，修改时间和哈希都没变。
-- 用 `make dist` 生成的通用二进制再跑一遍安装测试，60/60；`arch -x86_64` 下也能运行。
+- 用 `make dist` 生成的通用二进制再跑一遍安装测试（当时 60 项），全部通过；`arch -x86_64` 下也能运行。
+- README 里手动注册的写法改为 `claude mcp add --scope user skfiy -e SKFIY_LOCKED_USE=direct -- …`：真实的 `claude` 的 `-e` 接受多个值，名字写在 `-e` 后面会被当成第二个设置而失败；新写法在临时 HOME 里用真实 CLI 验证过。
 - 模拟新用户的 `curl … | bash`：脚本从 stdin 读入，临时 HOME。GitHub 上还没有 release，于是自动 clone 并编译，110 秒装好。

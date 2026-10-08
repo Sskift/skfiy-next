@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 
 **已经 clone 了仓库**：`./install.sh` 或 `make install` 从当前代码编译安装，其余步骤相同。
 
-常用选项（经 curl 运行时写成 `curl … | bash -s -- --codex`；也可以直接传给 `skfiy setup`）：
+常用选项（经 curl 运行时写成 `curl … | bash -s -- --codex`；前三行也可以直接传给 `skfiy setup`，后三行只有安装脚本认）：
 
 | 选项 | 作用 |
 | --- | --- |
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 
 ### 卸载
 
-`~/.local/bin/skfiy uninstall`（或 `install.sh --uninstall`、`make uninstall`）：从 Claude Code 和 Codex 注销 skfiy，删除各浏览器的 native host 清单、`~/Library/Application Support/skfiy`、`~/Library/Caches/skfiy`、`~/Library/Logs/skfiy`（含操作日志和流程记录）以及二进制本身（`--keep-binary` 保留二进制）。剩下要你做的：在 `chrome://extensions` 里移除 skfiy 卡片，重启还在用 skfiy 的 Claude Code 会话。
+`~/.local/bin/skfiy uninstall`（或 `install.sh --uninstall`、`make uninstall`）：从 Claude Code 和 Codex 注销 skfiy，删除各浏览器的 native host 清单、`~/Library/Application Support/skfiy`、`~/Library/Caches/skfiy`、`~/Library/Logs/skfiy`（含操作日志和流程记录）以及二进制本身（`--keep-binary` 保留二进制）。注册或 native host 指向另一份仍然存在的 skfiy（例如用 `--prefix` 装的第二份）时，这些注册、清单和共用的文件夹都保留，只删当前这份二进制；用 `--user-data-dir` 给自定义配置目录写的 native host 清单要手动删（该目录下的 `NativeMessagingHosts/com.skfiy.bridge.json`）。剩下要你做的：在 `chrome://extensions` 里移除 skfiy 卡片，重启还在用 skfiy 的 Claude Code 会话。
 
 ### 常见问题
 
@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 ```bash
 ~/.local/bin/skfiy setup -e SKFIY_LOCKED_USE=direct
 # 手动做法（已注册过的先 claude mcp remove --scope user skfiy）：
-# claude mcp add --scope user -e SKFIY_LOCKED_USE=direct skfiy -- ~/.local/bin/skfiy mcp
+# claude mcp add --scope user skfiy -e SKFIY_LOCKED_USE=direct -- ~/.local/bin/skfiy mcp
 ```
 
 direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口，并向目标进程投递坐标点击、滚动、拖拽、按键和文字；不解锁系统，不启动 guardian，也不修改系统授权规则。MCP 可以在已经锁屏时启动，但目标应用须已运行，宿主须已获得辅助功能和屏幕录制权限。解锁状态仍走原有 AX 等功能。
@@ -216,7 +216,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 
 ## 环境变量
 
-设置写进 MCP server 的注册里：`skfiy setup -e 变量=值`（会保留到以后的 setup），或 `claude mcp add … -e 变量=值`。`skfiy doctor` 会指出无效的值（例如旧的 `SKFIY_LOCKED_USE=1`）和拼错的变量名。
+设置写进 MCP server 的注册里：`skfiy setup -e 变量=值`（会保留到以后的 setup），或 `claude mcp add --scope user skfiy -e 变量=值 -- ~/.local/bin/skfiy mcp`（名字 `skfiy` 要写在 `-e` 前面：`-e` 可以接多个值，写在后面会被当成又一个设置）。`skfiy doctor` 会指出无效的值（例如旧的 `SKFIY_LOCKED_USE=1`）和拼错的变量名。
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
@@ -243,7 +243,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | `SKFIY_SIMULATE_CAPTURE_STALL` | `1`：一开始就当作截图卡住，测试改用独立进程截图的路径 |
 | `SKFIY_SCREENSHOT_OUT` | `skfiy call` 保存截图的位置 |
 
-skfiy 自己的文件（插件、急停标记、流程、操作日志、实例链接）都放在 `$HOME/Library` 下并跟随 `HOME` 变量，所以 `HOME=$(mktemp -d) skfiy setup` 这样的试装不会碰到真实的配置。
+skfiy 自己的文件（插件、急停标记、流程、操作日志、实例链接）都放在 `$HOME/Library` 下并跟随 `HOME` 变量，所以 `HOME=$(mktemp -d) skfiy setup` 这样的试装不会碰到真实的配置。例外：`run_in_front` 的批准文件目前仍按真实用户目录定位（要隔离就设 `SKFIY_FRONT_GRANT_FILE`），待后台窗口那部分改动合并后再改。
 
 ## 开发
 

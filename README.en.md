@@ -31,7 +31,7 @@ Then ask Claude Code things like "make a new note in Notes saying …".
 
 **From a clone:** `./install.sh` or `make install` builds the checkout and does the rest the same way.
 
-Options (when piping from curl: `curl … | bash -s -- --codex`; they also work with `skfiy setup`):
+Options (when piping from curl: `curl … | bash -s -- --codex`; the first three also work with `skfiy setup`, the last three are installer-only):
 
 | Option | Effect |
 | --- | --- |
@@ -50,7 +50,7 @@ Other MCP clients: command `~/.local/bin/skfiy` (full path), argument `mcp`.
 
 ## Uninstall
 
-`~/.local/bin/skfiy uninstall` (or `install.sh --uninstall`) removes skfiy from Claude Code and Codex, deletes the native host manifests, `~/Library/Application Support/skfiy`, `~/Library/Caches/skfiy`, `~/Library/Logs/skfiy` (including the action log and flows) and the binary (`--keep-binary` keeps it). Left for you: remove the skfiy card in `chrome://extensions` and restart Claude Code sessions that still run skfiy.
+`~/.local/bin/skfiy uninstall` (or `install.sh --uninstall`) removes skfiy from Claude Code and Codex, deletes the native host manifests, `~/Library/Application Support/skfiy`, `~/Library/Caches/skfiy`, `~/Library/Logs/skfiy` (including the action log and flows) and the binary (`--keep-binary` keeps it). Registrations and native hosts that point at another skfiy that still exists (say a second copy installed with `--prefix`) are left alone, and so are the shared folders; only this binary goes. Host manifests written for a custom profile with `--user-data-dir` must be deleted by hand (`NativeMessagingHosts/com.skfiy.bridge.json` in that folder). Left for you: remove the skfiy card in `chrome://extensions` and restart Claude Code sessions that still run skfiy.
 
 ## Troubleshooting
 
@@ -64,7 +64,7 @@ Other MCP clients: command `~/.local/bin/skfiy` (full path), argument `mcp`.
 
 ## Settings
 
-Pass settings with `skfiy setup -e NAME=value` (kept by later setups) or `claude mcp add … -e NAME=value`.
+Pass settings with `skfiy setup -e NAME=value` (kept by later setups) or `claude mcp add --scope user skfiy -e NAME=value -- ~/.local/bin/skfiy mcp` (the name goes before `-e`, which takes several values).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -79,7 +79,7 @@ Pass settings with `skfiy setup -e NAME=value` (kept by later setups) or `claude
 | `SKFIY_SETTLE_SECONDS` | `0.4` | Time to let the UI settle before a screenshot |
 | `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` for lossless screenshots |
 
-skfiy's own files live under `$HOME/Library` and follow `HOME`, so `HOME=$(mktemp -d) skfiy setup` tries an install without touching your real setup.
+skfiy's own files live under `$HOME/Library` and follow `HOME`, so `HOME=$(mktemp -d) skfiy setup` tries an install without touching your real setup. One exception for now: the `run_in_front` grant file still uses the real home folder (set `SKFIY_FRONT_GRANT_FILE` to isolate it).
 
 ## Development
 

@@ -44,7 +44,11 @@ main() {
             --version) [ $# -ge 2 ] || die "--version needs a version"; version=${2#v}; shift ;;
             --no-setup) run_setup=0 ;;
             --uninstall) uninstall=1 ;;
-            -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//'; return 0 ;;
+            -h|--help)
+                if [ -f "${BASH_SOURCE[0]:-}" ]; then sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+                else say "Options: --from-source, --release, --binary FILE, --prefix DIR, --version X.Y.Z, --no-setup, --uninstall;" \
+                    "anything else goes to \`skfiy setup\` (e.g. --codex, -e SKFIY_LOCKED_USE=direct). Details: https://github.com/Sskift/skfiy-next#readme"; fi
+                return 0 ;;
             -e|--env|--user-data-dir) [ $# -ge 2 ] || die "$1 needs a value"; setup_args+=("$1" "$2"); shift ;;
             *) setup_args+=("$1") ;;
         esac
