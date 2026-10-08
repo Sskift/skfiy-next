@@ -3,8 +3,9 @@
 that can only use skfiy's tools, then checks the outcome independently and
 watches that nothing was brought to the front or raised above your windows.
 
-Needs the test browser from scripts/test_browser.sh (Chrome for Testing with
-the extension and the fixture). Results go to eval/results/<time>/.
+Needs the test browser from `scripts/compat_baseline.py <skfiy> --test-browser`
+(Chrome for Testing with the extension and the fixture). Results go to
+eval/results/<time>/.
 
     python3 eval/run_eval.py [--model sonnet] [task ...]
 """
@@ -21,13 +22,13 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from compat_baseline import WEB_PAGE as FIXTURE  # noqa: E402
 # watch and make_pdf (eval/*.swift), rebuilt when their source changed.
 from scenario import tool as helper_binary  # noqa: E402
 
 WORK = "/tmp/skfiy-eval"
 BINARY = f"{WORK}/bin/skfiy"
 CFT = "Google Chrome for Testing"
-FIXTURE = "http://127.0.0.1:8765/web.html"
 APP_TOOLS = ["list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
              "select_text", "scroll", "drag", "press_key", "type_text"]
 BROWSER_TOOLS = ["browser_tabs", "browser_open", "browser_state", "browser_click", "browser_type",

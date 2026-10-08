@@ -2,9 +2,10 @@
 """Browser bridge smoke test: drives scripts/fixtures/web.html in a new
 background tab through the skfiy extension.
 
-Needs a Chromium browser with the extension loaded and the fixture served at
-FIXTURE_URL (see `make smoke-browser`). Asserts that the tab the user is
-looking at never changes and the browser never comes to the front.
+Needs a Chromium browser with the extension loaded (see `make smoke-browser`);
+the fixture is served by scripts/compat_server.py, started here if need be.
+Asserts that the tab the user is looking at never changes and the browser
+never comes to the front.
 
 With --user-browser it runs against your own browser: only in its own
 background tab, without the debugger (which shows an infobar) and without
@@ -20,6 +21,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import compat_baseline as compat  # noqa: E402
 import harness  # noqa: E402
 from harness import APPROVE, case, frontmost, index, results, status  # noqa: E402
 
@@ -28,7 +30,6 @@ ARGS = [arg for arg in sys.argv[1:] if arg != "--user-browser"]
 BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
 BROWSER_APP = "Google Chrome" if USER_BROWSER else "Chrome for Testing"
 BROWSER_NAME = "Google Chrome" if USER_BROWSER else "Chromium"  # as the extension reports itself
-FIXTURE_URL = "http://127.0.0.1:8765/web.html"
 CAME_TO_FRONT = False
 
 
@@ -74,13 +75,14 @@ def is_browser(front):
 
 
 def main():
+    compat.ensure_server()
     client = Client(BINARY, answer=APPROVE)  # uploads ask the user first; this client says yes
     before = client.call("browser_tabs")
     if not USER_BROWSER:
         print(before)  # the user's own tab titles stay private
     shown_before = front_tabs(before)
 
-    opened = client.call("browser_open", url=FIXTURE_URL)
+    opened = client.call("browser_open", url=compat.WEB_PAGE)
     tab = int(re.search(r"background tab (\d+)", opened).group(1))
     tree = client.call("browser_state", tab_id=tab)
 
