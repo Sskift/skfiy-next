@@ -36,7 +36,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 
 ## 工具
 
-前 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；`zoom`、`open_file`、`save_document`、`run_in_front`、`file_dialog`、`wait_for` 是 skfiy 额外加的。下表中 AX、前台和文件操作的完整功能用于解锁状态；锁屏 direct 模式的可用范围见上文。
+`list_apps`、`get_app_state`、`click`、`perform_secondary_action`、`set_value`、`select_text`、`scroll`、`drag`、`press_key`、`type_text` 这 10 个工具的名字和核心参数与 Codex 的 Computer Use 保持一致，提示词与使用习惯可以互通；其余工具和 `target`、`expect` 参数是 skfiy 额外加的。下表中 AX、前台和文件操作的完整功能用于解锁状态；锁屏 direct 模式的可用范围见上文。
 
 | 工具 | 作用 |
 | --- | --- |
