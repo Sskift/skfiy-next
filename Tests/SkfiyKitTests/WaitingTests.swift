@@ -60,6 +60,36 @@ struct WaitingTests {
         #expect(seconds >= 4 && seconds <= 4.5)
     }
 
+    /// browser_wait: the page says whether it shows the text, and whether
+    /// it has loaded and gone quiet; looks keep their pace meanwhile.
+    @Test func aPageJudgesTextAndQuietItself() async {
+        let script = Script()
+        let text = WaitEngine(text: "ready", timeout: 10, interval: 0.25)
+        let found = await text.run(now: script.now, sleep: script.sleep, check: {}, observe: {
+            WaitObservation(found: script.time >= 1, settled: true)
+        })
+        #expect(found == .met(seconds: 1))
+        script.time = 0
+        let quiet = WaitEngine(timeout: 10, interval: 0.25)
+        let settled = await quiet.run(now: script.now, sleep: script.sleep, check: {}, observe: {
+            script.observations += 1
+            return WaitObservation(settled: script.time >= 2)
+        })
+        #expect(settled == .met(seconds: 2) && script.observations == 9)
+        script.time = 0
+        let busy = await quiet.run(now: script.now, sleep: script.sleep, check: {}, observe: { WaitObservation(settled: false) })
+        #expect(busy == .timedOut(seconds: 10))
+    }
+
+    @Test func waitArgumentsAreChecked() throws {
+        let engine = try WaitEngine(Arguments(["text": " Saved ", "gone": true, "timeout": 5, "stable_for": 2]))
+        #expect(engine.text == "Saved" && engine.gone && engine.timeout == 5 && engine.stableFor == 2)
+        #expect(try WaitEngine(Arguments([:])).text == nil)
+        for bad in [["timeout": 0.1], ["timeout": 61], ["stable_for": 0.2], ["gone": true], ["text": "  ", "gone": true]] as [[String: Any]] {
+            #expect(throws: ToolError.self) { try WaitEngine(Arguments(bad)) }
+        }
+    }
+
     @Test func timesOutWithTheCurrentState() async {
         let script = Script()
         let engine = WaitEngine(text: "never", timeout: 2, interval: 0.5)

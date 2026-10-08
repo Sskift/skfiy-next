@@ -107,11 +107,15 @@ enum TextMatch {
 }
 
 /// What a wait loop looks at once: recognized or accessible text, and a
-/// fingerprint of what is shown (pixels, or the tree's text).
+/// fingerprint of what is shown (pixels, or the tree's text). A web page
+/// judges for itself: whether it shows the text, and whether it has
+/// finished loading and gone quiet.
 struct WaitObservation {
     var text: String?
     var fingerprint: PixelFingerprint?
     var textFingerprint: String?
+    var found: Bool?
+    var settled: Bool?
 }
 
 /// Thrown by a wait's checks to stop it with a reason (lock change, window
@@ -175,17 +179,17 @@ struct WaitEngine {
                 }
                 previous = current
                 if waitingForText, let text {
-                    if let seen = current.text, TextMatch.contains(seen, text) != gone {
+                    if let seen = current.found ?? current.text.map({ TextMatch.contains($0, text) }), seen != gone {
                         return .met(seconds: now() - started)
                     }
-                } else if !moved, now() - unchangedSince >= stableFor {
+                } else if current.settled ?? (!moved && now() - unchangedSince >= stableFor) {
                     return .met(seconds: now() - started)
                 }
                 if now() - started >= timeout { return .timedOut(seconds: now() - started) }
                 // Look again when it can matter: no later than when the window
                 // would have been stable long enough, or the time is up.
                 var wait = delay
-                if !waitingForText { wait = min(wait, max(0.05, stableFor - (now() - unchangedSince))) }
+                if !waitingForText, current.settled == nil { wait = min(wait, max(0.05, stableFor - (now() - unchangedSince))) }
                 wait = min(wait, max(0.05, timeout - (now() - started)))
                 try await sleep(wait)
             } catch let stop as WaitStopped {
@@ -223,5 +227,19 @@ struct WaitEngine {
         case .cancelled:
             return "The wait was cancelled after \(seconds) s. Nothing was sent to the app."
         }
+    }
+}
+
+extension WaitEngine {
+    /// text, gone, timeout and stable_for as wait_for and browser_wait take them.
+    init(_ args: Arguments) throws {
+        let timeout = try args.double("timeout") ?? 10
+        guard (0.5...60).contains(timeout) else { throw ToolError("timeout must be between 0.5 and 60 seconds.") }
+        let stableFor = try args.double("stable_for") ?? 1
+        guard (0.3...10).contains(stableFor) else { throw ToolError("stable_for must be between 0.3 and 10 seconds.") }
+        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let gone = args.bool("gone") ?? false
+        if gone, text.isEmpty { throw ToolError("gone needs a text to wait for the disappearance of.") }
+        self.init(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
     }
 }

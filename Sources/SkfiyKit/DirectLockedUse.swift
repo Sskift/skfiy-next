@@ -562,13 +562,8 @@ final class DirectLockedUse {
         let app = try application(args)
         let pid = app.processIdentifier
         let executable = app.executableURL, launched = app.launchDate
-        let timeout = try args.double("timeout") ?? 10
-        guard timeout.isFinite, (0.5...60).contains(timeout) else { throw ToolError("timeout must be between 0.5 and 60 seconds.") }
-        let stableFor = try args.double("stable_for") ?? 1
-        guard stableFor.isFinite, (0.3...10).contains(stableFor) else { throw ToolError("stable_for must be between 0.3 and 10 seconds.") }
-        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gone = args.bool("gone") ?? false
-        if gone, text.isEmpty { throw ToolError("gone needs a text to wait for the disappearance of.") }
+        var engine = try WaitEngine(args)
+        let text = engine.text ?? ""
         let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let previous = states[pid].flatMap { valid($0) ? $0 : nil }
         let window = try choose(try await windows(of: app), query: query, selected: query.isEmpty ? previous?.window : nil)
@@ -584,7 +579,6 @@ final class DirectLockedUse {
         var lastPixels: PixelFingerprint?
         var lastText: String?
         var lastFresh: Fresh?
-        var engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
         // Controlled screenshot differences: a small capture each look, more
         // seldom while nothing changes, and text recognized (on a full
         // resolution capture) only after the pixels changed.

@@ -440,19 +440,8 @@ public final class ComputerUse {
         guard case .running(let app) = try directory.resolve(query) else {
             throw ToolError("\(query) is not running. Call get_app_state first; it launches the app in the background.")
         }
-        let timeout = try args.double("timeout") ?? 10
-        guard (0.5...60).contains(timeout) else {
-            throw ToolError("timeout must be between 0.5 and 60 seconds.")
-        }
-        let stableFor = try args.double("stable_for") ?? 1
-        guard (0.3...10).contains(stableFor) else {
-            throw ToolError("stable_for must be between 0.3 and 10 seconds.")
-        }
-        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gone = args.bool("gone") ?? false
-        if gone, text.isEmpty {
-            throw ToolError("gone needs a text to wait for the disappearance of.")
-        }
+        var engine = try WaitEngine(args)
+        let text = engine.text ?? ""
         if args.values["region"] != nil {
             throw ToolError("region applies while macOS is locked (pixels); unlocked waits watch the accessibility tree. Wait for a text instead, or without one until the window stops changing.")
         }
@@ -461,7 +450,6 @@ public final class ComputerUse {
         await enableAccessibility(app, appElement)
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
         let name = app.localizedName ?? query
-        var engine = WaitEngine(text: text.isEmpty ? nil : text, gone: gone, stableFor: stableFor, timeout: timeout)
         // Look when the app announces a change, and once a second otherwise
         // (not every change is announced). SKFIY_WAIT_EVENTS=0 polls instead.
         let events = ProcessInfo.processInfo.environment["SKFIY_WAIT_EVENTS"] == "0" ? nil : AXChangeEvents(pid: app.processIdentifier)

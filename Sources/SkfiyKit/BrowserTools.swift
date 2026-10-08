@@ -211,47 +211,30 @@ final class BrowserTools {
     /// shows up (or goes away), or without a text until it is loaded and quiet.
     private func wait(_ args: Arguments) async throws -> ToolResult {
         let tabID = try requiredTab(args)
-        let timeout = try args.double("timeout") ?? 10
-        guard (0.5...60).contains(timeout) else {
-            throw ToolError("timeout must be between 0.5 and 60 seconds.")
-        }
-        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let gone = args.bool("gone") ?? false
-        if gone, text.isEmpty {
-            throw ToolError("gone needs a text to wait for the disappearance of.")
-        }
+        var engine = try WaitEngine(args)
+        // The page compares lowercased text.
+        engine.text = engine.text?.lowercased()
+        engine.interval = 0.25
+        let text = engine.text ?? ""
         let browser = try await browser(for: args, tabID: tabID)
         let started = Date()
-        var met = false
-        while !met {
-            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
-            // A cancelled request stops here; otherwise the sleep below would
-            // return at once and the page be probed back to back until timeout.
-            try Task.checkCancellation()
-            let probe = (try? await send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
-            let loading = probe["loading"] as? Bool ?? true
-            if text.isEmpty {
-                met = !loading && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
-            } else if let found = probe["found"] as? Bool {
-                met = found != gone
-            }
-            if !met {
-                if Date().timeIntervalSince(started) >= timeout { break }
-                try await Task.sleep(nanoseconds: 250_000_000)
-            }
-        }
-        let waited = formatNumber((Date().timeIntervalSince(started) * 10).rounded() / 10)
+        let result = await engine.run(
+            now: { Date().timeIntervalSince(started) },
+            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+            check: { if EmergencyStop.isStopped { throw WaitStopped(EmergencyStop.refusal) } },
+            observe: {
+                let probe = (try? await self.send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
+                let quiet = probe["loading"] as? Bool == false && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
+                return WaitObservation(found: probe["found"] as? Bool, settled: quiet)
+            })
+        if case .cancelled = result { throw CancellationError() }
+        if case .stopped(_, let reason) = result { throw ToolError(reason) }
         var state = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
-        let subject = quote(text, limit: 60)
-        let outcome = switch (text.isEmpty, gone, met) {
-        case (true, _, true): "The page finished loading and stopped changing after \(waited) s."
-        case (true, _, false): "The page was still loading or changing after \(waited) s."
-        case (false, false, true): "\(subject) appeared after \(waited) s."
-        case (false, false, false): "\(subject) did not appear within \(waited) s."
-        case (false, true, true): "\(subject) was gone after \(waited) s."
-        case (false, true, false): "\(subject) was still there after \(waited) s."
-        }
-        state.text = outcome + "\n" + state.text
+        let met = if case .met = result { true } else { false }
+        let waited = formatNumber((result.seconds * 10).rounded() / 10)
+        state.text = (!text.isEmpty ? engine.describe(result)
+            : met ? "The page finished loading and stopped changing after \(waited) s." : "The page was still loading or changing after \(waited) s.")
+            + "\n" + state.text
         state.isError = !met
         return state
     }
