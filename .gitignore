@@ -5,3 +5,4 @@
 *.log
 eval/results/
 __pycache__/
+dist/

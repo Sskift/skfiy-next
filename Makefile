@@ -3,18 +3,31 @@
 TESTING_PLUGINS := /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 TEST_FLAGS := $(if $(wildcard $(TESTING_PLUGINS)),-Xswiftc -plugin-path -Xswiftc $(TESTING_PLUGINS),)
 PREFIX ?= $(HOME)/.local
-EXTENSION_DIR := $(HOME)/Library/Application Support/skfiy/browser-extension
 
-.PHONY: build release test test-locked-use test-locked-use-plugin locked-use smoke smoke-fixture smoke-web smoke-browser compat install clean
+.PHONY: build release test test-install embed-extension dist test-locked-use test-locked-use-plugin locked-use smoke smoke-fixture smoke-web smoke-browser compat install uninstall clean
 
 build:
 	swift build
 
+# Only the skfiy binary; the experimental guardian is built by `make locked-use`.
 release:
-	swift build -c release
+	swift build -c release --product skfiy
 
 test:
 	swift test $(TEST_FLAGS)
+
+# install.sh, `skfiy setup` and `skfiy uninstall` in a throwaway HOME with fake
+# claude/codex CLIs; checks that the real setup is untouched. No UI.
+test-install: release
+	scripts/test_install.sh .build/release/skfiy
+
+# After changing browser-extension/: the binary carries a copy for `skfiy setup`.
+embed-extension:
+	scripts/embed_extension.sh
+
+# The release tarball (universal, ad-hoc signed) in dist/; publishes nothing.
+dist:
+	scripts/release.sh
 
 # Portable authorization and installer tests. Does not modify system policy.
 test-locked-use:
@@ -58,15 +71,14 @@ compat: build
 	python3 scripts/compat_baseline.py .build/debug/skfiy --mode background
 	python3 scripts/compat_baseline.py --report
 
-# Installs the binary, copies the extension somewhere browsers may read it
-# (not ~/Desktop or ~/Documents), and registers the native messaging host.
+# Installs the binary into $(PREFIX)/bin, then `skfiy setup`: the extension
+# files (somewhere browsers may read them, not ~/Desktop or ~/Documents), the
+# native messaging host and the Claude Code registration. Same as install.sh.
 install: release
-	install -d $(PREFIX)/bin
-	rm -f $(PREFIX)/bin/skfiy
-	cp .build/release/skfiy $(PREFIX)/bin/skfiy
-	install -d "$(EXTENSION_DIR)"
-	cp browser-extension/* "$(EXTENSION_DIR)/"
-	$(PREFIX)/bin/skfiy install-browser-bridge
+	./install.sh --binary .build/release/skfiy --prefix "$(PREFIX)"
+
+uninstall:
+	"$(PREFIX)/bin/skfiy" uninstall
 
 clean:
 	rm -rf .build

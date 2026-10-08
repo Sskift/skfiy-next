@@ -1,0 +1,37 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (matching skfiyVersion) builds the universal binary,
+# tests the one-step installer against it, and publishes a GitHub release with
+# skfiy-macos-universal.tar.gz and its .sha256, which install.sh downloads.
+# Run by hand (workflow_dispatch) it only builds and tests; nothing is published.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the universal, ad-hoc signed tarball
+        run: scripts/release.sh ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+      - name: Unit tests
+        run: swift test
+      - name: Install test against the tarball (throwaway HOME, fake claude)
+        run: |
+          mkdir -p /tmp/skfiy-release
+          tar -xzf dist/skfiy-macos-universal.tar.gz -C /tmp/skfiy-release
+          scripts/test_install.sh /tmp/skfiy-release/skfiy
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/skfiy-macos-universal.tar.gz dist/skfiy-macos-universal.tar.gz.sha256 \
+            --title "skfiy ${GITHUB_REF_NAME#v}" --generate-notes
