@@ -88,6 +88,17 @@ struct MCPServerTests {
         }
     }
 
+    @Test func instructionsAndToolsStayWithinWhatClientsCarry() throws {
+        // Claude Code shows the first 2048 characters of a server's
+        // instructions; the rest would be dropped without a word.
+        #expect(ToolSchemas.instructions.count <= 2048)
+        // Each tool's definition enters the model's context when it is used.
+        for tool in ToolSchemas.all {
+            let size = try JSONSerialization.data(withJSONObject: tool).count
+            #expect(size <= 4096, "\(tool["name"] ?? "?") is \(size) bytes")
+        }
+    }
+
     @Test func toolCallReturnsTextAndImageContent() async throws {
         let executor = FakeExecutor()
         executor.result = ToolResult(text: "clicked", image: Data([1, 2, 3]), imageMimeType: "image/png")
