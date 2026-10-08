@@ -98,8 +98,6 @@ public struct TreeRenderer {
         self.details = details
     }
 
-    public var text: String { lines.joined(separator: "\n") }
-
     public mutating func appendLine(_ line: String) {
         guard !isFull else {
             truncated = true
@@ -127,8 +125,8 @@ public struct TreeRenderer {
         return index
     }
 
-    public mutating func render(_ node: UINode, depth: Int = 0, clip: CGRect? = nil) {
-        render(node, depth: depth, clip: clip, parentLabel: nil, inRow: false)
+    public mutating func render(_ node: UINode, clip: CGRect? = nil) {
+        render(node, depth: 0, clip: clip, parentLabel: nil, inRow: false)
     }
 
     private mutating func render(_ node: UINode, depth: Int, clip: CGRect?, parentLabel: String?, inRow: Bool) {
@@ -276,18 +274,18 @@ public struct TreeRenderer {
         if name.hasPrefix("Name:") {
             return String(name.dropFirst(5).prefix { $0 != "\n" })
         }
-        return name.hasPrefix("AX") ? String(name.dropFirst(2)) : name
+        return withoutAXPrefix(name)
     }
 
     /// Toolbar customization actions present on every toolbar item.
     static let noiseActions: Set<String> = ["Move previous", "Move next", "Remove from toolbar"]
 
     static func displayRole(_ info: NodeInfo) -> String {
-        let role = info.role.hasPrefix("AX") ? String(info.role.dropFirst(2)) : info.role
+        let role = withoutAXPrefix(info.role)
         guard let subrole = info.subrole, !ignoredSubroles.contains(subrole) else {
             return role
         }
-        return role + "(" + (subrole.hasPrefix("AX") ? String(subrole.dropFirst(2)) : subrole) + ")"
+        return role + "(" + withoutAXPrefix(subrole) + ")"
     }
 
     /// Unlabeled containers are flattened: their children render in their place.
@@ -392,7 +390,7 @@ final class AXTreeBuilder {
         return (info, !rows.isEmpty ? rows : (!visible.isEmpty ? visible : children))
     }
 
-    func build(_ element: AXUIElement, clip: CGRect?, depth: Int = 0, maxDepth: Int? = nil) -> UINode? {
+    func build(_ element: AXUIElement, clip: CGRect?, depth: Int = 0) -> UINode? {
         guard visited < maxNodes, Date() < deadline else {
             truncated = true
             return nil
@@ -416,9 +414,9 @@ final class AXTreeBuilder {
             let narrowed = clip.map { $0.intersection(frame) } ?? frame
             childClip = narrowed.isNull ? frame : narrowed
         }
-        if depth < (maxDepth ?? self.maxDepth) {
+        if depth < maxDepth {
             for child in children {
-                if let built = build(child, clip: childClip, depth: depth + 1, maxDepth: maxDepth) {
+                if let built = build(child, clip: childClip, depth: depth + 1) {
                     node.children.append(built)
                 }
             }

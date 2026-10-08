@@ -31,6 +31,9 @@ struct Locator: Equatable {
         "bottom-right": "bottom-right", "bottom right": "bottom-right", "右下": "bottom-right", "右下角": "bottom-right"
     ]
 
+    /// Text that labels things rather than being a control.
+    static let textRoles: Set<String> = ["AXStaticText", "AXHeading", "heading", "statictext"]
+
     /// Kinds a model may ask for, and the roles that count as each.
     static let roleAliases: [String: Set<String>] = [
         "button": ["AXButton", "button", "submit", "reset"],
@@ -44,7 +47,7 @@ struct Locator: Equatable {
         "tab": ["AXTab", "AXRadioButton", "tab"],
         "row": ["AXRow", "AXCell", "AXOutlineRow", "row", "option", "treeitem", "listitem"],
         "slider": ["AXSlider", "AXIncrementor", "range", "slider"],
-        "text": ["AXStaticText", "AXHeading", "heading", "statictext"],
+        "text": textRoles,
         "image": ["AXImage", "img", "image"],
         "file input": ["file"]
     ]
@@ -203,7 +206,7 @@ extension Locator {
         let gap = { (other: CGRect) in max(0, other.minX - frame.maxX, frame.minX - other.maxX) }
         let cost = { (other: CGRect) in frame.minY - other.maxY + 2 * gap(other) }
         return candidates.filter { other in
-            other != candidate && (!other.roleKnown || ["AXStaticText", "AXHeading", "heading", "statictext"].contains(other.role))
+            other != candidate && (!other.roleKnown || textRoles.contains(other.role))
                 && other.frame.maxY <= frame.minY + 2 && gap(other.frame) <= reach
         }.min { cost($0.frame) < cost($1.frame) }?.label
     }
@@ -290,10 +293,9 @@ extension Locator {
         let equals = best.nameScore >= 1 ? matches.filter { $0.nameScore >= 1 } : matches
         // A control's own label shows as text with the same words ("Email"
         // next to its field): that text is not a second thing to act on.
-        let texts: Set<String> = ["AXStaticText", "AXHeading", "statictext", "heading"]
-        let controls = equals.filter { $0.candidate.roleKnown && !texts.contains($0.candidate.role) }
+        let controls = equals.filter { $0.candidate.roleKnown && !Self.textRoles.contains($0.candidate.role) }
         if controls.count == 1, let control = controls.first,
-           equals.allSatisfy({ $0 == control || ($0.candidate.roleKnown && texts.contains($0.candidate.role)
+           equals.allSatisfy({ $0 == control || ($0.candidate.roleKnown && Self.textRoles.contains($0.candidate.role)
                                                 && TextMatch.normalized($0.candidate.label) == TextMatch.normalized(control.candidate.label)) }) {
             return control
         }

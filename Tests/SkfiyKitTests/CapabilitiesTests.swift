@@ -32,7 +32,7 @@ struct CapabilitiesTests {
     }
 
     @Test func lockedDirectUsesScreenshotsAndOneKeyboardWindow() {
-        let one = CapabilityReport.evaluate(facts(.locked, mode: .direct), lockedTools: DirectLockedUse.lockedTools)
+        let one = CapabilityReport.evaluate(facts(.locked, mode: .direct))
         #expect(available(one) == ["ax": false, "screenshot": true, "ocr": true, "pointer": true, "keyboard": true,
                                    "browser": false, "foreground": false, "file_dialog": false, "clipboard": false])
         #expect(!one.tools.contains("set_value") && one.tools.contains("type_text"))
@@ -117,6 +117,15 @@ struct CapabilitiesTests {
         #expect(electron["ax"]?.limits.contains { $0.contains("No web content in the tree yet") } == true)
     }
 
+    @Test func authenticationInterfacesAndLockedUseCoversAreProtected() {
+        #expect(isProtectedInterface(bundleID: "com.apple.loginwindow", executable: "loginwindow"))
+        #expect(isProtectedInterface(bundleID: "com.apple.SecurityAgent", executable: nil))
+        #expect(isProtectedInterface(bundleID: "com.apple.authorizationhost.helper", executable: nil))
+        #expect(isProtectedInterface(bundleID: "io.github.sskift.skfiy.locked-use", executable: nil))
+        #expect(isProtectedInterface(bundleID: nil, executable: "SecurityAgent"))
+        #expect(!isProtectedInterface(bundleID: "com.apple.TextEdit", executable: "TextEdit"))
+    }
+
     @Test func emergencyStopAndClientWithoutQuestions() {
         let stopped = CapabilityReport.evaluate(facts { $0.emergencyStopped = true })
         #expect(available(stopped).values.allSatisfy { !$0 })
@@ -144,12 +153,11 @@ struct CapabilitiesTests {
 
     @Test func anAsleepDisplayIsWokenWhileLockedOrSaidSo() {
         // Locked in direct mode: capture still works, the display is woken first.
-        let wake = CapabilityReport.evaluate(facts(.locked, mode: .direct) { $0.displayAsleep = true }, lockedTools: DirectLockedUse.lockedTools)
+        let wake = CapabilityReport.evaluate(facts(.locked, mode: .direct) { $0.displayAsleep = true })
         #expect(wake["screenshot"]?.available == true && wake["screenshot"]?.limits.contains { $0.contains("wakes it to the lock screen") } == true)
         #expect(wake["pointer"]?.available == true)
         // Waking turned off: no screenshot, no pointer, and why.
-        let off = CapabilityReport.evaluate(facts(.locked, mode: .direct) { $0.displayAsleep = true; $0.wakeDisplay = false },
-                                            lockedTools: DirectLockedUse.lockedTools)
+        let off = CapabilityReport.evaluate(facts(.locked, mode: .direct) { $0.displayAsleep = true; $0.wakeDisplay = false })
         #expect(off["screenshot"]?.available == false && off["screenshot"]?.detail.contains("SKFIY_LOCKED_WAKE_DISPLAY=0") == true)
         #expect(off["ocr"]?.available == false && off["pointer"]?.available == false && !off.tools.contains("click"))
         #expect(off.changes(since: wake).contains("screenshot"))

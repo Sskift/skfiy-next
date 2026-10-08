@@ -194,7 +194,7 @@ final class AppDirectory {
 
     enum Resolution {
         case running(NSRunningApplication)
-        case installed(URL, AppRecord)
+        case installed(URL)
     }
 
     func resolve(_ query: String) throws -> Resolution {
@@ -218,14 +218,14 @@ final class AppDirectory {
             }) {
                 return .running(app)
             }
-            return .installed(URL(fileURLWithPath: path), record)
+            return .installed(URL(fileURLWithPath: path))
         case .ambiguous(let records):
             throw ambiguity(query, records)
         case .none:
             break
         }
         if query.hasPrefix("/"), query.hasSuffix(".app"), FileManager.default.fileExists(atPath: query) {
-            return .installed(URL(fileURLWithPath: query), AppRecord(name: normalizeAppName((query as NSString).lastPathComponent), path: query))
+            return .installed(URL(fileURLWithPath: query))
         }
         throw ToolError("No app matches \"\(query)\". Call list_apps to see available apps.")
     }
@@ -299,6 +299,19 @@ let terminalBundleIDs: Set<String> = [
 
 func isTerminal(bundleID: String?) -> Bool {
     bundleID.map { terminalBundleIDs.contains($0.lowercased()) } ?? false
+}
+
+/// The login window, authorization prompts and locked-use's own covers:
+/// skfiy never reads or operates them for the agent.
+func isProtectedInterface(bundleID: String?, executable: String?) -> Bool {
+    let id = (bundleID ?? "").lowercased()
+    return ["com.apple.loginwindow", "io.github.sskift.skfiy.locked-use"].contains(id)
+        || id.hasPrefix("com.apple.securityagent") || id.hasPrefix("com.apple.authorizationhost")
+        || ["loginwindow", "SecurityAgent", "authorizationhost"].contains(executable ?? "")
+}
+
+func isProtectedInterface(_ app: NSRunningApplication) -> Bool {
+    isProtectedInterface(bundleID: app.bundleIdentifier, executable: app.executableURL?.lastPathComponent)
 }
 
 /// This process and its ancestors (the shell, the agent, the terminal or

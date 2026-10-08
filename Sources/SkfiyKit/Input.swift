@@ -53,12 +53,14 @@ enum SkyLight {
 
 /// Input delivered straight to one process: nothing is activated, raised, or
 /// focused, the user's cursor never moves, and the user's own typing keeps
-/// going to whatever app they are in.
+/// going to whatever app they are in. The exceptions are opt-in: the brief
+/// focus of withBriefFocus, and pressToFrontApp for run_in_front, which the
+/// user approved.
 @MainActor
 enum Input {
     static var lockedUseIsValid: (() -> Bool)?
     private static var desktopAllowsNormalInput: Bool {
-        !isScreenLocked() && (!DirectLockedUse.enabled || DirectLockedUse.lockState == .unlocked)
+        !isScreenLocked() && !DirectLockedUse.isActive
     }
     static var canSend: Bool {
         !EmergencyStop.isStopped && !Task.isCancelled && desktopAllowsNormalInput && (lockedUseIsValid?() ?? true)
@@ -295,9 +297,11 @@ enum Input {
 
     /// `chromium` adds the gesture Chromium needs before it accepts a synthetic
     /// click: an off-screen press/release (user-activation primer), then the
-    /// target press/release sharing one mouse event number.
-    static func click(at point: CGPoint, pid: pid_t, windowID: CGWindowID, button: MouseButton, count: Int, modifiers: Modifiers, chromium: Bool = false) async {
-        guard !cancelled else { return }
+    /// target press/release sharing one mouse event number. False when it
+    /// stopped (emergency stop, cancellation, lock) before every click was sent.
+    @discardableResult
+    static func click(at point: CGPoint, pid: pid_t, windowID: CGWindowID, button: MouseButton, count: Int, modifiers: Modifiers, chromium: Bool = false) async -> Bool {
+        guard !cancelled else { return false }
         let (downType, upType, cgButton, number): (CGEventType, CGEventType, CGMouseButton, Int64) = switch button {
         case .left: (.leftMouseDown, .leftMouseUp, .left, 0)
         case .right: (.rightMouseDown, .rightMouseUp, .right, 1)
@@ -311,7 +315,7 @@ enum Input {
             post(move, at: point, pid: pid, windowID: windowID, clickState: 0, buttonNumber: 0, subtype: 3, group: group, eventNumber: 2)
         }
         await pause(0.015)
-        guard !cancelled else { return }
+        guard !cancelled else { return false }
         if chromium {
             let offscreen = CGPoint(x: -1, y: -1)
             if let down = mouseEvent(.leftMouseDown, offscreen, .left, []) {
@@ -323,7 +327,7 @@ enum Input {
             await pause(0.1)
         }
         for clickState in 1...Int64(max(1, count)) {
-            guard !cancelled else { return }
+            guard !cancelled else { return false }
             let eventNumber = 2 + clickState
             if let down = mouseEvent(downType, point, cgButton, flags) {
                 post(down, at: point, pid: pid, windowID: windowID, clickState: clickState, buttonNumber: number, subtype: 3, group: group, eventNumber: eventNumber)
@@ -337,6 +341,7 @@ enum Input {
                 await pause(0.08)
             }
         }
+        return true
     }
 
     static func drag(from start: CGPoint, to end: CGPoint, pid: pid_t, windowID: CGWindowID) async {

@@ -77,11 +77,11 @@ extension KeyChord {
             if let character = keypadCharacters[code] {
                 return String(character)
             }
-            guard let base = characterCodes.first(where: { $0.value == code })?.key else { return nil }
-            guard modifiers.contains(.shift) else { return String(base) }
-            if base.isLetter { return base.uppercased() }
-            if base == " " { return " " }
-            return shiftedCharacters.first(where: { $0.value == base }).map { String($0.key) }
+            guard let base = baseCharacter, let character = base.first else { return nil }
+            guard modifiers.contains(.shift) else { return base }
+            if character.isLetter { return base.uppercased() }
+            if character == " " { return " " }
+            return shiftedCharacters.first(where: { $0.value == character }).map { String($0.key) }
         }
     }
 }

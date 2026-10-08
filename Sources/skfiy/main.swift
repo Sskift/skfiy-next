@@ -129,7 +129,7 @@ case "mcp":
 case "stop":
     let playing = EmergencyStop.set(stopped: true)
     Thread.sleep(forTimeInterval: playing + 0.1)
-    print("skfiy is stopped; every tool call is refused until `skfiy resume` or \(EmergencyStop.shortcut).")
+    print("skfiy is stopped; every action and read is refused until `skfiy resume` or \(EmergencyStop.shortcut) (only list_apps, get_desktop_status, get_app_capabilities and the locked-use status tools still answer).")
 
 case "resume":
     let playing = EmergencyStop.set(stopped: false)

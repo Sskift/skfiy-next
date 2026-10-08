@@ -125,9 +125,8 @@ extension ActionExpectation {
     /// Watches after an action until the expectation holds, the target
     /// changes, or the timeout; then classifies what was seen.
     func verify(before: VerifyObservation, now: () -> Double, sleep: (Double) async throws -> Void,
-                observe: () async throws -> VerifyObservation, interval: Double = 0.25) async -> (Verdict, VerifyObservation?) {
+                observe: () async throws -> VerifyObservation, interval: Double = 0.25) async -> Verdict {
         let started = now()
-        var latest: VerifyObservation?
         var changed = false
         while true {
             let current: VerifyObservation
@@ -135,25 +134,24 @@ extension ActionExpectation {
                 try Task.checkCancellation()
                 current = try await observe()
             } catch is CancellationError {
-                return (Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started), latest)
+                return Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started)
             } catch {
-                return (Verdict(status: .targetChanged, detail: "\(error)", seconds: now() - started), latest)
+                return Verdict(status: .targetChanged, detail: "\(error)", seconds: now() - started)
             }
-            latest = current
             changed = changed || current.differs(from: before)
             if met(before: before, now: current) {
-                return (Verdict(status: .verified, detail: summary, seconds: now() - started), current)
+                return Verdict(status: .verified, detail: summary, seconds: now() - started)
             }
             if let change = targetChange(before: before, now: current) {
-                return (Verdict(status: .targetChanged, detail: change, seconds: now() - started), current)
+                return Verdict(status: .targetChanged, detail: change, seconds: now() - started)
             }
             if now() - started >= timeout {
                 return changed
-                    ? (Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))", seconds: now() - started), current)
-                    : (Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started), current)
+                    ? Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))", seconds: now() - started)
+                    : Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started)
             }
             do { try await sleep(interval) } catch {
-                return (Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started), latest)
+                return Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started)
             }
         }
     }

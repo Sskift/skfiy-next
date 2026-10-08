@@ -164,4 +164,24 @@ struct TreeRendererTests {
         ], ref: 0)
         #expect(contentElementCount(content) == 1)
     }
+
+    @Test func rendererKeepsEarlierIndices() {
+        // Earlier look: OK was [1], Name [2]. Now a Cancel button came before them.
+        let root = UINode(info: NodeInfo(role: "AXWindow", title: "W"), children: [
+            UINode(info: NodeInfo(role: "AXButton", title: "Cancel"), ref: 3),
+            UINode(info: NodeInfo(role: "AXButton", title: "OK"), ref: 1),
+            UINode(info: NodeInfo(role: "AXTextField", value: "x"), ref: 2)
+        ], ref: 0)
+        let earlier: [Int: Int] = [0: 0, 1: 1, 2: 2]
+        var next = 3
+        var renderer = TreeRenderer { _, _ in NodeDetails() }
+        renderer.allocate = { ref in
+            if let index = earlier[ref] { return index }
+            defer { next += 1 }
+            return next
+        }
+        renderer.render(root)
+        #expect(renderer.lines == ["[0] Window \"W\"", "  [3] Button \"Cancel\"", "  [1] Button \"OK\"", "  [2] TextField value=\"x\""])
+        #expect(renderer.printed.map(\.index) == [0, 3, 1, 2])
+    }
 }

@@ -74,7 +74,7 @@ struct FlowTests {
         let (report, updated) = FlowReport.evaluate(flow([.done, .done, .todo]), checks: [0: .holds("file ok"), 1: .holds("window open")])
         #expect(!report.needsReplan && !report.complete && report.next == "3. Process")
         #expect(updated.steps == flow([.done, .done, .todo]).steps)
-        let text = report.render(updated, checkedAt: Date(), locked: true)
+        let text = report.render(updated, locked: true)
         #expect(text.contains("✓ 1. download — Download: still holds — file ok") && text.contains("Next: 3. Process") && text.contains("\"replan\":false"))
     }
 
@@ -84,14 +84,14 @@ struct FlowTests {
         let (open, same) = FlowReport.evaluate(flow([.done, .done, .pending]), checks: [0: .holds("a"), 1: .holds("b"), 2: .broken("tab 4 does not show \"Submitted\" now")])
         #expect(open.unconfirmed == ["process"] && same.steps[2].status == .pending && !open.needsReplan)
         #expect(open.next == "3. Process (check whether it happened first)")
-        #expect(open.render(same, checkedAt: Date(), locked: false).contains("never repeat a submit"))
+        #expect(open.render(same, locked: false).contains("never repeat a submit"))
     }
 
     @Test func aBrokenStepAsksForAReplan() {
         let (report, _) = FlowReport.evaluate(flow([.done, .done, .todo]), checks: [0: .broken("the file /tmp/f0 is not there any more"), 1: .holds("b")])
         #expect(report.needsReplan && report.broken == ["download"])
         #expect(report.next == "1. Download (redo: what it produced is gone or changed)")
-        let text = report.render(flow([.done, .done, .todo]), checkedAt: Date(), locked: false)
+        let text = report.render(flow([.done, .done, .todo]), locked: false)
         #expect(text.contains("✗ 1. download — Download: done before, but no longer holds — the file /tmp/f0 is not there any more"))
         #expect(text.contains("Replan needed: 1 step done before no longer holds (download); steps done after it (open) were built on it"))
         #expect(text.contains("\"broken\":[\"download\"]"))

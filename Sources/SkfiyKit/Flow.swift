@@ -1,4 +1,3 @@
-import AppKit
 import CryptoKit
 import Foundation
 
@@ -116,8 +115,7 @@ struct FlowRecord: Codable, Equatable {
         var proof: FlowProof?
         var note: String?
         var at: Date?
-        /// What the step acted on, as it was then: app pid and launch time,
-        /// window id, file size, download path.
+        /// What the step acted on, as it was then: app pid, window id.
         var identity: [String: String] = [:]
     }
 
@@ -215,7 +213,6 @@ enum FlowCheck: Equatable {
 /// What a status check concluded for the whole flow.
 struct FlowReport: Equatable {
     struct Line: Equatable {
-        let index: Int
         let mark: String
         let text: String
     }
@@ -237,17 +234,17 @@ struct FlowReport: Equatable {
             let label = "\(index + 1). \(step.id == String(index + 1) ? "" : step.id + " — ")\(step.title)"
             switch (step.status, checks[index]) {
             case (.done, .holds(let detail)?):
-                report.lines.append(Line(index: index, mark: "✓", text: "\(label): still holds — \(detail)"))
+                report.lines.append(Line(mark: "✓", text: "\(label): still holds — \(detail)"))
             case (.done, .broken(let reason)?):
-                report.lines.append(Line(index: index, mark: "✗", text: "\(label): done before, but no longer holds — \(reason)"))
+                report.lines.append(Line(mark: "✗", text: "\(label): done before, but no longer holds — \(reason)"))
                 report.broken.append(step.id)
             case (.done, .unknown(let reason)?):
-                report.lines.append(Line(index: index, mark: "~", text: "\(label): done before; cannot be checked now — \(reason)"))
+                report.lines.append(Line(mark: "~", text: "\(label): done before; cannot be checked now — \(reason)"))
                 report.unknown.append(step.id)
             case (.done, nil):
-                report.lines.append(Line(index: index, mark: "✓", text: "\(label): done (no proof recorded)"))
+                report.lines.append(Line(mark: "✓", text: "\(label): done (no proof recorded)"))
             case (.pending, .holds(let detail)?):
-                report.lines.append(Line(index: index, mark: "✓", text: "\(label): was pending (about to be done when recorded); it has taken effect — \(detail). Marked done; do not do it again."))
+                report.lines.append(Line(mark: "✓", text: "\(label): was pending (about to be done when recorded); it has taken effect — \(detail). Marked done; do not do it again."))
                 updated.steps[index].status = .done
                 updated.steps[index].note = [step.note, "confirmed by a status check"].compactMap { $0 }.joined(separator: "; ")
             case (.pending, let check):
@@ -257,10 +254,10 @@ struct FlowReport: Equatable {
                 case .unknown(let reason)?: why = "cannot be checked now: " + reason
                 default: why = "nothing to check it by"
                 }
-                report.lines.append(Line(index: index, mark: "?", text: "\(label): was pending (about to be done when recorded) and is not confirmed (\(why)). It may not have happened, or not finished: look at the app before doing it again, and never repeat a submit, send or payment blindly."))
+                report.lines.append(Line(mark: "?", text: "\(label): was pending (about to be done when recorded) and is not confirmed (\(why)). It may not have happened, or not finished: look at the app before doing it again, and never repeat a submit, send or payment blindly."))
                 report.unconfirmed.append(step.id)
             case (.todo, _):
-                report.lines.append(Line(index: index, mark: "·", text: "\(label): to do"))
+                report.lines.append(Line(mark: "·", text: "\(label): to do"))
             }
         }
         if let first = updated.steps.indices.first(where: { report.broken.contains(updated.steps[$0].id) }) {
@@ -273,7 +270,7 @@ struct FlowReport: Equatable {
         return (report, updated)
     }
 
-    func render(_ record: FlowRecord, checkedAt: Date, locked: Bool) -> String {
+    func render(_ record: FlowRecord, locked: Bool) -> String {
         var text = ["Flow \(quote(record.name, limit: 60))" + (record.goal.map { ": \($0)" } ?? ""),
                     "Checked against the current state just now (\(locked ? "macOS locked" : "unlocked")), not taken from memory:"]
         text += lines.map { "  \($0.mark) \($0.text)" }

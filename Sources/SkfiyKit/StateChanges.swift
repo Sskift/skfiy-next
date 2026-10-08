@@ -40,7 +40,9 @@ struct StateRecord {
     /// The last few looks per app are kept.
     static let kept = 6
 
-    static func appending(_ record: StateRecord, to history: [StateRecord]?) -> [StateRecord] {
+    /// The history with a look added (alone, or with what goes with it),
+    /// keeping the last `kept`.
+    static func appending<Look>(_ record: Look, to history: [Look]?) -> [Look] {
         Array(((history ?? []) + [record]).suffix(kept))
     }
 }

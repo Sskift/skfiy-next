@@ -14,6 +14,10 @@ final class BrowserTools {
         "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
         "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
     ]
+    /// Tools that accept `target` instead of index or x/y.
+    nonisolated static let targetTools: Set<String> = [
+        "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"
+    ]
     /// Asks the user a yes/no question through the client; nil when it cannot.
     var askUser: ((String) async -> Bool?)?
     /// The last typing went into a password field (for the action log).
@@ -41,8 +45,8 @@ final class BrowserTools {
         case "browser_state":
             let tabID = try requiredTab(args)
             let browser = try await browser(for: args, tabID: tabID)
-            return try await state(browser, tabID: tabID, prefix: nil, screenshot: (args.values["screenshot"] as? Bool) ?? true,
-                                   background: (args.values["background_screenshot"] as? Bool) ?? false)
+            return try await state(browser, tabID: tabID, prefix: nil, screenshot: args.bool("screenshot") ?? true,
+                                   background: args.bool("background_screenshot") ?? false)
         case "browser_locate":
             let tabID = try requiredTab(args)
             guard let locator = try Locator.parse(args.values["target"]) else { throw ToolError("Missing required argument \"target\".") }
@@ -90,20 +94,11 @@ final class BrowserTools {
             params.merge(resolved.params) { _, new in new }
             located = resolved.note
         }
-        if (args.values["trusted"] as? Bool) == true { params["trusted"] = true }
+        if args.bool("trusted") == true { params["trusted"] = true }
         switch name {
         case "browser_hover":
             params["action"] = "hover"
-            if params["index"] == nil, params["x"] == nil {
-                guard let x = try args.double("x"), let y = try args.double("y") else {
-                    throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
-                }
-                guard let scale = screenshotScale[tabID] else {
-                    throw ToolError("x/y need a screenshot of this tab first (browser_state; for a background tab with background_screenshot: true); otherwise hover by index.")
-                }
-                params["x"] = x * scale
-                params["y"] = y * scale
-            }
+            try addPoint(&params, args, tabID: tabID, verb: "hover")
         case "browser_click":
             params["action"] = "click"
             if let dialog = args.string("dialog") {
@@ -114,21 +109,12 @@ final class BrowserTools {
                 params["dialog"] = params["dialog"] ?? "accept"
                 params["prompt_text"] = text
             }
-            if params["index"] == nil, params["x"] == nil {
-                guard let x = try args.double("x"), let y = try args.double("y") else {
-                    throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
-                }
-                guard let scale = screenshotScale[tabID] else {
-                    throw ToolError("x/y need a screenshot of this tab first (browser_state; for a background tab with background_screenshot: true); otherwise click by index.")
-                }
-                params["x"] = x * scale
-                params["y"] = y * scale
-            }
+            try addPoint(&params, args, tabID: tabID, verb: "click")
         case "browser_type":
             params["action"] = "type"
             params["text"] = try args.requiredText("text")
-            params["clear"] = (args.values["clear"] as? Bool) ?? false
-            params["submit"] = (args.values["submit"] as? Bool) ?? false
+            params["clear"] = args.bool("clear") ?? false
+            params["submit"] = args.bool("submit") ?? false
         case "browser_select":
             guard params["index"] != nil else { throw ToolError("Missing required argument \"index\".") }
             params["action"] = "select"
@@ -150,6 +136,20 @@ final class BrowserTools {
         lastInputWasSecret = result["secret"] as? Bool == true
         let message = (result["message"] as? String) ?? "Done"
         return try await state(browser, tabID: tabID, prefix: (located.map { $0 + "\n" } ?? "") + message + ".", screenshot: false)
+    }
+
+    /// Without an index (or a target resolved to a point): x/y of the tab's
+    /// latest screenshot, as viewport CSS pixels.
+    private func addPoint(_ params: inout [String: Any], _ args: Arguments, tabID: Int, verb: String) throws {
+        guard params["index"] == nil, params["x"] == nil else { return }
+        guard let x = try args.double("x"), let y = try args.double("y") else {
+            throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
+        }
+        guard let scale = screenshotScale[tabID] else {
+            throw ToolError("x/y need a screenshot of this tab first (browser_state; for a background tab with background_screenshot: true); otherwise \(verb) by index.")
+        }
+        params["x"] = x * scale
+        params["y"] = y * scale
     }
 
     /// Sends a file to the page in pieces and attaches it to a file input,
@@ -223,7 +223,7 @@ final class BrowserTools {
             throw ToolError("timeout must be between 0.5 and 60 seconds.")
         }
         let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let gone = (args.values["gone"] as? Bool) ?? false
+        let gone = args.bool("gone") ?? false
         if gone, text.isEmpty {
             throw ToolError("gone needs a text to wait for the disappearance of.")
         }
@@ -533,13 +533,7 @@ func fitForModel(_ data: Data) -> (data: Data, width: Int, height: Int)? {
     guard scale < 1 else { return (data, image.width, image.height) }
     let width = max(1, Int((Double(image.width) * scale).rounded()))
     let height = max(1, Int((Double(image.height) * scale).rounded()))
-    guard let context = CGContext(
-        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-    ) else { return nil }
-    context.interpolationQuality = .high
-    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-    guard let scaled = context.makeImage(), let encoded = try? encode(scaled, format: "jpeg") else { return nil }
+    guard let scaled = resized(image, width: width, height: height), let encoded = try? encode(scaled, format: "jpeg") else { return nil }
     return (encoded, width, height)
 }
 
@@ -548,7 +542,6 @@ func fitForModel(_ data: Data) -> (data: Data, width: Int, height: Int)? {
 extension BrowserTools {
     struct Found {
         var viewport: CGRect
-        var candidates: [LocatorCandidate]
         var matches: [LocatorMatch]
         var chosen: LocatorMatch?
         var elsewhere: [LocatorMatch]
@@ -576,7 +569,7 @@ extension BrowserTools {
         }
         let matches = locator.matches(candidates, bounds: bounds, pixelArea: pixelArea)
         let elsewhere = matches.isEmpty ? (locator.loosened.map { $0.matches(candidates, bounds: bounds) } ?? []) : []
-        return Found(viewport: bounds, candidates: candidates, matches: matches, chosen: locator.unique(matches), elsewhere: elsewhere)
+        return Found(viewport: bounds, matches: matches, chosen: locator.unique(matches), elsewhere: elsewhere)
     }
 
     func line(_ match: LocatorMatch, tabID: Int, viewport: CGRect) -> String {

@@ -213,14 +213,11 @@ private func directLockedWindow(_ window: SCWindow, pid: pid_t, metadata: [CGWin
     // Under the lock screen the app's displayed windows retain this bit in
     // the all-windows CG query even though on-screen-only queries omit them.
     guard let details = metadata[window.windowID], details[kCGWindowIsOnscreen as String] as? Bool == true else { return nil }
-    do {
-        if let owner = details[kCGWindowOwnerPID as String] as? Int, owner != Int(pid) { return nil }
-        if let layer = details[kCGWindowLayer as String] as? Int, layer != 0 { return nil }
-        if let alpha = details[kCGWindowAlpha as String] as? Double, !alpha.isFinite || alpha <= 0 { return nil }
-    }
+    if let owner = details[kCGWindowOwnerPID as String] as? Int, owner != Int(pid) { return nil }
+    if let layer = details[kCGWindowLayer as String] as? Int, layer != 0 { return nil }
+    if let alpha = details[kCGWindowAlpha as String] as? Double, !alpha.isFinite || alpha <= 0 { return nil }
     return DirectLockedWindow(id: window.windowID, pid: pid, title: window.title ?? "", frame: frame)
 }
-
 
 /// Window capture needs the display on: with it asleep, as it soon is on a
 /// locked Mac, ScreenCaptureKit fails with an internal error. While macOS is
@@ -233,8 +230,6 @@ enum DisplayWake {
     static var enabled: Bool { ProcessInfo.processInfo.environment["SKFIY_LOCKED_WAKE_DISPLAY"] != "0" }
     private static var keepOn: IOPMAssertionID = 0
     private static var release: Task<Void, Never>?
-    /// When skfiy last woke a display, for the capability report.
-    private(set) static var lastWoken: Date?
 
     static func asleep(_ frame: CGRect) -> Bool {
         CGDisplayIsAsleep(displayID(containing: CGPoint(x: frame.midX, y: frame.midY))) != 0
@@ -264,7 +259,6 @@ enum DisplayWake {
         // Only to wake it: held, it would keep the display on for as long as
         // skfiy runs; hold() keeps it on for the two minutes instead.
         defer { if activity != 0 { IOPMAssertionRelease(activity) } }
-        lastWoken = Date()
         for _ in 0..<40 where asleep(frame) {
             try await Task.sleep(nanoseconds: 100_000_000)
         }

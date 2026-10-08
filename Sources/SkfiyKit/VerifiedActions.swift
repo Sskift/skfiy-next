@@ -8,7 +8,7 @@ import Foundation
 /// an identical one right after an unverified one is refused until the state
 /// has been looked at again.
 extension ComputerUse {
-    static let verifiableTools: Set<String> = [
+    nonisolated static let verifiableTools: Set<String> = [
         "click", "type_text", "press_key", "set_value", "scroll", "drag", "perform_secondary_action", "select_text"
     ]
 
@@ -26,16 +26,16 @@ extension ComputerUse {
         do { expectation = try ActionExpectation(raw["expect"]) } catch {
             return ToolResult(text: (error as? ToolError)?.description ?? "\(error)", isError: true)
         }
-        let locked = DirectLockedUse.enabled && DirectLockedUse.lockState != .unlocked
+        let locked = DirectLockedUse.isActive
         if locked, let expectation, expectation.valueChanges || expectation.value != nil {
             return ToolResult(text: "expect.value and value_changes need accessibility, which is unavailable while macOS is locked; expect a text, text_gone, window_closed, window_opened or changed instead. Nothing was sent.", isError: true)
         }
         let target = locked ? lockedTarget(name, args) : unlockedTarget(name, args)
-        let risky = (raw["idempotent"] as? Bool) == false
+        let risky = args.bool("idempotent") == false
             || (["click", "perform_secondary_action"].contains(name) && RiskyAction.isRisky(label: target?.label))
             || (name == "press_key" && RiskyAction.isSubmitKey(args.string("key") ?? ""))
         let label = target?.label.map { "\(name) on \(quote($0, limit: 40))" } ?? name
-        if risky, let target, raw["confirm_repeat"] as? Bool != true,
+        if risky, let target, args.bool("confirm_repeat") != true,
            let refusal = repeatGuard.refusal(app: String(target.pid), signature: target.signature) {
             return ToolResult(text: refusal + " Nothing was sent.", isError: true)
         }
@@ -61,7 +61,7 @@ extension ComputerUse {
         var result = await perform(name, raw)
         guard !result.isError else { return result }
         let started = Date()
-        let (verdict, _) = await expectation.verify(
+        let verdict = await expectation.verify(
             before: before, now: { Date().timeIntervalSince(started) },
             sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
             observe: { await observe() })

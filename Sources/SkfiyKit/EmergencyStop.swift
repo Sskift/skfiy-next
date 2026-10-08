@@ -2,10 +2,12 @@ import AppKit
 import Carbon.HIToolbox
 
 /// The user's emergency stop. Pressing ⌃⌥⌘. (control-option-command-period)
-/// anywhere stops every running skfiy: typing in progress breaks off and every
-/// tool call is refused until the shortcut is pressed again or `skfiy resume`
-/// runs. The state is a flag file, so it holds for all skfiy processes even
-/// though only one of them can own the shortcut.
+/// anywhere stops every running skfiy: typing in progress breaks off, and
+/// every action and read (get_app_state, browser_tabs…) is refused until the
+/// shortcut is pressed again or `skfiy resume` runs; only list_apps,
+/// get_desktop_status, get_app_capabilities and the locked-use status tools
+/// still answer. The state is a flag file, so it holds for all skfiy
+/// processes even though only one of them can own the shortcut.
 public enum EmergencyStop {
     public static let shortcut = "⌃⌥⌘."
 

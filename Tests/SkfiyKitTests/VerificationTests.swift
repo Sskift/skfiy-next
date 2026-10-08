@@ -27,7 +27,7 @@ struct VerificationTests {
 
     private func run(_ expectation: ActionExpectation, before: VerifyObservation, script: @escaping (Double) -> VerifyObservation) async -> Verdict {
         let clock = Clock()
-        let (verdict, _) = await expectation.verify(before: before, now: clock.now, sleep: clock.sleep, observe: { script(clock.time) })
+        let verdict = await expectation.verify(before: before, now: clock.now, sleep: clock.sleep, observe: { script(clock.time) })
         return verdict
     }
 

@@ -74,7 +74,7 @@ struct MCPServerTests {
         }
     }
 
-    @Test func listsTheCodexCompatibleTools() async throws {
+    @Test func listsEveryToolWithAnObjectSchema() async throws {
         let server = MCPServer(executor: FakeExecutor(), write: { _ in })
         let response = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": "a", "method": "tools/list"]))
         let tools = try #require((response["result"] as? [String: Any])?["tools"] as? [[String: Any]])

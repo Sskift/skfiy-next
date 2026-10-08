@@ -7,6 +7,9 @@ import Foundation
 @MainActor
 final class DirectLockedUse {
     static var enabled: Bool { ProcessInfo.processInfo.environment["SKFIY_LOCKED_USE"] == "direct" }
+    /// Direct mode is on and macOS is not known to be unlocked: tools take
+    /// the locked path.
+    static var isActive: Bool { enabled && lockState != .unlocked }
 
     enum LockState { case locked, unlocked, unavailable }
     /// Notifications remember a complete lock/unlock cycle between calls,
@@ -41,13 +44,16 @@ final class DirectLockedUse {
         let geometry: CaptureGeometry
         let captured: Date
         let generation: UInt64
-        /// The capture at display resolution, and the text recognized on it.
-        var hires: CGImage?
+        /// The text recognized on the capture at display resolution.
         var recognized: [RecognizedText] = []
     }
 
-    /// Tools this mode serves while macOS is locked; everything else is refused.
-    nonisolated static let lockedTools: Set<String> = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom", "locate"]
+    /// Tools this mode serves while macOS is locked, in the order capability
+    /// reports list them; everything else is refused.
+    nonisolated static let lockedTools = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom", "locate"]
+
+    /// How long a screenshot's coordinates are used while locked.
+    private static let screenshotLifetime: TimeInterval = 30
 
     private let directory = AppDirectory()
     private var states: [pid_t: State] = [:]
@@ -96,7 +102,7 @@ final class DirectLockedUse {
     func screenshotAge(pid: pid_t) -> Double? {
         guard let state = states[pid], valid(state) else { return nil }
         let age = Date().timeIntervalSince(state.captured)
-        return age < 30 ? age : nil
+        return age < Self.screenshotLifetime ? age : nil
     }
 
     func status(end: Bool = false) -> ToolResult {
@@ -106,7 +112,7 @@ final class DirectLockedUse {
             "enabled": !ended, "mode": "direct", "screenLocked": state == .locked,
             "lockStateKnown": state != .unavailable, "temporarilyUnlocks": false,
             "phase": ended ? "ended" : state == .locked ? "locked" : "idle",
-            "requiresDeveloperCertificate": false
+            "requiresDeveloperCertificate": false, "emergencyStop": EmergencyStop.isStopped
         ]
         return ToolResult(text: String(decoding: try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self))
     }
@@ -132,10 +138,7 @@ final class DirectLockedUse {
         guard case .running(let app) = try directory.resolve(query), !app.isTerminated else {
             throw ToolError("Open \(query) before locking the Mac, then call get_app_state. Direct locked use targets running apps only.")
         }
-        let identifier = app.bundleIdentifier ?? ""
-        guard identifier != "com.apple.loginwindow", !identifier.hasPrefix("com.apple.SecurityAgent"),
-              !identifier.hasPrefix("com.apple.authorizationhost"),
-              !["loginwindow", "SecurityAgent", "authorizationhost"].contains(app.executableURL?.lastPathComponent ?? "") else {
+        guard !isProtectedInterface(app) else {
             throw ToolError("Direct locked use does not read or control system login and authentication windows.")
         }
         return app
@@ -205,7 +208,7 @@ final class DirectLockedUse {
                 throw ToolError("window_id \(wanted) is not the window of the latest screenshot. Call get_app_state with window: \"\(wanted)\" first; no input was sent.")
             }
         }
-        guard let state = states[app.processIdentifier], Date().timeIntervalSince(state.captured) < 30,
+        guard let state = states[app.processIdentifier], Date().timeIntervalSince(state.captured) < Self.screenshotLifetime,
               valid(state) else {
             let previous = states[app.processIdentifier]
             states[app.processIdentifier] = nil
@@ -216,7 +219,7 @@ final class DirectLockedUse {
             }
             if let previous {
                 let age = Date().timeIntervalSince(previous.captured)
-                let why = age >= 30 ? "it is \(Int(age)) s old" : validationProblem(previous).map { $0.hasPrefix("window geometry differs") ? "the window moved or changed size (\($0))" : $0 } ?? "it no longer matches"
+                let why = age >= Self.screenshotLifetime ? "it is \(Int(age)) s old" : validationProblem(previous).map { $0.hasPrefix("window geometry differs") ? "the window moved or changed size (\($0))" : $0 } ?? "it no longer matches"
                 throw ToolError("The latest screenshot cannot be used: \(why). Call get_app_state again; no input was sent.")
             }
             throw ToolError("No recent matching locked-window screenshot. Call get_app_state before sending input.")
@@ -231,17 +234,9 @@ final class DirectLockedUse {
     }
 
     private func point(_ args: Arguments, _ x: String, _ y: String, state: State) throws -> CGPoint {
-        if let zoomID = args.string("zoom_id")?.trimmingCharacters(in: .whitespaces), !zoomID.isEmpty {
-            guard let mapping = zooms[state.window.pid], mapping.id == zoomID else {
-                throw ToolError("zoom_id \(zoomID) is not the latest zoom of this app. Zoom again, or use x/y of the latest screenshot.")
-            }
-            guard mapping.screenshotTaken == state.captured, mapping.screenshot == state.geometry else {
-                throw ToolError("zoom_id \(zoomID) belongs to an older screenshot. Zoom again on the latest one; no input was sent.")
-            }
-            guard let px = try args.double(x), let py = try args.double(y), mapping.containsZoomPixel(x: px, y: py) else {
-                throw ToolError("\(x)/\(y) must be inside zoom \(zoomID) (\(mapping.zoomWidth)×\(mapping.zoomHeight) px).")
-            }
-            return mapping.toScreen(CGPoint(x: px, y: py))
+        if let zoomed = try zoomPoint(args, x, y, latest: zooms[state.window.pid], screenshot: state.geometry, taken: state.captured,
+                                      notDone: "no input was sent") {
+            return zoomed
         }
         guard let px = try args.double(x), let py = try args.double(y), px.isFinite, py.isFinite,
               px >= 0, py >= 0, px < Double(state.geometry.pixelWidth), py < Double(state.geometry.pixelHeight) else {
@@ -256,24 +251,21 @@ final class DirectLockedUse {
     private struct Capture {
         let shot: Screenshot
         let hires: CGImage
-        let recognized: [RecognizedText]?
     }
 
-    private func capture(_ window: DirectLockedWindow, recognize: Bool) async throws -> Capture {
+    private func capture(_ window: DirectLockedWindow) async throws -> Capture {
         let (hires, hiresGeometry) = try await captureDirectLockedImage(window, maxScale: backingScale(for: window.frame))
-        return try await prepare(hires, hiresGeometry, recognize: recognize)
+        return try prepare(hires, hiresGeometry)
     }
 
-    /// The model's screenshot (and optionally the text) from a capture at
-    /// display resolution.
-    private func prepare(_ hires: CGImage, _ hiresGeometry: CaptureGeometry, recognize: Bool) async throws -> Capture {
+    /// The model's screenshot from a capture at display resolution.
+    private func prepare(_ hires: CGImage, _ hiresGeometry: CaptureGeometry) throws -> Capture {
         let scale = captureScale(for: hiresGeometry.rect.size, maxScale: 1)
         let width = max(1, Int((hiresGeometry.rect.width * scale).rounded()))
         let height = max(1, Int((hiresGeometry.rect.height * scale).rounded()))
         guard let image = resized(hires, width: width, height: height) else { throw ToolError("Could not prepare the screenshot.") }
         let geometry = CaptureGeometry(rect: hiresGeometry.rect, pixelWidth: width, pixelHeight: height)
-        let recognized = recognize ? TextRecognition.sorted(try await TextRecognition.recognizeBoth(hires, showing: geometry.rect)) : nil
-        return Capture(shot: try encodeScreenshot(image, geometry: geometry), hires: hires, recognized: recognized)
+        return Capture(shot: try encodeScreenshot(image, geometry: geometry), hires: hires)
     }
 
     /// The app's capturable windows, titled ones first, then by size.
@@ -321,15 +313,15 @@ final class DirectLockedUse {
         var windows = try await windows(of: app)
         let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var window = try choose(windows, query: query, selected: selected)
-        let recognize = (args.values["ocr"] as? Bool) ?? true
+        let recognize = args.bool("ocr") ?? true
         let since = nonEmpty(args.string("since")?.trimmingCharacters(in: .whitespaces))
         let base = since.flatMap { version in history[pid]?.last { $0.record.version == version } }
         let reusing = fresh.flatMap { $0.geometry.rect == window.frame ? $0 : nil }
         let captured: Capture
         if let reusing {
-            captured = try await prepare(reusing.hires, reusing.geometry, recognize: false)
+            captured = try prepare(reusing.hires, reusing.geometry)
         } else {
-            captured = try await capture(window, recognize: false)
+            captured = try await capture(window)
         }
         let shot = captured.shot
         try check(generation: captureGeneration)
@@ -365,7 +357,7 @@ final class DirectLockedUse {
         }
         let state = State(app: app, executable: app.executableURL, launched: app.launchDate,
                           window: window, geometry: shot.geometry, captured: Date(), generation: captureGeneration,
-                          hires: captured.hires, recognized: recognized ?? [])
+                          recognized: recognized ?? [])
         if let problem = validationProblem(state) { throw ToolError("The target window changed while capturing it (\(problem)). Refresh get_app_state.") }
         var header = [message, "App: \(app.localizedName ?? "?") — \(app.bundleIdentifier ?? "") (pid \(pid))",
                       "Direct locked use: macOS remains locked. This is a live window screenshot; use x/y, press_key and type_text. AX element indices and foreground actions are unavailable.",
@@ -387,8 +379,8 @@ final class DirectLockedUse {
         shownWindows[pid] = window.id
         let version = StateVersions.next()
         let windowTitles = Dictionary(windows.map { (String($0.id), $0.title) }, uniquingKeysWith: { first, _ in first })
-        history[pid] = Array(((history[pid] ?? []) + [(StateRecord(version: version, epoch: 0, window: windowKey, lines: textLines, textLines: textLines,
-                                                                     windows: windowTitles, fingerprint: fingerprint), recognized ?? [])]).suffix(StateRecord.kept))
+        let record = StateRecord(version: version, epoch: 0, window: windowKey, lines: textLines, textLines: textLines, windows: windowTitles, fingerprint: fingerprint)
+        history[pid] = StateRecord.appending((record: record, recognized: recognized ?? []), to: history[pid])
         header.append("State: \(version)" + (since.map { " (compared with \($0))" } ?? "") + ". Pass since: \"\(version)\" next time to get only what changed.")
 
         let full = { (note: String?) -> ToolResult in
@@ -519,7 +511,7 @@ final class DirectLockedUse {
             throw ToolError("There is no screenshot to zoom into. Call get_app_state first.")
         }
         let age = Date().timeIntervalSince(state.captured)
-        guard age < 30 else {
+        guard age < Self.screenshotLifetime else {
             states[pid] = nil
             zooms[pid] = nil
             throw ToolError("The latest screenshot is \(Int(age)) s old, too old to zoom into or map coordinates from. Call get_app_state again.")
@@ -532,11 +524,7 @@ final class DirectLockedUse {
         let region = try zoomRegion(args, geometry: state.geometry)
         let backing = backingScale(for: state.window.frame)
         let native = backing / state.geometry.scale
-        let requested = try args.double("scale")
-        if let requested, !requested.isFinite || requested < 1 || requested > 8 {
-            throw ToolError("scale must be between 1 and 8 (zoom pixels per screenshot pixel).")
-        }
-        let factor = ZoomMapping.factor(requested: requested, native: native, region: region.size)
+        let factor = try ZoomMapping.factor(args, native: native, region: region)
         let (capture, captureGeometry) = try await captureDirectLockedImage(state.window, maxScale: backing)
         try check(generation: state.generation)
         guard captureGeometry.rect == state.geometry.rect else {
@@ -552,21 +540,11 @@ final class DirectLockedUse {
                                   screenshot: state.geometry, screenshotTaken: state.captured)
         zooms[pid] = mapping
         let shown = cut.shown
-        let detail = factor > native + 0.01 ? "upscaled beyond the display's \(formatNumber(native))× detail" : "\(formatNumber((factor / native * 100).rounded()))% of the display's detail"
-        var lines = [
-            "Zoom \(mapping.id) of window \(state.window.id): x=\(formatNumber(shown.minX.rounded())) y=\(formatNumber(shown.minY.rounded())) w=\(formatNumber(shown.width.rounded())) h=\(formatNumber(shown.height.rounded())) px of the latest screenshot, as \(mapping.zoomWidth)×\(mapping.zoomHeight) px (\(formatNumber((factor * 100).rounded() / 100))×; \(detail)).",
-            "Coordinates: \(mapping.formula). Or pass zoom_id \"\(mapping.id)\" with x/y in this zoom's pixels to click, scroll or drag; valid while the latest screenshot is (about \(Int(30 - age)) s more, same window position and size)."
-        ]
-        if (args.values["ocr"] as? Bool) ?? true {
+        var lines = mapping.lines(factor: factor, native: native, subject: " of window \(state.window.id)",
+                                  lasting: "; valid while the latest screenshot is (about \(Int(Self.screenshotLifetime - age)) s more, same window position and size).")
+        if args.bool("ocr") ?? true {
             let a = state.geometry.toScreen(x: shown.minX, y: shown.minY), b = state.geometry.toScreen(x: shown.maxX, y: shown.maxY)
-            // The zoom image itself: tiny glyphs read better enlarged.
-            let recognized = TextRecognition.sorted(try await TextRecognition.recognize(cut.image, showing: CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)))
-            lines.append(recognized.isEmpty ? "Text recognized in the zoom: none." : "Text recognized in the zoom (zoom x/y, then the same point in the screenshot):")
-            for text in recognized.prefix(100) {
-                let pixel = state.geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY))
-                let zoomed = mapping.toZoom(pixel)
-                lines.append("  \(quote(text.text, limit: 100)) zoom x=\(Int(zoomed.x.rounded())) y=\(Int(zoomed.y.rounded())) → screenshot x=\(Int(pixel.x.rounded())) y=\(Int(pixel.y.rounded()))")
-            }
+            lines += try await mapping.recognizedText(in: cut.image, showing: CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y))
         }
         try check(generation: state.generation)
         return ToolResult(text: lines.joined(separator: "\n"), image: try encode(cut.image, format: "png"), imageMimeType: "image/png")
@@ -589,7 +567,7 @@ final class DirectLockedUse {
         let stableFor = try args.double("stable_for") ?? 1
         guard stableFor.isFinite, (0.3...10).contains(stableFor) else { throw ToolError("stable_for must be between 0.3 and 10 seconds.") }
         let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gone = (args.values["gone"] as? Bool) ?? false
+        let gone = args.bool("gone") ?? false
         if gone, text.isEmpty { throw ToolError("gone needs a text to wait for the disappearance of.") }
         let query = args.string("window")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let previous = states[pid].flatMap { valid($0) ? $0 : nil }
@@ -597,7 +575,7 @@ final class DirectLockedUse {
 
         // A region is given in pixels of the latest screenshot of this window.
         var region: CGRect?
-        if args.values["region"] != nil || args.values["x"] != nil {
+        if args.values["region"] != nil {
             guard let previous, previous.window.id == window.id else {
                 throw ToolError("region needs a current get_app_state screenshot of this window (its pixels define the region). Call get_app_state first.")
             }
@@ -611,7 +589,7 @@ final class DirectLockedUse {
         // seldom while nothing changes, and text recognized (on a full
         // resolution capture) only after the pixels changed.
         // SKFIY_WAIT_EVENTS=0 keeps the earlier fixed pace, with every look
-        // at full resolution (for comparison).
+        // at full resolution when waiting for a text (for comparison).
         let paced = ProcessInfo.processInfo.environment["SKFIY_WAIT_EVENTS"] != "0"
         engine.interval = paced || text.isEmpty ? 0.25 : 0.4
         // A text should be seen soon after it appears; stability is judged
@@ -662,8 +640,9 @@ final class DirectLockedUse {
                         let full = paced ? (try? await captureDirectLockedImage(now, maxScale: backingScale(for: now.frame))) ?? (image, geometry) : (image, geometry)
                         let lines = try await TextRecognition.recognizeBoth(full.0, showing: geometry.rect)
                         if paced { lastFresh = Fresh(hires: full.0, geometry: full.1, recognized: TextRecognition.sorted(lines)) }
-                        let inside = pixelRegion == nil ? lines : lines.filter { line in
-                            region.map { _ in self.regionContains(line.frame, region: region!, geometry: previous!.geometry) } ?? true
+                        var inside = lines
+                        if let region {
+                            inside = lines.filter { self.regionContains($0.frame, region: region, geometry: previous!.geometry) }
                         }
                         observation.text = TextRecognition.sorted(inside).map(\.text).joined(separator: "\n")
                         lastText = observation.text
@@ -703,22 +682,14 @@ final class DirectLockedUse {
         }
     }
 
-    /// x/y/width/height (or region [x, y, w, h]) in pixels of the latest screenshot.
+    /// region [x, y, width, height] in pixels of the latest screenshot.
     private func pixelRegion(_ args: Arguments, geometry: CaptureGeometry) throws -> CGRect {
-        var values: [Double] = []
-        if let array = args.values["region"] as? [Any] {
-            values = array.compactMap { ($0 as? NSNumber)?.doubleValue }
-        } else if let x = try args.double("x"), let y = try args.double("y"), let w = try args.double("width"), let h = try args.double("height") {
-            values = [x, y, w, h]
-        }
+        let values = (args.values["region"] as? [Any])?.compactMap { ($0 as? NSNumber)?.doubleValue } ?? []
         guard values.count == 4, values.allSatisfy(\.isFinite) else {
             throw ToolError("region is [x, y, width, height] in pixels of the latest screenshot.")
         }
         let rect = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
-        guard rect.width >= 4, rect.height >= 4, rect.minX >= 0, rect.minY >= 0,
-              rect.maxX <= Double(geometry.pixelWidth), rect.maxY <= Double(geometry.pixelHeight) else {
-            throw ToolError("The region must be at least 4×4 px and inside the latest \(geometry.pixelWidth)×\(geometry.pixelHeight) screenshot.")
-        }
+        try checkRegion(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height, in: geometry)
         return rect
     }
 
@@ -735,7 +706,7 @@ final class DirectLockedUse {
         guard Self.lockedTools.contains(name) else {
             throw ToolError("\(name) is unavailable while macOS remains locked. Use get_app_state and screenshot coordinates with click, scroll, drag, press_key or type_text; unlock manually for AX or foreground actions.")
         }
-        guard try args.elementIndex() == nil, args.values["focus"] as? Bool != true else {
+        guard try args.elementIndex() == nil, args.bool("focus") != true else {
             throw ToolError("Direct locked use accepts screenshot coordinates only, without element_index or focus. Refresh get_app_state.")
         }
         let state = try await target(args)
@@ -810,12 +781,14 @@ final class DirectLockedUse {
                 await Input.hold(chord, seconds: seconds, to: pid)
             } else { await Input.press(chord, repeat: count, to: pid) }
             message = "Sent keyboard events to the app while macOS remained locked. Verify the result in the screenshot."
-        default:
+        case "type_text":
             let text = try args.requiredText("text")
             guard text.count <= 100_000 else { throw ToolError("Text is too long for one operation.") }
             let count = await Input.type(text, to: pid)
             guard count == text.count else { throw ToolError("Text input was interrupted after \(count) characters.") }
             message = "Sent \(count) characters to the app while macOS remained locked."
+        default:
+            throw ToolError("\(name) does not send input; nothing was sent.")
         }
         guard !Input.directLockedAborted else { states[pid] = nil; throw ToolError("Direct input stopped because the lock state or target window changed. Refresh get_app_state.") }
         try check(generation: state.generation)

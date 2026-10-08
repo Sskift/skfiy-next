@@ -8,7 +8,7 @@ extension ComputerUse {
     func flowStart(_ args: Arguments) async throws -> ToolResult {
         let store = FlowStore.standard
         let name = try FlowStore.validName(try args.requiredString("name"))
-        if let existing = try store.load(name), (args.values["restart"] as? Bool) != true {
+        if let existing = try store.load(name), args.bool("restart") != true {
             let status = try await flowStatusText(existing, store: store)
             return ToolResult(text: "Flow \(quote(name, limit: 60)) exists already (started \(ISO8601DateFormatter().string(from: existing.created))); resuming it, nothing was reset (pass restart: true to start over).\n" + status)
         }
@@ -93,8 +93,8 @@ extension ComputerUse {
             updated.updated = Date()
             try store.save(updated)
         }
-        let locked = DirectLockedUse.enabled ? DirectLockedUse.lockState != .unlocked : isScreenLocked()
-        return report.render(updated, checkedAt: Date(), locked: locked)
+        let locked = DirectLockedUse.enabled ? DirectLockedUse.isActive : isScreenLocked()
+        return report.render(updated, locked: locked)
     }
 
     /// Checks a proof against the present. When recording, a file proof

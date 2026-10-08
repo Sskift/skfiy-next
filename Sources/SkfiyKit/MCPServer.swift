@@ -181,7 +181,7 @@ public final class MCPServer {
     /// Asks the user a yes/no question through the client (MCP elicitation).
     /// nil when the client cannot ask or no answer came in time.
     public func confirm(_ message: String, timeout: TimeInterval = 180) async -> Bool? {
-        guard clientCapabilities["elicitation"] != nil else { return nil }
+        guard clientCanAsk else { return nil }
         let schema: [String: Any] = [
             "type": "object",
             "properties": ["allow": ["type": "boolean", "title": "Allow", "default": false]],

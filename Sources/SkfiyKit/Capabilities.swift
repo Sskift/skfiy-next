@@ -116,7 +116,7 @@ struct CapabilityReport {
     }
 
     /// Decides what works for this app right now, and why not otherwise.
-    static func evaluate(_ facts: CapabilityInputs, lockedTools: Set<String> = DirectLockedUse.lockedTools) -> CapabilityReport {
+    static func evaluate(_ facts: CapabilityInputs) -> CapabilityReport {
         let unlocked = facts.session == .unlocked
         let lockedDirect = facts.session == .locked && facts.mode == .direct
         let running = facts.pid != nil
@@ -298,8 +298,7 @@ struct CapabilityReport {
         if usable["browser"] == true { tools += ["browser_*"] }
         if blocker == nil {
             if lockedDirect {
-                for tool in ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom",
-                             "locate"] where lockedTools.contains(tool) {
+                for tool in DirectLockedUse.lockedTools {
                     switch tool {
                     case "click", "scroll", "drag": if usable["pointer"] == true { tools.append(tool) }
                     case "press_key", "type_text": if usable["keyboard"] == true { tools.append(tool) }
@@ -369,12 +368,11 @@ extension ComputerUse {
             facts.frontmost = frontmostProcessID() == pid
             facts.chromium = isChromium(app)
             facts.browserApp = facts.chromium && Self.isBrowserBundle(app.bundleIdentifier)
-            let identifier = app.bundleIdentifier ?? ""
-            if ["com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.securityagent", "io.github.sskift.skfiy.locked-use"].contains(identifier) {
+            if isProtectedInterface(app) {
                 facts.protection = .system
             } else if hostProcesses.contains(pid) {
                 facts.protection = .host
-            } else if isTerminal(bundleID: identifier), ProcessInfo.processInfo.environment["SKFIY_ALLOW_TERMINALS"] != "1" {
+            } else if isTerminal(bundleID: app.bundleIdentifier), ProcessInfo.processInfo.environment["SKFIY_ALLOW_TERMINALS"] != "1" {
                 facts.protection = .terminal
             }
             if facts.session == .locked, facts.mode == .direct {
@@ -464,7 +462,6 @@ extension ComputerUse {
     /// Chromium browsers (which can run the extension), not CEF or Electron apps.
     static func isBrowserBundle(_ bundleID: String?) -> Bool {
         let id = (bundleID ?? "").lowercased()
-        return ["com.google.chrome", "org.chromium.", "com.microsoft.edgemac", "com.brave.browser", "com.vivaldi.vivaldi",
-                "company.thebrowser.", "com.operasoftware.", "ai.perplexity.comet"].contains { id.hasPrefix($0) }
+        return chromiumBrowserPrefixes.contains { id.hasPrefix($0) }
     }
 }

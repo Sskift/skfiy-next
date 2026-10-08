@@ -37,16 +37,20 @@ public struct CaptureGeometry: Equatable, Sendable {
     }
 }
 
-/// Downscale factor that keeps a point-resolution capture inside the model's
-/// image limits, so the model never sees a server-side-resized image whose
-/// coordinates would no longer match ours. Never upscales.
+/// The largest image the model takes without resizing it: a resized image's
+/// coordinates would no longer match ours.
+enum ModelImage {
+    static let longEdge = 1_568.0
+    static let pixels = 1_150_000.0
+}
+
 /// Pixels per point for a capture of `size` points: at most `maxScale` (1 for
 /// regular screenshots, the display's backing scale for zooms), within the
-/// size limits the model handles well.
-public func captureScale(for size: CGSize, maxLongEdge: Double = 1_568, maxPixels: Double = 1_150_000, maxScale: Double = 1) -> Double {
+/// model's image limits.
+public func captureScale(for size: CGSize, maxScale: Double = 1) -> Double {
     let width = max(Double(size.width), 1)
     let height = max(Double(size.height), 1)
-    return min(maxScale, maxLongEdge / max(width, height), (maxPixels / (width * height)).squareRoot())
+    return min(maxScale, ModelImage.longEdge / max(width, height), (ModelImage.pixels / (width * height)).squareRoot())
 }
 
 struct Screenshot {

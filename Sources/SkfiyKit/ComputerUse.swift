@@ -21,7 +21,7 @@ public struct ToolResult {
 struct AppSession {
     var elements: [AXUIElement]
     var geometry: CaptureGeometry? {
-        didSet { if geometry != oldValue || geometry != nil { captured = geometry == nil ? nil : Date() } }
+        didSet { if geometry != nil { captured = Date() } else if oldValue != nil { captured = nil } }
     }
     /// The window get_app_state showed, when it was not the focused one.
     var window: AXUIElement?
@@ -107,6 +107,12 @@ public final class ComputerUse {
     public func disconnect() {
         lockedUse?.disconnect()
         _ = directLockedUse.status(end: true)
+        forgetApps()
+    }
+
+    /// Element indices, earlier looks, and what was enabled or approved per
+    /// process: none of it carries over a disconnect or a lock change.
+    private func forgetApps() {
         sessions.removeAll()
         stateHistory.removeAll()
         accessibilityEnabled.removeAll()
@@ -129,12 +135,7 @@ public final class ComputerUse {
     /// Runs a tool and records what it changed in the action log.
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         if DirectLockedUse.enabled {
-            if directLockedUse.observeTransition() {
-                sessions.removeAll()
-                stateHistory.removeAll()
-                accessibilityEnabled.removeAll()
-                focusApproved.removeAll()
-            }
+            if directLockedUse.observeTransition() { forgetApps() }
             if name == "locked_use_status" { return directLockedUse.status() }
             if name == "locked_use_end" { return directLockedUse.status(end: true) }
         }
@@ -199,8 +200,7 @@ public final class ComputerUse {
 
     func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
-        if DirectLockedUse.enabled, DirectLockedUse.lockState != .unlocked,
-           name == "type_text" || name == "press_key" || name == "set_value" {
+        if DirectLockedUse.isActive, name == "type_text" || name == "press_key" || name == "set_value" {
             lastInputWasSecret = true
         }
         if EmergencyStop.isStopped, !["list_apps", "get_desktop_status", "get_app_capabilities"].contains(name) {
@@ -211,8 +211,7 @@ public final class ComputerUse {
             if Self.inputTools.contains(name) || name == "scroll" {
                 try refuseProtectedTarget(args, scrolling: name == "scroll")
             }
-            if DirectLockedUse.enabled, Self.nativeSessionTools.contains(name) || name == "read_clipboard",
-               DirectLockedUse.lockState != .unlocked {
+            if DirectLockedUse.isActive, Self.nativeSessionTools.contains(name) || name == "read_clipboard" {
                 // No foreground preservation, AX fallback, menu emulation, or
                 // clipboard logic is entered by this strictly scoped path.
                 if name == "scroll" { try refuseProtectedTarget(args) }
@@ -341,8 +340,7 @@ public final class ComputerUse {
     private func refuseProtectedTarget(_ args: Arguments, scrolling: Bool = false) throws {
         guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return }
         let name = app.localizedName ?? query
-        if ["com.apple.loginwindow", "com.apple.SecurityAgent", "com.apple.securityagent",
-            "io.github.sskift.skfiy.locked-use"].contains(app.bundleIdentifier ?? "") {
+        if isProtectedInterface(app) {
             throw ToolError("\(name) is a system authentication or locked-use protection interface. skfiy never sends it agent-directed input; unlock manually if needed.")
         }
         // Scrolling ordinary terminals/host windows has always been supported.
@@ -360,10 +358,7 @@ public final class ComputerUse {
     /// Opens a document or folder the way a double-click would, but without
     /// activating anything, so no Open panel is needed.
     func openFile(_ args: Arguments) async throws -> ToolResult {
-        let path = (try args.requiredString("path").trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-        guard path.hasPrefix("/") else {
-            throw ToolError("\"path\" must be an absolute path.")
-        }
+        let path = try args.absolutePath("path")
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
             throw ToolError("Nothing exists at \(path).")
@@ -378,7 +373,7 @@ public final class ComputerUse {
             case .running(let app):
                 guard let bundle = app.bundleURL else { throw ToolError("\(query) has no app bundle to open files with.") }
                 appURL = bundle
-            case .installed(let bundle, _):
+            case .installed(let bundle):
                 appURL = bundle
             }
         } else {
@@ -433,11 +428,7 @@ public final class ComputerUse {
         }
         let backing = backingScale(for: geometry.rect)
         let native = backing / geometry.scale
-        let requested = try args.double("scale")
-        if let requested, !requested.isFinite || requested < 1 || requested > 8 {
-            throw ToolError("scale must be between 1 and 8 (zoom pixels per screenshot pixel).")
-        }
-        let factor = ZoomMapping.factor(requested: requested, native: native, region: region.size)
+        let factor = try ZoomMapping.factor(args, native: native, region: region)
         let topLeft = geometry.toScreen(x: region.minX, y: region.minY)
         let bottomRight = geometry.toScreen(x: region.maxX, y: region.maxY)
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
@@ -450,20 +441,9 @@ public final class ComputerUse {
         let mapping = ZoomMapping(id: "z\(zoomCount)", region: cut.shown, zoomWidth: cut.image.width, zoomHeight: cut.image.height,
                                   screenshot: geometry, screenshotTaken: taken)
         sessions[pid]?.zoom = mapping
-        let detail = factor > native + 0.01 ? "upscaled beyond the display's \(formatNumber(native))× detail" : "\(formatNumber((factor / native * 100).rounded()))% of the display's detail"
-        var lines = [
-            "Zoom \(mapping.id): x=\(formatNumber(cut.shown.minX.rounded())) y=\(formatNumber(cut.shown.minY.rounded())) w=\(formatNumber(cut.shown.width.rounded())) h=\(formatNumber(cut.shown.height.rounded())) px of the latest screenshot, as \(mapping.zoomWidth)×\(mapping.zoomHeight) px (\(formatNumber((factor * 100).rounded() / 100))×; \(detail)).",
-            "Coordinates: \(mapping.formula). Or pass zoom_id \"\(mapping.id)\" with x/y in this zoom's pixels to click, scroll or drag, until the next screenshot of this app."
-        ]
-        if (args.values["ocr"] as? Bool) ?? false {
-            // The zoom image itself: tiny glyphs read better enlarged.
-            let recognized = TextRecognition.sorted(try await TextRecognition.recognize(cut.image, showing: rect))
-            lines.append(recognized.isEmpty ? "Text recognized in the zoom: none." : "Text recognized in the zoom (zoom x/y, then the same point in the screenshot):")
-            for text in recognized.prefix(100) {
-                let pixel = geometry.toPixels(CGPoint(x: text.frame.midX, y: text.frame.midY))
-                let zoomed = mapping.toZoom(pixel)
-                lines.append("  \(quote(text.text, limit: 100)) zoom x=\(Int(zoomed.x.rounded())) y=\(Int(zoomed.y.rounded())) → screenshot x=\(Int(pixel.x.rounded())) y=\(Int(pixel.y.rounded()))")
-            }
+        var lines = mapping.lines(factor: factor, native: native, lasting: ", until the next screenshot of this app.")
+        if args.bool("ocr") ?? false {
+            lines += try await mapping.recognizedText(in: cut.image, showing: rect)
         }
         return ToolResult(text: lines.joined(separator: "\n"), image: try encode(cut.image, format: "png"), imageMimeType: "image/png")
     }
@@ -488,12 +468,12 @@ public final class ComputerUse {
             throw ToolError("stable_for must be between 0.3 and 10 seconds.")
         }
         let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gone = (args.values["gone"] as? Bool) ?? false
+        let gone = args.bool("gone") ?? false
         if gone, text.isEmpty {
             throw ToolError("gone needs a text to wait for the disappearance of.")
         }
         if args.values["region"] != nil {
-            throw ToolError("region applies while macOS is locked (pixels); unlocked waits watch the accessibility tree. Use find or a text instead.")
+            throw ToolError("region applies while macOS is locked (pixels); unlocked waits watch the accessibility tree. Wait for a text instead, or without one until the window stops changing.")
         }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 2)
@@ -546,7 +526,7 @@ public final class ComputerUse {
                 }
                 sawWindow = true
                 var current = snapshot.text
-                if (args.values["ocr"] as? Bool) ?? snapshot.opaque,
+                if args.bool("ocr") ?? snapshot.opaque,
                    let region = appRegion(pid: app.processIdentifier, focusedWindow: snapshot.focusedWindowFrame),
                    let lines = try? await self.recognizeText(pid: app.processIdentifier, region: region) {
                     current += "\n" + lines.map(\.text).joined(separator: "\n")
@@ -575,15 +555,12 @@ public final class ComputerUse {
     func fileDialog(_ args: Arguments) async throws -> ToolResult {
         let (app, _) = try target(args)
         try checkInputTarget(app)
-        let path = (try args.requiredString("path").trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-        guard path.hasPrefix("/") else {
-            throw ToolError("\"path\" must be an absolute path.")
-        }
+        let path = try args.absolutePath("path")
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         guard let panel = FilePanel.find(in: appElement) else {
             throw ToolError("\(app.localizedName ?? "The app") is not showing an Open or Save panel. Open one first (its menu item or button), or use open_file / save_document, which need no panel.")
         }
-        let overwrite = (args.values["overwrite"] as? Bool) ?? false
+        let overwrite = args.bool("overwrite") ?? false
         let summary = try await panel.choose(URL(fileURLWithPath: path), overwrite: overwrite, in: appElement)
         return try await afterAction(app, summary)
     }
@@ -595,9 +572,7 @@ public final class ComputerUse {
     /// client, in a quiet moment, with their front app and top window put back.
     func runInFront(_ args: Arguments) async throws -> ToolResult {
         let query = try args.requiredString("app")
-        guard case .running(let app) = try directory.resolve(query) else {
-            throw ToolError("\(query) is not running.")
-        }
+        let app = try await runningApp(query, launch: false)
         try checkInputTarget(app)
         let pid = app.processIdentifier
         let name = app.localizedName ?? query
@@ -728,7 +703,10 @@ public final class ComputerUse {
                 throw ToolError("\(name) lost the front, or has no window at that point, so nothing was clicked.")
             }
             // Posted to the app, now active, so the user's cursor stays where it is.
-            await Input.click(at: clickPoint, pid: pid, windowID: window, button: .left, count: 1, modifiers: [], chromium: isChromium(app))
+            guard await Input.click(at: clickPoint, pid: pid, windowID: window, button: .left, count: 1, modifiers: [], chromium: isChromium(app)) else {
+                await restore()
+                throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
+            }
             how = "clicked there"
         } else if let menuElement, let menuPath {
             do {
@@ -738,7 +716,11 @@ public final class ComputerUse {
                 throw error
             }
         } else if let chord, let item = menuItem(for: chord, pid: pid), item.enabled {
-            _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
+            if guardedAXPerformAction(item.element, kAXPressAction as CFString) == .failure, let refusal = axMutationRefusal() {
+                if let saved, system.changeCount == lent { system.write(saved) }
+                await restore()
+                throw ToolError(refusal)
+            }
             how = "ran the menu item \(quote(item.title, limit: 60))"
         } else if let chord, front() == pid {
             // It is the front app now, so a keystroke like a real one reaches it.
@@ -775,6 +757,7 @@ public final class ComputerUse {
         let appElement = AXUIElementCreateApplication(pid)
         let opener = ["AXMenuButton", "AXPopUpButton"].contains(element.string(kAXRoleAttribute) ?? "") ? kAXPressAction : kAXShowMenuAction
         let status = guardedAXPerformAction(element, opener as CFString)
+        try throwIfRefused(status)
         guard status == .success || status == .cannotComplete else {
             throw ToolError("\(describe(element)) has no menu to open.")
         }
@@ -809,7 +792,7 @@ public final class ComputerUse {
                     close()
                     throw ToolError("\(quote(titles[index], limit: 60)) is disabled in that menu, so nothing was chosen.")
                 }
-                _ = guardedAXPerformAction(item, kAXPressAction as CFString)
+                try throwIfRefused(guardedAXPerformAction(item, kAXPressAction as CFString))
                 return "chose \(quote(path.dropLast().map { $0 + " › " }.joined() + titles[index], limit: 80)) from the menu of \(describe(element))"
             }
             guard let submenu = item.elements(kAXChildrenAttribute).first(where: { $0.string(kAXRoleAttribute) == kAXMenuRole }) else {
@@ -828,19 +811,14 @@ public final class ComputerUse {
     /// `save … in`, which needs no Save panel and no front app.
     func saveDocument(_ args: Arguments) async throws -> ToolResult {
         let query = try args.requiredString("app")
-        guard case .running(let app) = try directory.resolve(query) else {
-            throw ToolError("\(query) is not running.")
-        }
-        let path = (try args.requiredString("path").trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-        guard path.hasPrefix("/") else {
-            throw ToolError("\"path\" must be an absolute path.")
-        }
+        let app = try await runningApp(query, launch: false)
+        let path = try args.absolutePath("path")
         var isDirectory: ObjCBool = false
         let parent = (path as NSString).deletingLastPathComponent
         guard FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw ToolError("The folder \(parent) does not exist.")
         }
-        let overwrite = (args.values["overwrite"] as? Bool) ?? false
+        let overwrite = args.bool("overwrite") ?? false
         if FileManager.default.fileExists(atPath: path), !overwrite {
             throw ToolError("\(path) already exists; pass overwrite: true to replace it, or choose another path.")
         }
@@ -885,7 +863,7 @@ public final class ComputerUse {
                     ? "\(why) It has no Save menu item that opens a Save panel. Tell the user what is left to do."
                     : "\(why) Its \(quote(candidates[0].title, limit: 40)) menu item is disabled while it is in the background. Open the Save panel with run_in_front (key \"\(shortcut)\", which asks the user), then call file_dialog with this path.")
             }
-            _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
+            try throwIfRefused(guardedAXPerformAction(item.element, kAXPressAction as CFString))
             for _ in 0..<20 where FilePanel.find(in: appElement) == nil {
                 await Input.pause(0.15)
             }
@@ -1033,7 +1011,7 @@ public final class ComputerUse {
         // accessibility, or on request (canvas, images). Unchanged pixels
         // read the same: the last recognition is reused.
         var recognizedLines: [String] = []
-        if let screenshot, (args.values["ocr"] as? Bool) ?? snapshot.opaque {
+        if let screenshot, args.bool("ocr") ?? snapshot.opaque {
             if pixelsSame, let reused = base?.textLines, !reused.isEmpty {
                 recognizedLines = reused
             } else {
@@ -1143,7 +1121,8 @@ public final class ComputerUse {
         var elements: [AXUIElement]
         var focusedWindowFrame: CGRect?
         var chosenWindow: AXUIElement?
-        /// All of the app's windows: id (or title) -> title.
+        /// All of the app's windows: window id (or "title:" and the title,
+        /// for a window without one) -> title.
         var windows: [String: String] = [:]
         /// The window publishes no accessibility elements.
         var opaque = false
@@ -1158,8 +1137,8 @@ public final class ComputerUse {
             kAXMenuBarAttribute, kAXChildrenAttribute, kAXFocusedUIElementAttribute
         ])
         let windows = (values[kAXWindowsAttribute] as? [AXUIElement]) ?? []
-        var focusedWindow = asElement(values[kAXFocusedWindowAttribute])
-            ?? asElement(values[kAXMainWindowAttribute])
+        var focusedWindow = axElement(values[kAXFocusedWindowAttribute])
+            ?? axElement(values[kAXMainWindowAttribute])
             ?? windows.first
         var chosenWindow: AXUIElement?
         if let windowQuery {
@@ -1202,7 +1181,7 @@ public final class ComputerUse {
 
         // Focused window first: it is what the task is about and survives truncation.
         var opaqueWindow = false
-        let focusedElement = asElement(values[kAXFocusedUIElementAttribute])
+        let focusedElement = axElement(values[kAXFocusedUIElementAttribute])
         if let focusedWindow, var node = builder.build(focusedWindow, clip: clip) {
             let focusedRef = focusedElement.flatMap { focused in
                 builder.elements.firstIndex { CFEqual($0, focused) }
@@ -1224,7 +1203,7 @@ public final class ComputerUse {
         }
 
         // Menu bar: one compact line, plus the contents of an open menu.
-        if let menuBar = asElement(values[kAXMenuBarAttribute]) {
+        if let menuBar = axElement(values[kAXMenuBarAttribute]) {
             var entries: [String] = []
             var openMenus: [(String, AXUIElement)] = []
             for item in menuBar.elements(kAXChildrenAttribute) {
@@ -1254,7 +1233,7 @@ public final class ComputerUse {
             }
         }
 
-        // Other windows, so the model can switch with AXRaise.
+        // Other windows, so the model can inspect one with get_app_state(window:).
         // AXWindows can include non-windows, e.g. Finder's desktop scroll area.
         let otherWindows = windows.filter { window in
             window.string(kAXRoleAttribute) == kAXWindowRole
@@ -1402,9 +1381,11 @@ public final class ComputerUse {
 
     // MARK: - Actions
     //
-    // Nothing here activates the target, raises a window, moves the user's
-    // cursor, or touches the clipboard. Accessibility is tried first; pointer
-    // and keyboard events are posted to the target process only.
+    // Nothing here activates the target, raises a window, or moves the user's
+    // cursor. Clipboard shortcuts that need the app's own Copy or Paste lend
+    // it the user's clipboard for a moment and put it straight back.
+    // Accessibility is tried first; pointer and keyboard events are posted to
+    // the target process only.
 
     static let pressRoles: Set<String> = [
         "AXButton", "AXMenuItem", "AXMenuBarItem", "AXCheckBox", "AXRadioButton",
@@ -1444,8 +1425,6 @@ public final class ComputerUse {
                 + (element.map { " on \(describe($0))" } ?? "")
         }
 
-        // Opening a background app's menu would draw it over the user's screen;
-        // list the items instead, ready to be pressed by index.
         // A status item's menu would open over the user's screen; its items
         // can only be listed when the app built the menu in advance.
         if let element, element.string(kAXRoleAttribute) == "AXMenuBarItem",
@@ -1454,7 +1433,10 @@ public final class ComputerUse {
            element.elements(kAXChildrenAttribute).first?.string(kAXRoleAttribute) != kAXMenuRole {
             throw ToolError("\(described) is a status item in the menu bar; clicking it would open its menu over the user's screen, and the app does not expose the menu in advance, so it was not clicked. Use the app's own windows or menu bar instead.")
         }
-        if let element, button == .left, count == 1, frontmostProcessID() != pid,
+        let inBackground = frontmostProcessID() != pid
+        // Opening a background app's menu would draw it over the user's screen;
+        // list the items instead, ready to be pressed by index.
+        if let element, button == .left, count == 1, inBackground,
            ["AXMenuBarItem", "AXMenuItem"].contains(element.string(kAXRoleAttribute) ?? ""),
            let menu = element.elements(kAXChildrenAttribute).first,
            menu.string(kAXRoleAttribute) == kAXMenuRole {
@@ -1465,14 +1447,14 @@ public final class ComputerUse {
             return ToolResult(text: ([intro] + lines).joined(separator: "\n"))
         }
 
-        if let element, button == .left, count == 1, frontmostProcessID() != pid,
+        if let element, button == .left, count == 1, inBackground,
            element.string(kAXRoleAttribute) == "AXPopUpButton" {
             let options = popupOptions(element)
             let current = element.string(kAXValueAttribute).map { " Current value: \(quote($0, limit: 60))." } ?? ""
             let listing = options.isEmpty ? "" : " Options: " + options.map { quote($0.title, limit: 40) }.joined(separator: ", ") + "."
             return ToolResult(text: "\(described) is a pop-up menu; opening it would draw over the user's screen, so it was not opened.\(current)\(listing) Choose an option with set_value(element_index, value: \"<option text>\").")
         }
-        if frontmostProcessID() != pid {
+        if inBackground {
             if button == .right || modifiers.contains(.control) && button == .left {
                 throw ToolError(Self.backgroundMenuRefusal)
             }
@@ -1483,7 +1465,7 @@ public final class ComputerUse {
         if let element, element.string(kAXRoleAttribute) == "AXMenuItem", element.bool(kAXEnabledAttribute) == false {
             throw ToolError("That menu item is disabled. A background app keeps its menus as they were when it was last in front, so items that act on the current document or selection stay disabled; use the equivalent control in the window or a keyboard shortcut instead.")
         }
-        if let element, let how = accessibilityClick(element, at: point, button: button, count: count, modifiers: modifiers, exact: point == nil) {
+        if let element, let how = try accessibilityClick(element, at: point, button: button, count: count, modifiers: modifiers, exact: point == nil) {
             return try await afterAction(app, "Clicked \(described): \(how).")
         }
         let target: CGPoint
@@ -1495,13 +1477,14 @@ public final class ComputerUse {
             throw ToolError("Nothing to click.")
         }
         let how = try await pointerClick(app, at: target, button: button, count: count, modifiers: modifiers,
-                                         focus: (args.values["focus"] as? Bool) ?? false)
+                                         focus: args.bool("focus") ?? false)
         return try await afterAction(app, "Clicked \(described): \(how).")
     }
 
     /// Performs a click semantically. Returns what was done, or nil when only a
     /// pointer event can do it. `exact` means the element was chosen by index
-    /// rather than hit-tested, so its ancestors are not candidates.
+    /// rather than hit-tested, so its ancestors are not candidates. A refused
+    /// action throws: no other way of clicking is tried then.
     private func accessibilityClick(
         _ element: AXUIElement,
         at point: CGPoint?,
@@ -1509,13 +1492,13 @@ public final class ComputerUse {
         count: Int,
         modifiers: Modifiers,
         exact: Bool
-    ) -> String? {
+    ) throws -> String? {
         guard modifiers.isEmpty else { return nil }
         let role = element.string(kAXRoleAttribute) ?? ""
         switch (button, count) {
         case (.left, 1):
             if Self.textRoles.contains(role) {
-                _ = try? element.set(kAXFocusedAttribute, kCFBooleanTrue)
+                try throwIfRefused(guardedAXSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue))
                 if let pid = element.pid { typingTargets[pid] = element }
                 // A click lands the caret under the pointer; by index, at the end.
                 let length = (element.string(kAXValueAttribute) as NSString?)?.length ?? 0
@@ -1531,6 +1514,7 @@ public final class ComputerUse {
             }) ?? (element.actionNames().contains(kAXPressAction) && !isInWebContent(element) ? element : nil) {
                 let name = describe(pressable)
                 let status = guardedAXPerformAction(pressable, kAXPressAction as CFString)
+                try throwIfRefused(status)
                 // Menus and pop-ups run a tracking loop, so AXPress often times out while one opens.
                 if status == .success || status == .cannotComplete {
                     return "pressed \(name) (accessibility)"
@@ -1538,13 +1522,17 @@ public final class ComputerUse {
             }
             if let row = ancestor(of: element, levels: exact ? 0 : 3, where: {
                 $0.string(kAXRoleAttribute) == "AXRow" && $0.isSettable(kAXSelectedAttribute)
-            }), (try? row.set(kAXSelectedAttribute, kCFBooleanTrue)) != nil {
-                return "selected the row (accessibility)"
+            }) {
+                let status = guardedAXSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+                try throwIfRefused(status)
+                if status == .success { return "selected the row (accessibility)" }
             }
         case (.left, 2):
             if let openable = ancestor(of: element, levels: exact ? 1 : 3, where: { $0.actionNames().contains("AXOpen") }) {
                 let name = describe(openable)
-                if (try? openable.perform("AXOpen")) != nil {
+                let status = guardedAXPerformAction(openable, "AXOpen" as CFString)
+                try throwIfRefused(status)
+                if status == .success {
                     return "opened \(name) (accessibility)"
                 }
             }
@@ -1552,6 +1540,7 @@ public final class ComputerUse {
             if let target = ancestor(of: element, levels: exact ? 0 : 2, where: { $0.actionNames().contains(kAXShowMenuAction) }) {
                 let name = describe(target)
                 let status = guardedAXPerformAction(target, kAXShowMenuAction as CFString)
+                try throwIfRefused(status)
                 if status == .success || status == .cannotComplete {
                     return "opened the context menu of \(name) (accessibility)"
                 }
@@ -1597,7 +1586,10 @@ public final class ComputerUse {
                 note = " Focus needs the user's approval, which this client cannot ask for."
             }
         }
-        await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
+        // Input sends nothing once stopped, cancelled or locked: that is no click.
+        guard await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium) else {
+            throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
+        }
         let inFront = " this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
         if isInWebContentAt(pid: pid, point: point) {
             // Chromium takes a click during a moment of focus; WebKit only in the front app.
@@ -1651,6 +1643,7 @@ public final class ComputerUse {
             throw ToolError(Self.backgroundMenuRefusal)
         }
         let status = guardedAXPerformAction(element, action as CFString)
+        try throwIfRefused(status)
         if status != .success, status != .cannotComplete {
             try check(status, "\(action) on element \(index)")
         }
@@ -1762,8 +1755,9 @@ public final class ComputerUse {
             throw ToolError("Pass element_index (preferred) or x/y.")
         }
 
-        // Whole pages on a native scroll area: its page actions work in the background.
-        // No AXScroll*ByPage: TextEdit reports failure yet scrolls, the wrong way.
+        // Wheel events, a page being about 85% of what shows of the element
+        // (or of the window), at least 40 pt. Not AXScroll*ByPage: TextEdit
+        // reports failure for it yet scrolls, the wrong way.
         try checkPointerTarget(app)
         let area = element?.frame.map { frame -> CGRect in
             let visible = frame.intersection(session.geometry?.rect ?? frame)
@@ -1793,7 +1787,7 @@ public final class ComputerUse {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at the start point.")
         }
         var how = "background mouse events"
-        let focus = (args.values["focus"] as? Bool) ?? false
+        let focus = args.bool("focus") ?? false
         if frontmostProcessID() != pid, briefFocusEnabled || focus, await briefFocusPermission(app) == true, await waitForUserIdle(),
            await Input.withBriefFocus(pid: pid, windowID: window, { await Input.drag(from: start, to: end, pid: pid, windowID: window) }) {
             how = "mouse events while the app had keyboard focus for a moment"
@@ -1835,6 +1829,7 @@ public final class ComputerUse {
                     var pressed = 0
                     for _ in 0..<count {
                         let status = guardedAXPerformAction(item.element, kAXPressAction as CFString)
+                        try throwIfRefused(status)
                         guard status == .success || status == .cannotComplete else { break }
                         pressed += 1
                     }
@@ -1877,8 +1872,7 @@ public final class ComputerUse {
         let focused = focusedElement(pid) ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
         lastInputWasSecret = focused?.string(kAXSubroleAttribute) == "AXSecureTextField"
         var note = ""
-        if let focused, !Self.textRoles.contains(focused.string(kAXRoleAttribute) ?? ""),
-           focused.value(kAXSelectedTextRangeAttribute) == nil {
+        if let focused, !isTextLike(focused) {
             note = " Keyboard focus is on \(describe(focused)), not a text field; click the field first if the text went missing."
         } else if focused == nil {
             note = " The app reports no focused element; click the field first if the text went missing."
@@ -1904,12 +1898,9 @@ public final class ComputerUse {
                 if let inserted, after == inserted {
                     // The key did not arrive: take the space back through
                     // accessibility too, and say the app may not see an edit.
-                    if let value = focused.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() {
-                        var range = CFRange(location: 0, length: 0)
-                        AXValueGetValue(value as! AXValue, .cfRange, &range)
-                        if range.location > 0, (try? setSelection(focused, CFRange(location: range.location - 1, length: 1))) != nil {
-                            try? focused.set(kAXSelectedTextAttribute, "" as CFString)
-                        }
+                    if let range = selectedRange(focused), range.location > 0,
+                       (try? setSelection(focused, CFRange(location: range.location - 1, length: 1))) != nil {
+                        try? focused.set(kAXSelectedTextAttribute, "" as CFString)
                     }
                     return try await afterAction(app, "Entered \(text.count) character(s) (accessibility). The app may not count text entered this way as a change; save explicitly before closing the document.\(note)")
                 }
@@ -1932,10 +1923,7 @@ public final class ComputerUse {
             }
             if focused.isSettable(kAXValueAttribute) {
                 let current = before as NSString
-                var range = CFRange(location: current.length, length: 0)
-                if let value = focused.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() {
-                    AXValueGetValue(value as! AXValue, .cfRange, &range)
-                }
+                let range = selectedRange(focused) ?? CFRange(location: current.length, length: 0)
                 let location = min(max(0, range.location), current.length)
                 let length = min(max(0, range.length), current.length - location)
                 let updated = current.replacingCharacters(in: NSRange(location: location, length: length), with: text)
@@ -1953,7 +1941,8 @@ public final class ComputerUse {
     /// A web field's value as accessibility reports it after a change:
     /// Chromium updates its tree asynchronously, so a read right after
     /// setting can still show the old value for a moment.
-    func settledValue(_ element: AXUIElement, expecting: String? = nil, changedFrom: String? = nil, timeout: Double = 0.6) async -> String? {
+    func settledValue(_ element: AXUIElement, expecting: String? = nil, changedFrom: String? = nil) async -> String? {
+        let timeout = 0.6
         let started = Date()
         var value = element.string(kAXValueAttribute)
         while Date().timeIntervalSince(started) < timeout {
@@ -2004,16 +1993,23 @@ public final class ComputerUse {
         let selected = { (popup.string(kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespaces).lowercased() == wanted }
         let options = popupOptions(popup)
         if let item = options.first(where: { $0.title.lowercased() == wanted })
-            ?? options.first(where: { $0.title.lowercased().contains(wanted) }),
-           (try? item.element.perform(kAXPressAction)) != nil {
-            await Input.pause(0.2)
-            if selected() || popup.string(kAXValueAttribute) == nil {
-                return "pressed the option through accessibility"
+            ?? options.first(where: { $0.title.lowercased().contains(wanted) }) {
+            let status = guardedAXPerformAction(item.element, kAXPressAction as CFString)
+            try throwIfRefused(status)
+            if status == .success {
+                await Input.pause(0.2)
+                if selected() || popup.string(kAXValueAttribute) == nil {
+                    return "pressed the option through accessibility"
+                }
             }
         }
-        if popup.isSettable(kAXValueAttribute), (try? popup.set(kAXValueAttribute, option as CFString)) != nil {
-            await Input.pause(0.2)
-            if selected() { return "set through accessibility" }
+        if popup.isSettable(kAXValueAttribute) {
+            let status = guardedAXSetAttributeValue(popup, kAXValueAttribute as CFString, option as CFString)
+            try throwIfRefused(status)
+            if status == .success {
+                await Input.pause(0.2)
+                if selected() { return "set through accessibility" }
+            }
         }
         try checkInputTarget(app)
         _ = try? popup.set(kAXFocusedAttribute, kCFBooleanTrue)
@@ -2042,7 +2038,7 @@ public final class ComputerUse {
         return false
     }
 
-    private func requireAccessibility() throws {
+    func requireAccessibility() throws {
         guard AXIsProcessTrusted() else {
             throw ToolError("Accessibility permission is not granted to the app hosting skfiy (e.g. your terminal). Run `skfiy doctor`, grant it in System Settings → Privacy & Security → Accessibility, then restart that app.")
         }
@@ -2080,11 +2076,13 @@ public final class ComputerUse {
         }
     }
 
+    /// The running app `query` names; an app that is only installed is
+    /// launched in the background when `launch`, else refused.
     private func runningApp(_ query: String, launch: Bool) async throws -> NSRunningApplication {
         switch try directory.resolve(query) {
         case .running(let app):
             return app
-        case .installed(let url, _):
+        case .installed(let url):
             guard launch else {
                 throw ToolError("\(query) is not running.")
             }
@@ -2129,16 +2127,10 @@ public final class ComputerUse {
         }
     }
 
+    /// Whether `root` or one of the first elements below it is web content.
     private func containsWebArea(_ root: AXUIElement, budget: Int) -> Bool {
-        var queue = [root]
-        var visited = 0
-        while !queue.isEmpty, visited < budget {
-            let element = queue.removeFirst()
-            visited += 1
-            if element.string(kAXRoleAttribute) == "AXWebArea" { return true }
-            queue.append(contentsOf: element.elements(kAXChildrenAttribute))
-        }
-        return false
+        let isWeb = { (element: AXUIElement) in element.string(kAXRoleAttribute) == "AXWebArea" }
+        return isWeb(root) || root.descendant(limit: budget - 1, where: isWeb) != nil
     }
 
     /// Settles, then returns a fresh screenshot and remaps coordinates to it.
@@ -2171,6 +2163,16 @@ public final class ComputerUse {
 
     private func focusedElement(_ pid: pid_t) -> AXUIElement? {
         AXUIElementCreateApplication(pid).element(kAXFocusedUIElementAttribute)
+    }
+
+    /// A text field, or anything else with a text selection.
+    private func isTextLike(_ element: AXUIElement) -> Bool {
+        Self.textRoles.contains(element.string(kAXRoleAttribute) ?? "") || element.value(kAXSelectedTextRangeAttribute) != nil
+    }
+
+    /// The app's focused element, when it takes text.
+    private func focusedTextElement(_ pid: pid_t) -> AXUIElement? {
+        focusedElement(pid).flatMap { isTextLike($0) ? $0 : nil }
     }
 
     /// The app's own element under a screen point; works for covered windows.
@@ -2233,6 +2235,13 @@ public final class ComputerUse {
         try? setSelection(element, CFRange(location: location, length: 0))
     }
 
+    /// The selected range of a text element, when it reports one.
+    private func selectedRange(_ element: AXUIElement) -> CFRange? {
+        guard let value = element.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var range = CFRange(location: 0, length: 0)
+        return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
+    }
+
     private func setSelection(_ element: AXUIElement, _ range: CFRange) throws {
         var selection = range
         guard let value = AXValueCreate(.cfRange, &selection) else {
@@ -2248,10 +2257,7 @@ public final class ComputerUse {
     /// moment and put straight back.
     private func clipboardShortcut(_ chord: KeyChord, pid: pid_t) async throws -> String? {
         guard chord.modifiers == .command, let character = chord.baseCharacter, "cxv".contains(character) else { return nil }
-        let focused = AXUIElementCreateApplication(pid).element(kAXFocusedUIElementAttribute)
-        let text = focused.flatMap { element in
-            Self.textRoles.contains(element.string(kAXRoleAttribute) ?? "") || element.value(kAXSelectedTextRangeAttribute) != nil ? element : nil
-        }
+        let text = focusedTextElement(pid)
         switch character {
         case "c", "x":
             guard let text else {
@@ -2291,7 +2297,7 @@ public final class ComputerUse {
         let system = SystemClipboard()
         let saved = system.read()
         let before = system.changeCount
-        _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
+        try throwIfRefused(guardedAXPerformAction(item.element, kAXPressAction as CFString))
         guard await system.waitForChange(from: before) else {
             throw ToolError("Pressed \(quote(item.title, limit: 30)), but the app copied nothing (is something selected?). The user's clipboard was not touched.")
         }
@@ -2315,7 +2321,10 @@ public final class ComputerUse {
         let saved = system.read()
         system.write(contents)
         let lent = system.changeCount
-        _ = guardedAXPerformAction(item.element, kAXPressAction as CFString)
+        if guardedAXPerformAction(item.element, kAXPressAction as CFString) == .failure, let refusal = axMutationRefusal() {
+            if system.changeCount == lent { system.write(saved) }
+            throw ToolError(refusal)
+        }
         await Input.pause(0.5)  // the app reads the clipboard while pasting
         let putBack = system.changeCount == lent
         if putBack {
@@ -2391,13 +2400,8 @@ public final class ComputerUse {
 
     private func emulateShortcut(_ chord: KeyChord, pid: pid_t) throws -> String? {
         guard chord.modifiers == .command, let character = chord.baseCharacter else { return nil }
-        let appElement = AXUIElementCreateApplication(pid)
-        let focused = appElement.element(kAXFocusedUIElementAttribute)
-        let text = focused.flatMap { element -> AXUIElement? in
-            Self.textRoles.contains(element.string(kAXRoleAttribute) ?? "")
-                || element.value(kAXSelectedTextRangeAttribute) != nil ? element : nil
-        }
-        let window = appElement.element(kAXFocusedWindowAttribute)
+        let text = focusedTextElement(pid)
+        let window = AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
         switch character {
         case "a":
             guard let text else { return nil }
@@ -2466,18 +2470,10 @@ public final class ComputerUse {
     }
 
     func screenPoint(_ args: Arguments, _ xKey: String, _ yKey: String, session: AppSession) throws -> CGPoint {
-        if let zoomID = args.string("zoom_id")?.trimmingCharacters(in: .whitespaces), !zoomID.isEmpty {
-            guard let mapping = session.zoom, mapping.id == zoomID else {
-                throw ToolError("zoom_id \(zoomID) is not the latest zoom of this app. Zoom again, or use x/y of the latest screenshot.")
-            }
-            guard mapping.screenshotTaken == session.captured, mapping.screenshot == session.geometry else {
-                throw ToolError("zoom_id \(zoomID) belongs to an older screenshot. Zoom again on the latest one; nothing was done.")
-            }
-            guard let x = try args.double(xKey), let y = try args.double(yKey), mapping.containsZoomPixel(x: x, y: y) else {
-                throw ToolError("\(xKey)/\(yKey) must be inside zoom \(zoomID) (\(mapping.zoomWidth)×\(mapping.zoomHeight) px).")
-            }
+        if let zoomed = try zoomPoint(args, xKey, yKey, latest: session.zoom, screenshot: session.geometry, taken: session.captured,
+                                      notDone: "nothing was done") {
             try checkWindowUnmoved(session)
-            return mapping.toScreen(CGPoint(x: x, y: y))
+            return zoomed
         }
         guard let x = try args.double(xKey), let y = try args.double(yKey) else {
             throw ToolError("Pass both \(xKey) and \(yKey) (or an element_index).")
@@ -2555,15 +2551,10 @@ public final class ComputerUse {
 
     func describe(_ element: AXUIElement) -> String {
         let values = element.multipleValues([kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute])
-        let role = values[kAXRoleAttribute].flatMap(axString).map { $0.hasPrefix("AX") ? String($0.dropFirst(2)) : $0 } ?? "element"
+        let role = values[kAXRoleAttribute].flatMap(axString).map(withoutAXPrefix) ?? "element"
         let label = nonEmpty(values[kAXTitleAttribute].flatMap(axString)) ?? nonEmpty(values[kAXDescriptionAttribute].flatMap(axString))
         return label.map { "\(role) \(quote($0, limit: 60))" } ?? role
     }
-}
-
-private func asElement(_ value: CFTypeRef?) -> AXUIElement? {
-    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-    return (value as! AXUIElement)
 }
 
 func parseModifierList(_ raw: String?) throws -> Modifiers {
@@ -2622,15 +2613,16 @@ func formatNumber(_ value: Double) -> String {
     value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
 }
 
+/// Bundle id prefixes of Chromium-based browsers, which can run the extension.
+let chromiumBrowserPrefixes = ["com.google.chrome", "org.chromium.", "com.microsoft.edgemac", "com.brave.browser",
+                               "com.vivaldi.vivaldi", "company.thebrowser.", "com.operasoftware.", "ai.perplexity.comet"]
+
 /// Chromium-based browsers (Chrome, Chrome for Testing, Edge, Brave, Arc...)
-/// and apps embedding Chromium through CEF (NetEase Music). Electron apps
-/// answer AXManualAccessibility, set for every app, and are left out.
+/// and apps embedding Chromium, through CEF (NetEase Music) or Electron.
 func isChromium(_ app: NSRunningApplication) -> Bool {
     let bundleID = (app.bundleIdentifier ?? "").lowercased()
-    let prefixes = ["com.google.chrome", "org.chromium.", "com.microsoft.edgemac", "com.brave.browser",
-                    "com.vivaldi.vivaldi", "company.thebrowser.", "com.operasoftware.", "ai.perplexity.comet"]
     let frameworks = (app.bundleURL?.path ?? "") + "/Contents/Frameworks/"
-    return prefixes.contains { bundleID.hasPrefix($0) }
+    return chromiumBrowserPrefixes.contains { bundleID.hasPrefix($0) }
         || ["Chromium Framework.framework", "Chromium Embedded Framework.framework", "Electron Framework.framework"]
             .contains { FileManager.default.fileExists(atPath: frameworks + $0) }
 }

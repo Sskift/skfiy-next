@@ -1,20 +1,32 @@
 import ApplicationServices
 import Foundation
 
-// Shared by synchronous AX actions and async helpers (file panels, selects).
-// Check immediately before IPC so interruption cannot resume via a fallback.
-private func lockedUseAllowsMutation() -> Bool {
-    !isScreenLocked() && !EmergencyStop.isStopped && !Task.isCancelled
+/// Why accessibility may not change anything right now, or nil when it may.
+/// Shared by synchronous AX actions and async helpers (file panels, selects).
+/// Checked immediately before IPC so interruption cannot resume via a fallback.
+func axMutationRefusal() -> String? {
+    if EmergencyStop.isStopped { return EmergencyStop.refusal }
+    if Task.isCancelled { return "The request was cancelled, so nothing was done." }
+    if isScreenLocked() { return "The screen is locked, so nothing was done." }
+    return nil
 }
 
+/// A refusal comes back as .failure: callers take .cannotComplete for a
+/// menu that is still opening, so it must not be that.
 func guardedAXPerformAction(_ element: AXUIElement, _ action: CFString) -> AXError {
-    guard lockedUseAllowsMutation() else { return .cannotComplete }
+    guard axMutationRefusal() == nil else { return .failure }
     return AXUIElementPerformAction(element, action)
 }
 
 func guardedAXSetAttributeValue(_ element: AXUIElement, _ attribute: CFString, _ value: CFTypeRef) -> AXError {
-    guard lockedUseAllowsMutation() else { return .cannotComplete }
+    guard axMutationRefusal() == nil else { return .failure }
     return AXUIElementSetAttributeValue(element, attribute, value)
+}
+
+/// Throws why a guarded call was refused, so no other way of doing it is
+/// tried and nothing is reported as done.
+func throwIfRefused(_ status: AXError) throws {
+    if status == .failure, let refusal = axMutationRefusal() { throw ToolError(refusal) }
 }
 
 /// Thin, failure-tolerant wrappers over the AXUIElement C API.
@@ -36,10 +48,7 @@ extension AXUIElement {
     }
 
     func element(_ attribute: String) -> AXUIElement? {
-        guard let value = value(attribute), CFGetTypeID(value) == AXUIElementGetTypeID() else {
-            return nil
-        }
-        return (value as! AXUIElement)
+        axElement(value(attribute))
     }
 
     func elements(_ attribute: String) -> [AXUIElement] {
@@ -107,10 +116,57 @@ extension AXUIElement {
     func set(_ attribute: String, _ value: CFTypeRef) throws {
         try check(guardedAXSetAttributeValue(self, attribute as CFString, value), "set \(attribute)")
     }
+
+    /// The first element below this one that matches, breadth first,
+    /// looking at no more than `limit` of them.
+    func descendant(limit: Int, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
+        descendants(limit: limit, first: true, where: matches).first
+    }
+
+    /// The elements below this one that match, breadth first, looking at no
+    /// more than `limit` of them; with `first`, only the first.
+    func descendants(limit: Int, first: Bool = false, where matches: (AXUIElement) -> Bool) -> [AXUIElement] {
+        var queue = elements(kAXChildrenAttribute)
+        var found: [AXUIElement] = []
+        var visited = 0
+        while !queue.isEmpty, visited < limit {
+            let element = queue.removeFirst()
+            visited += 1
+            if matches(element) {
+                found.append(element)
+                if first { break }
+            }
+            queue.append(contentsOf: element.elements(kAXChildrenAttribute))
+        }
+        return found
+    }
+
+    /// The closest element above this one with `role`, up to 30 levels up.
+    func ancestor(role: String) -> AXUIElement? {
+        var current = element(kAXParentAttribute)
+        for _ in 0..<30 {
+            guard let candidate = current else { return nil }
+            if candidate.string(kAXRoleAttribute) == role { return candidate }
+            current = candidate.element(kAXParentAttribute)
+        }
+        return nil
+    }
+}
+
+/// An attribute value that is an element, or nil.
+func axElement(_ value: CFTypeRef?) -> AXUIElement? {
+    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+/// "AXButton" → "Button", for display.
+func withoutAXPrefix(_ name: String) -> String {
+    name.hasPrefix("AX") ? String(name.dropFirst(2)) : name
 }
 
 func check(_ status: AXError, _ context: String) throws {
     guard status != .success else { return }
+    try throwIfRefused(status)
     throw ToolError(axMessage(status, context))
 }
 

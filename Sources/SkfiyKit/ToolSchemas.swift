@@ -10,11 +10,17 @@ enum ToolSchemas {
         "description": "Element index from the latest get_app_state tree, e.g. \"12\""
     ]
 
-    /// Tools that take a target instead of an index or x/y.
-    private static let targetTools: Set<String> = [
-        "click", "scroll", "set_value", "perform_secondary_action", "select_text",
-        "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"
+    private static let zoomID: [String: Any] = [
+        "type": "string",
+        "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"
     ]
+    private static let trusted: [String: Any] = [
+        "type": "boolean",
+        "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"
+    ]
+
+    /// Tools that take a target instead of an index or x/y.
+    private static let targetTools = ComputerUse.targetTools.union(BrowserTools.targetTools)
 
     /// A control described by what it is, resolved when the tool runs.
     static let target: [String: Any] = [
@@ -51,7 +57,7 @@ enum ToolSchemas {
             "description": description,
             "inputSchema": [
                 "type": "object",
-                "properties": (["click", "type_text", "press_key", "set_value", "scroll", "drag", "perform_secondary_action", "select_text"].contains(name)
+                "properties": (ComputerUse.verifiableTools.contains(name)
                     ? properties.merging(verification) { current, _ in current } : properties)
                     .merging(targetTools.contains(name) ? ["target": target] : [:]) { current, _ in current },
                 "required": required,
@@ -96,7 +102,7 @@ enum ToolSchemas {
             "Find out which ways of working with an app are available right now, before acting on it: accessibility tree (element indices), screenshot, text recognition, pointer input at x/y, keyboard, the browser extension, run_in_front, file panels and clipboard — each with why it is unavailable or what limits it, and the tools usable now. Reflects the current lock state, the app's windows, permissions and browser connections; query again after any of these change (the version changes). Read only: does not launch the app or send it anything.",
             properties: [
                 "app": app,
-                "window": ["type": "string", "description": "Optional window title (or part of it, or window id while locked) to ask about instead of the focused window"]
+                "window": ["type": "string", "description": "Optional window title (or part of it) or window id to ask about instead of the focused window"]
             ],
             required: ["app"],
             readOnly: true
@@ -107,7 +113,7 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "element_index": ["type": "string", "description": "Element index to click"],
-                "zoom_id": ["type": "string", "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"],
+                "zoom_id": zoomID,
                 "x": ["type": "number", "description": "X coordinate in screenshot pixel coordinates"],
                 "y": ["type": "number", "description": "Y coordinate in screenshot pixel coordinates"],
                 "click_count": ["type": "integer", "description": "Number of clicks (1-3). Defaults to 1"],
@@ -156,7 +162,7 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "element_index": ["type": "string", "description": "Element identifier"],
-                "zoom_id": ["type": "string", "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"],
+                "zoom_id": zoomID,
                 "x": ["type": "number", "description": "X coordinate in screenshot pixels, when not using element_index"],
                 "y": ["type": "number", "description": "Y coordinate in screenshot pixels, when not using element_index"],
                 "direction": ["type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"],
@@ -169,7 +175,7 @@ enum ToolSchemas {
             "Drag with the left mouse button from one point to another, in pixel coordinates of the latest screenshot. Posted to the app in the background; some views only accept drags from a focused window.",
             properties: [
                 "app": app,
-                "zoom_id": ["type": "string", "description": "Read x/y as pixels of this zoom (from zoom) instead of the screenshot"],
+                "zoom_id": zoomID,
                 "from_x": ["type": "number", "description": "Start X coordinate"],
                 "from_y": ["type": "number", "description": "Start Y coordinate"],
                 "to_x": ["type": "number", "description": "End X coordinate"],
@@ -294,7 +300,7 @@ enum ToolSchemas {
             properties: [
                 "app": app,
                 "target": target,
-                "ocr": ["type": "boolean", "description": "Unlocked: also match text recognized in the screenshot from the start (false: never). Defaults to only when accessibility has no match"],
+                "ocr": ["type": "boolean", "description": "Unlocked: true also matches text recognized in the screenshot from the start. By default text is recognized when accessibility has no match; false skips that, though a window that publishes (almost) no accessibility elements is still read from its screenshot"],
                 "window_id": ["type": "string", "description": "While locked: the window to look in, by id; defaults to the window of the latest screenshot"]
             ],
             required: ["app", "target"],
@@ -390,7 +396,7 @@ enum ToolSchemas {
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
                 "x": ["type": "number", "description": "X in the tab's latest screenshot, when not using index"],
                 "y": ["type": "number", "description": "Y in the tab's latest screenshot, when not using index"],
-                "trusted": ["type": "boolean", "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"],
+                "trusted": trusted,
                 "dialog": ["type": "string", "enum": ["accept", "dismiss"], "description": "How to answer a confirm() or prompt() the click opens, in tabs you opened (default accept); alerts are dismissed. browser_state lists the dialogs that appeared"],
                 "prompt_text": ["type": "string", "description": "Text to answer a prompt() with (default: the prompt's own default)"]
             ],
@@ -404,7 +410,7 @@ enum ToolSchemas {
                 "text": ["type": "string", "description": "Text to type"],
                 "clear": ["type": "boolean", "description": "Replace the current content. Defaults to false"],
                 "submit": ["type": "boolean", "description": "Press Enter after typing (submits forms). Defaults to false"],
-                "trusted": ["type": "boolean", "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"]
+                "trusted": trusted
             ],
             required: ["tab_id", "text"]
         ),
@@ -417,7 +423,7 @@ enum ToolSchemas {
         tool(
             "browser_press_key",
             "Press a key in a tab, on an element by index or the focused element: Enter, Escape, Tab, Backspace, Delete, arrows, PageDown/PageUp, Home/End, single characters, or combos like cmd+a. Enter submits forms.",
-            properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "key": ["type": "string", "description": "Key or combination"], "trusted": ["type": "boolean", "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"]],
+            properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "key": ["type": "string", "description": "Key or combination"], "trusted": trusted],
             required: ["tab_id", "key"]
         ),
         tool(
@@ -464,7 +470,7 @@ enum ToolSchemas {
         ),
         tool(
             "browser_downloads",
-            "Downloads skfiy caused in the browser (from tabs it acted on, or started here); the user's own downloads are never listed. action list shows each with its state, file path and failure reason; wait waits for one (download_id, else the newest) to end and returns its local path only when it is complete and the file exists; start downloads a URL (Chrome renames on a name clash, the result gives the real name); cancel stops one. Hand a finished file on with open_file(path) or browser_upload(download_id).",
+            "Downloads skfiy caused in the browser (from tabs it acted on, or started here); the user's own downloads are never listed. action list shows each with its state, file path and failure reason; wait waits for download_id, or else for a download that started after skfiy's last action in a tab of that browser (looked for up to 10 s; an error when none started), until it ends, and returns its local path only when it is complete and the file exists; start downloads a URL (Chrome renames on a name clash, the result gives the real name); cancel stops one. Hand a finished file on with open_file(path) or browser_upload(download_id).",
             properties: [
                 "action": ["type": "string", "enum": ["list", "wait", "start", "cancel"], "description": "Defaults to list"],
                 "download_id": ["type": "integer", "description": "Download id from list, wait or start"],

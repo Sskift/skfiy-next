@@ -1,14 +1,6 @@
-import CoreGraphics
 import Foundation
 import Testing
 @testable import SkfiyKit
-
-private final class Clock: @unchecked Sendable {
-    var time = 0.0
-    var looks = 0
-    func now() -> Double { time }
-    func sleep(_ seconds: Double) async throws { time += seconds }
-}
 
 struct StateChangesTests {
     private let before = [
@@ -86,63 +78,5 @@ struct StateChangesTests {
             history = StateRecord.appending(StateRecord(version: "v\(n)", epoch: 1, window: "7", lines: [], textLines: [], windows: [:], fingerprint: nil), to: history)
         }
         #expect(history?.map(\.version) == ["v4", "v5", "v6", "v7", "v8", "v9"])
-    }
-
-    @Test func rendererKeepsEarlierIndices() {
-        // Earlier look: OK was [1], Name [2]. Now a Cancel button came before them.
-        let root = UINode(info: NodeInfo(role: "AXWindow", title: "W"), children: [
-            UINode(info: NodeInfo(role: "AXButton", title: "Cancel"), ref: 3),
-            UINode(info: NodeInfo(role: "AXButton", title: "OK"), ref: 1),
-            UINode(info: NodeInfo(role: "AXTextField", value: "x"), ref: 2)
-        ], ref: 0)
-        let earlier: [Int: Int] = [0: 0, 1: 1, 2: 2]
-        var next = 3
-        var renderer = TreeRenderer { _, _ in NodeDetails() }
-        renderer.allocate = { ref in
-            if let index = earlier[ref] { return index }
-            defer { next += 1 }
-            return next
-        }
-        renderer.render(root)
-        #expect(renderer.lines == ["[0] Window \"W\"", "  [3] Button \"Cancel\"", "  [1] Button \"OK\"", "  [2] TextField value=\"x\""])
-        #expect(renderer.printed.map(\.index) == [0, 3, 1, 2])
-    }
-
-    @Test func idleLooksBackOffAndChangesResetThePace() async {
-        // Text that never comes, on a window that changes once at 5 s.
-        let clock = Clock()
-        var plain = WaitEngine(text: "never", timeout: 10, interval: 0.25)
-        _ = await plain.run(now: clock.now, sleep: clock.sleep, check: {}, observe: {
-            clock.looks += 1
-            return WaitObservation(text: clock.time < 5 ? "a" : "b", textFingerprint: clock.time < 5 ? "a" : "b")
-        })
-        let polled = clock.looks
-        let paced = Clock()
-        plain.maxInterval = 1
-        var lookTimes: [Double] = []
-        _ = await plain.run(now: paced.now, sleep: paced.sleep, check: {}, observe: {
-            paced.looks += 1
-            lookTimes.append(paced.time)
-            return WaitObservation(text: paced.time < 5 ? "a" : "b", textFingerprint: paced.time < 5 ? "a" : "b")
-        })
-        #expect(polled == 41)
-        #expect(paced.looks < polled / 2)
-        // Right after the change, the next look comes at the base pace again.
-        let firstAfter = lookTimes.firstIndex { $0 >= 5 }!
-        #expect(lookTimes[firstAfter + 1] - lookTimes[firstAfter] == 0.25)
-    }
-
-    @Test func stableWaitsLookWhenStableEnough() async {
-        let clock = Clock()
-        var engine = WaitEngine(stableFor: 1, timeout: 10, interval: 1)
-        engine.maxInterval = 1
-        let result = await engine.run(now: clock.now, sleep: clock.sleep, check: {}, observe: {
-            clock.looks += 1
-            let frame = clock.time < 2 ? "moving \(clock.time)" : "still"
-            return WaitObservation(text: nil, textFingerprint: frame)
-        })
-        // Changes until 2 s, then still: met one second after the first still look.
-        #expect(result == .met(seconds: 3))
-        #expect(clock.looks == 4)
     }
 }

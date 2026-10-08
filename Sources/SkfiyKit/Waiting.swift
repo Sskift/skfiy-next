@@ -40,20 +40,6 @@ struct PixelFingerprint: Equatable, Sendable {
         self.pixels = pixels
     }
 
-    /// The share of pixels that differ noticeably; 1 when the sizes differ.
-    func changedFraction(from other: PixelFingerprint, tolerance: UInt8 = 16) -> Double {
-        guard width == other.width, height == other.height, !pixels.isEmpty else { return 1 }
-        let limit = Int(tolerance)
-        let changed = pixels.withUnsafeBufferPointer { a in
-            other.pixels.withUnsafeBufferPointer { b in
-                var count = 0
-                for index in 0..<a.count where abs(Int(a[index]) - Int(b[index])) > limit { count += 1 }
-                return count
-            }
-        }
-        return Double(changed) / Double(pixels.count)
-    }
-
     /// Whether anything visibly changed. A blinking text caret is not a
     /// change: its pixels form a thin vertical line. Anything else counts,
     /// down to a few pixels, so a small label changing one word is seen.
@@ -86,11 +72,15 @@ struct PixelFingerprint: Equatable, Sendable {
 /// Text matching that survives OCR's habits: case, line breaks, and words
 /// split or joined by spacing.
 enum TextMatch {
-    /// Lowercased with runs of whitespace as one space. A slashed zero
-    /// (monospaced fonts such as Menlo) is read as "Ø" by text recognition:
-    /// it counts as 0.
+    /// Lowercased. A slashed zero (monospaced fonts such as Menlo) is read
+    /// as "Ø" by text recognition: it counts as 0.
+    static func folded(_ text: String) -> String {
+        text.lowercased().replacingOccurrences(of: "ø", with: "0")
+    }
+
+    /// Folded, with runs of whitespace as one space.
     static func normalized(_ text: String) -> String {
-        text.lowercased().replacingOccurrences(of: "ø", with: "0").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        folded(text).split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     static func contains(_ haystack: String, _ needle: String) -> Bool {
@@ -171,7 +161,6 @@ struct WaitEngine {
         var delay = interval
         let waitingForText = !(text ?? "").isEmpty
         while true {
-            let elapsed = now() - started
             do {
                 try Task.checkCancellation()
                 try check()
@@ -204,7 +193,7 @@ struct WaitEngine {
             } catch is CancellationError {
                 return .cancelled(seconds: now() - started)
             } catch {
-                return .stopped(seconds: max(elapsed, now() - started), reason: "\(error)")
+                return .stopped(seconds: now() - started, reason: "\(error)")
             }
         }
     }

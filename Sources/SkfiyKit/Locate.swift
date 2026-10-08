@@ -9,9 +9,7 @@ import Foundation
 /// things fit equally, they are listed and nothing is chosen.
 extension ComputerUse {
     /// Tools that accept `target` instead of element_index or x/y.
-    static let targetTools: Set<String> = ["click", "scroll", "set_value", "perform_secondary_action", "select_text"]
-
-    static func locator(_ value: Any?) throws -> Locator? { try Locator.parse(value) }
+    nonisolated static let targetTools: Set<String> = ["click", "scroll", "set_value", "perform_secondary_action", "select_text"]
 
     /// One thing on screen a locator may mean, and how to act on it.
     struct Located {
@@ -50,7 +48,7 @@ extension ComputerUse {
                                                  kAXPlaceholderValueAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
                                                  kAXTitleUIElementAttribute])
             let role = values[kAXRoleAttribute].flatMap(axString) ?? ""
-            let titleElement = values[kAXTitleUIElementAttribute].flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
+            let titleElement = axElement(values[kAXTitleUIElementAttribute])
             let label = nonEmpty(values[kAXTitleAttribute].flatMap(axString))
                 ?? nonEmpty(values[kAXDescriptionAttribute].flatMap(axString))
                 ?? (textRoles.contains(role) ? nonEmpty(values[kAXValueAttribute].flatMap(axString)) : nil)
@@ -71,7 +69,10 @@ extension ComputerUse {
     /// again now. Recognized text joins in when `withText` or when the window
     /// publishes nothing to accessibility.
     func locateView(app: NSRunningApplication, withText: Bool) async throws -> LocateView {
-        try requireAccessibilityForLocate()
+        try requireAccessibility()
+        guard !isScreenLocked() else {
+            throw ToolError("The screen is locked, so app windows cannot be read. Try again after it is unlocked.")
+        }
         let pid = app.processIdentifier
         let appElement = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(appElement, 2)
@@ -118,15 +119,6 @@ extension ComputerUse {
                           items: Self.joiningText(items, pixel: pixel), geometry: geometry, recognized: recognized)
     }
 
-    private func requireAccessibilityForLocate() throws {
-        guard AXIsProcessTrusted() else {
-            throw ToolError("Accessibility permission is not granted to the app hosting skfiy (e.g. your terminal). Run `skfiy doctor`.")
-        }
-        guard !isScreenLocked() else {
-            throw ToolError("The screen is locked, so app windows cannot be read. Try again after it is unlocked.")
-        }
-    }
-
     /// Recognized text, plus neighbouring pieces on a row joined.
     static func joiningText(_ items: [Located], pixel: (CGRect) -> CGPoint?) -> [Located] {
         let joined = Locator.joiningRows(items.filter { !$0.candidate.roleKnown }.map(\.candidate)).filter { candidate in
@@ -170,9 +162,7 @@ extension ComputerUse {
     func line(_ match: LocatorMatch, _ item: Located, index: Int?) -> String {
         var parts: [String] = []
         if let index { parts.append("[\(index)]") }
-        let role = item.candidate.roleKnown
-            ? (item.candidate.role.hasPrefix("AX") ? String(item.candidate.role.dropFirst(2)) : item.candidate.role)
-            : "text"
+        let role = item.candidate.roleKnown ? withoutAXPrefix(item.candidate.role) : "text"
         parts.append(role + (item.candidate.label.isEmpty ? "" : " \(quote(item.candidate.label, limit: 60))"))
         parts.append(match.area)
         if let pixel = item.pixel { parts.append("x=\(Int(pixel.x.rounded())) y=\(Int(pixel.y.rounded()))") }
@@ -215,8 +205,8 @@ extension ComputerUse {
 
     /// The locate tool: what a target means right now, without acting.
     func locate(_ args: Arguments) async throws -> ToolResult {
-        guard let locator = try Self.locator(args.values["target"]) else { throw ToolError("Missing required argument \"target\".") }
-        if DirectLockedUse.enabled, DirectLockedUse.lockState != .unlocked {
+        guard let locator = try Locator.parse(args.values["target"]) else { throw ToolError("Missing required argument \"target\".") }
+        if DirectLockedUse.isActive {
             let (view, pid) = try await directLockedUse.locateView(args)
             let outcome = Self.match(locator, in: view)
             return ToolResult(text: describeOutcome(outcome, locator: locator, pid: pid, acting: false) + "\nThe screenshot below was taken just now; x/y are its pixels.",
@@ -226,9 +216,9 @@ extension ComputerUse {
         guard case .running(let app) = try directory.resolve(query) else {
             throw ToolError("\(query) is not running. Call get_app_state first; it launches the app in the background.")
         }
-        var view = try await locateView(app: app, withText: (args.values["ocr"] as? Bool) ?? false)
+        var view = try await locateView(app: app, withText: args.bool("ocr") ?? false)
         var outcome = Self.match(locator, in: view)
-        if outcome.matches.isEmpty, !view.recognized, (args.values["ocr"] as? Bool) != false {
+        if outcome.matches.isEmpty, !view.recognized, args.bool("ocr") != false {
             // Not in the tree: maybe drawn (canvas, image, custom view).
             view = try await locateView(app: app, withText: true)
             outcome = Self.match(locator, in: view)
@@ -240,7 +230,7 @@ extension ComputerUse {
     /// Replaces `target` with the element_index or x/y it resolves to now, or
     /// explains why it does not resolve to exactly one thing.
     func resolveTarget(_ name: String, _ raw: [String: Any]) async throws -> (raw: [String: Any], note: String)? {
-        guard let locator = try Self.locator(raw["target"]) else { return nil }
+        guard let locator = try Locator.parse(raw["target"]) else { return nil }
         guard Self.targetTools.contains(name) else {
             throw ToolError("\(name) does not take a target; it acts on the focused element or a key.")
         }
@@ -250,7 +240,7 @@ extension ComputerUse {
         var resolved = raw
         resolved.removeValue(forKey: "target")
         let args = Arguments(raw)
-        if DirectLockedUse.enabled, DirectLockedUse.lockState != .unlocked {
+        if DirectLockedUse.isActive {
             guard ["click", "scroll"].contains(name) else {
                 throw ToolError("While macOS is locked, target works with click and scroll (by recognized text); \(name) needs accessibility. Nothing was sent.")
             }

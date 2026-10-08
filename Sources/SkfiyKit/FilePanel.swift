@@ -23,9 +23,9 @@ struct FilePanel {
             if identifier == "save-panel" || identifier == "open-panel" {
                 return FilePanel(element: candidate, isSave: identifier == "save-panel")
             }
-            if descendant(of: candidate, limit: 400, where: { $0.string("AXIdentifier") == "OKButton" }) != nil,
-               descendant(of: candidate, limit: 400, where: { $0.string(kAXRoleAttribute) == "AXBrowser" || $0.string("AXIdentifier") == "saveAsNameTextField" }) != nil {
-                let isSave = descendant(of: candidate, limit: 400, where: { $0.string("AXIdentifier") == "saveAsNameTextField" }) != nil
+            if candidate.descendant(limit: 400, where: { $0.string("AXIdentifier") == "OKButton" }) != nil,
+               candidate.descendant(limit: 400, where: { $0.string(kAXRoleAttribute) == "AXBrowser" || $0.string("AXIdentifier") == "saveAsNameTextField" }) != nil {
+                let isSave = candidate.descendant(limit: 400, where: { $0.string("AXIdentifier") == "saveAsNameTextField" }) != nil
                 return FilePanel(element: candidate, isSave: isSave)
             }
         }
@@ -33,7 +33,7 @@ struct FilePanel {
     }
 
     private func find(_ identifier: String) -> AXUIElement? {
-        Self.descendant(of: element, limit: 600, where: { $0.string("AXIdentifier") == identifier })
+        element.descendant(limit: 600, where: { $0.string("AXIdentifier") == identifier })
     }
 
     /// Chooses `url` in an Open panel, or saves to `url` in a Save panel.
@@ -45,7 +45,7 @@ struct FilePanel {
                 throw ToolError("\(target.path) already exists; pass overwrite: true to replace it, or choose another name.")
             }
             if let disclosure = find("NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"), (disclosure.value(kAXValueAttribute) as? NSNumber)?.intValue == 0 {
-                _ = guardedAXPerformAction(disclosure, kAXPressAction as CFString)
+                try throwIfRefused(guardedAXPerformAction(disclosure, kAXPressAction as CFString))
                 await Input.pause(0.6)
             }
         } else if !exists {
@@ -54,11 +54,11 @@ struct FilePanel {
         let folder = isSave ? target.deletingLastPathComponent() : target
         // Panels show the real place of a link (/tmp is /private/tmp).
         let resolved = folder.resolvingSymlinksInPath()
-        guard let browser = Self.descendant(of: element, limit: 600, where: { $0.string(kAXRoleAttribute) == "AXBrowser" }) else {
+        guard let browser = element.descendant(limit: 600, where: { $0.string(kAXRoleAttribute) == "AXBrowser" }) else {
             throw ToolError("The panel does not show its columns (it is in list or icon view, or collapsed), which is the only view skfiy can navigate. The user can switch it to column view once; it is remembered.")
         }
         let (place, row) = try sidebarPlace(for: resolved)
-        _ = guardedAXSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        try throwIfRefused(guardedAXSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue))
         await Input.pause(0.4)
 
         var current = place
@@ -84,7 +84,7 @@ struct FilePanel {
         let button = ok.string(kAXTitleAttribute) ?? "OK"
         // The panel's elements live in another process and may report an
         // error for an action they did perform; the outcome is checked below.
-        _ = guardedAXPerformAction(ok, kAXPressAction as CFString)
+        try throwIfRefused(guardedAXPerformAction(ok, kAXPressAction as CFString))
         await Input.pause(0.5)
         if isSave, exists, let still = FilePanel.find(in: app) {
             try await still.confirmReplace()
@@ -109,14 +109,14 @@ struct FilePanel {
     /// The sidebar entry closest to `folder`: a standard folder, the home
     /// folder, or the startup disk.
     private func sidebarPlace(for folder: URL) throws -> (URL, AXUIElement) {
-        guard let sidebar = Self.descendant(of: element, limit: 600, where: {
-            $0.string(kAXRoleAttribute) == kAXOutlineRole && Self.ancestor(of: $0, role: "AXBrowser") == nil
+        guard let sidebar = element.descendant(limit: 600, where: {
+            $0.string(kAXRoleAttribute) == kAXOutlineRole && $0.ancestor(role: "AXBrowser") == nil
         }) else {
             throw ToolError("The panel's sidebar is hidden, so skfiy cannot navigate it.")
         }
         let rows = sidebar.elements(kAXRowsAttribute)
         let label = { (row: AXUIElement) -> String in
-            if let text = Self.descendant(of: row, limit: 20, where: { nonEmpty($0.string(kAXValueAttribute)) != nil && $0.string(kAXRoleAttribute) == kAXStaticTextRole }) {
+            if let text = row.descendant(limit: 20, where: { nonEmpty($0.string(kAXValueAttribute)) != nil && $0.string(kAXRoleAttribute) == kAXStaticTextRole }) {
                 return text.string(kAXValueAttribute) ?? ""
             }
             return row.string(kAXTitleAttribute) ?? row.string(kAXDescriptionAttribute) ?? ""
@@ -145,14 +145,14 @@ struct FilePanel {
         }
         var scrolled = 0
         for _ in 0..<60 {
-            let lists = Self.descendants(of: browser, limit: 3_000, where: { $0.string(kAXRoleAttribute) == kAXListRole })
+            let lists = browser.descendants(limit: 3_000, where: { $0.string(kAXRoleAttribute) == kAXListRole })
             if column < lists.count {
                 let list = lists[column]
                 if let item = list.elements(kAXChildrenAttribute).first(where: { item in
-                    Self.descendant(of: item, limit: 10, where: { names.contains($0.string(kAXValueAttribute) ?? "") }) != nil
+                    item.descendant(limit: 10, where: { names.contains($0.string(kAXValueAttribute) ?? "") }) != nil
                 }) {
                     // The list reports an error for files, yet selects them.
-                    _ = guardedAXSetAttributeValue(list, kAXSelectedChildrenAttribute as CFString, [item] as CFArray)
+                    try throwIfRefused(guardedAXSetAttributeValue(list, kAXSelectedChildrenAttribute as CFString, [item] as CFArray))
                     await Input.pause(0.35)
                     return
                 }
@@ -173,46 +173,16 @@ struct FilePanel {
     /// panel) with its first button, Replace; only called when the caller
     /// allowed overwriting.
     private func confirmReplace() async throws {
-        guard let alert = Self.descendant(of: element, limit: 400, where: {
+        guard let alert = element.descendant(limit: 400, where: {
             $0.string(kAXRoleAttribute) == kAXSheetRole && !CFEqual($0, element)
         }) else {
             return
         }
-        let buttons = Self.descendants(of: alert, limit: 60, where: { $0.string(kAXRoleAttribute) == kAXButtonRole })
+        let buttons = alert.descendants(limit: 60, where: { $0.string(kAXRoleAttribute) == kAXButtonRole })
         guard let replace = buttons.first(where: { $0.string("AXIdentifier") == "action-button-1" }) else {
             throw ToolError("The Save panel asked something skfiy does not recognize; call get_app_state to see it.")
         }
-        _ = guardedAXPerformAction(replace, kAXPressAction as CFString)
+        try throwIfRefused(guardedAXPerformAction(replace, kAXPressAction as CFString))
         await Input.pause(0.4)
-    }
-
-    static func descendant(of root: AXUIElement, limit: Int, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
-        descendants(of: root, limit: limit, first: true, where: matches).first
-    }
-
-    static func descendants(of root: AXUIElement, limit: Int, first: Bool = false, where matches: (AXUIElement) -> Bool) -> [AXUIElement] {
-        var queue = root.elements(kAXChildrenAttribute)
-        var found: [AXUIElement] = []
-        var visited = 0
-        while !queue.isEmpty, visited < limit {
-            let element = queue.removeFirst()
-            visited += 1
-            if matches(element) {
-                found.append(element)
-                if first { break }
-            }
-            queue.append(contentsOf: element.elements(kAXChildrenAttribute))
-        }
-        return found
-    }
-
-    static func ancestor(of element: AXUIElement, role: String) -> AXUIElement? {
-        var current = element.element(kAXParentAttribute)
-        for _ in 0..<30 {
-            guard let candidate = current else { return nil }
-            if candidate.string(kAXRoleAttribute) == role { return candidate }
-            current = candidate.element(kAXParentAttribute)
-        }
-        return nil
     }
 }

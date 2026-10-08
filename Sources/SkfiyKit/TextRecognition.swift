@@ -80,7 +80,7 @@ enum TextRecognition {
     /// resolution sometimes drops a long glued word and keeps the rest of the
     /// line in pieces) replaces those fragments.
     static func merged(_ primary: [RecognizedText], with extra: [RecognizedText]) -> [RecognizedText] {
-        let letters = { (text: String) in String(text.lowercased().replacingOccurrences(of: "ø", with: "0").filter { $0.isLetter || $0.isNumber }) }
+        let letters = { (text: String) in String(TextMatch.folded(text).filter { $0.isLetter || $0.isNumber }) }
         var result = primary
         for line in extra {
             let overlapping = result.indices.filter { index in

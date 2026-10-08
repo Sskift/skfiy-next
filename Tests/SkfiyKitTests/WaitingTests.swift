@@ -143,13 +143,51 @@ struct WaitingTests {
         let plain = try #require(PixelFingerprint(try image(0.2)))
         let same = try #require(PixelFingerprint(try image(0.2)))
         let marked = try #require(PixelFingerprint(try image(0.2, square: CGRect(x: 0, y: 0, width: 40, height: 40))))
-        #expect(plain.changedFraction(from: same) == 0)
-        #expect(marked.changedFraction(from: plain) > 0.05)
+        #expect(!plain.changed(from: same))
+        #expect(marked.changed(from: plain))
         // CG draws bottom-up: y 0-40 is the image's bottom; a region of the top half misses it.
         let topHalf = CGRect(x: 0, y: 0, width: 200, height: 50)
         let a = try #require(PixelFingerprint(try image(0.2), region: topHalf))
         let b = try #require(PixelFingerprint(try image(0.2, square: CGRect(x: 0, y: 0, width: 40, height: 40)), region: topHalf))
-        #expect(a.changedFraction(from: b) == 0)
+        #expect(!a.changed(from: b))
         #expect(PixelFingerprint(try image(0.2), region: CGRect(x: 500, y: 500, width: 10, height: 10)) == nil)
+    }
+
+    @Test func idleLooksBackOffAndChangesResetThePace() async {
+        // Text that never comes, on a window that changes once at 5 s.
+        let script = Script()
+        var plain = WaitEngine(text: "never", timeout: 10, interval: 0.25)
+        _ = await plain.run(now: script.now, sleep: script.sleep, check: {}, observe: {
+            script.observations += 1
+            return WaitObservation(text: script.time < 5 ? "a" : "b", textFingerprint: script.time < 5 ? "a" : "b")
+        })
+        let polled = script.observations
+        let paced = Script()
+        plain.maxInterval = 1
+        var lookTimes: [Double] = []
+        _ = await plain.run(now: paced.now, sleep: paced.sleep, check: {}, observe: {
+            paced.observations += 1
+            lookTimes.append(paced.time)
+            return WaitObservation(text: paced.time < 5 ? "a" : "b", textFingerprint: paced.time < 5 ? "a" : "b")
+        })
+        #expect(polled == 41)
+        #expect(paced.observations < polled / 2)
+        // Right after the change, the next look comes at the base pace again.
+        let firstAfter = lookTimes.firstIndex { $0 >= 5 }!
+        #expect(lookTimes[firstAfter + 1] - lookTimes[firstAfter] == 0.25)
+    }
+
+    @Test func stableWaitsLookWhenStableEnough() async {
+        let script = Script()
+        var engine = WaitEngine(stableFor: 1, timeout: 10, interval: 1)
+        engine.maxInterval = 1
+        let result = await engine.run(now: script.now, sleep: script.sleep, check: {}, observe: {
+            script.observations += 1
+            let frame = script.time < 2 ? "moving \(script.time)" : "still"
+            return WaitObservation(text: nil, textFingerprint: frame)
+        })
+        // Changes until 2 s, then still: met one second after the first still look.
+        #expect(result == .met(seconds: 3))
+        #expect(script.observations == 4)
     }
 }

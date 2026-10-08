@@ -97,8 +97,8 @@ struct LocatorTests {
         let profile = try locator(["name": "Edit", "within": "Profile"])
         #expect(profile.unique(profile.matches(scenario, bounds: window))?.candidate.containers == ["Profile"])
 
-        // Recognized text only: the box titles are the closest text above each Edit.
-        // As recognized in the scenario window: each title left of its Edit, not above it.
+        // Recognized text only, as in the scenario window: each box title is the
+        // closest text above its Edit, though left of it rather than straight above.
         let ocr = [text("Profile", 28, 161, 40), text("Billing", 256, 161, 40), text("Edit", 78, 215, 24), text("Edit", 309, 215, 24),
                    text("Scenario input", 30, 120, 80), text("Submit", 380, 120, 40), text("status: ready", 20, 45, 90)]
         let billing = try locator(["name": "Edit", "within": "billing"])

@@ -6,7 +6,7 @@ struct ClipboardContents: Equatable {
 
     static let transientType = "org.nspasteboard.TransientType"
     static let concealedType = "org.nspasteboard.ConcealedType"
-    static let textTypes: Set<String> = [NSPasteboard.PasteboardType.string.rawValue, "public.utf8-plain-text", "NSStringPboardType"]
+    static let textTypes: Set<String> = [NSPasteboard.PasteboardType.string.rawValue, "NSStringPboardType"]
 
     static func text(_ string: String) -> ClipboardContents {
         ClipboardContents(items: [[NSPasteboard.PasteboardType.string.rawValue: Data(string.utf8)]])

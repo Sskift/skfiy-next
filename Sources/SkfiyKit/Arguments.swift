@@ -25,6 +25,19 @@ public struct Arguments {
         return value
     }
 
+    func bool(_ key: String) -> Bool? {
+        values[key] as? Bool
+    }
+
+    /// A path with ~ expanded, which must be absolute.
+    func absolutePath(_ key: String) throws -> String {
+        let path = (try requiredString(key).trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else {
+            throw ToolError("\"\(key)\" must be an absolute path.")
+        }
+        return path
+    }
+
     /// Text arguments where whitespace is meaningful.
     func requiredText(_ key: String) throws -> String {
         guard let value = values[key] as? String else {
