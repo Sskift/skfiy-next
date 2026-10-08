@@ -3,6 +3,13 @@ import Testing
 @testable import SkfiyKit
 
 struct KeysTests {
+    @Test func cursorShowsChordsAsKeycaps() {
+        #expect(VirtualCursor.keycaps("cmd+shift+s") == "⌘⇧S")
+        #expect(VirtualCursor.keycaps("ctrl+alt+Delete") == "⌃⌥⌫")
+        #expect(VirtualCursor.keycaps("Return") == "↩")
+        #expect(VirtualCursor.keycaps("F15") == "F15")
+    }
+
     @Test func namedKeys() throws {
         #expect(try parseKeyChord("Return") == KeyChord(key: .code(0x24)))
         #expect(try parseKeyChord("return") == KeyChord(key: .code(0x24)))

@@ -1469,7 +1469,12 @@ public final class ComputerUse {
         if let element, element.string(kAXRoleAttribute) == "AXMenuItem", element.bool(kAXEnabledAttribute) == false {
             throw ToolError("That menu item is disabled. A background app keeps its menus as they were when it was last in front, so items that act on the current document or selection stay disabled; use the equivalent control in the window or a keyboard shortcut instead.")
         }
+        // The agent cursor goes there first, so the user sees where it acts.
+        if let shown = point ?? element?.frame.map({ CGPoint(x: $0.midX, y: $0.midY) }) {
+            await VirtualCursor.move(to: shown, pid: pid)
+        }
         if let element, let how = try accessibilityClick(element, at: point, button: button, count: count, modifiers: modifiers, exact: point == nil) {
+            VirtualCursor.show(.click(count: count, button: button), pid: pid)
             return try await afterAction(app, "Clicked \(described): \(how).")
         }
         let target: CGPoint
@@ -1480,8 +1485,10 @@ public final class ComputerUse {
         } else {
             throw ToolError("Nothing to click.")
         }
+        if point == nil { await VirtualCursor.move(to: target, pid: pid) }
         let how = try await pointerClick(app, at: target, button: button, count: count, modifiers: modifiers,
                                          focus: args.bool("focus") ?? false)
+        VirtualCursor.show(.click(count: count, button: button), pid: pid)
         return try await afterAction(app, "Clicked \(described): \(how).")
     }
 
@@ -1670,6 +1677,10 @@ public final class ComputerUse {
         guard element.isSettable(kAXValueAttribute) else {
             throw ToolError("Element [\(index)] \(describe(element)) has no settable value. Click it and use type_text, or use its actions.")
         }
+        if let frame = element.frame {
+            await VirtualCursor.move(to: CGPoint(x: frame.midX, y: frame.midY), pid: app.processIdentifier)
+            VirtualCursor.show(.keys("⌨︎"), pid: app.processIdentifier)
+        }
         let newValue: CFTypeRef
         switch element.value(kAXValueAttribute) {
         case let current? where CFGetTypeID(current) == CFBooleanGetTypeID():
@@ -1724,6 +1735,10 @@ public final class ComputerUse {
         case "cursor_after": CFRange(location: range.location + range.length, length: 0)
         default: CFRange(location: range.location, length: range.length)
         }
+        if let frame = element.frame {
+            await VirtualCursor.move(to: CGPoint(x: frame.midX, y: frame.midY), pid: app.processIdentifier)
+            VirtualCursor.show(.click(count: 1, button: .left), pid: app.processIdentifier)
+        }
         _ = try? element.set(kAXFocusedAttribute, kCFBooleanTrue)
         try setSelection(element, selection)
         let what = mode == "text" ? "Selected \(quote(target, limit: 60))" : "Placed the cursor \(mode == "cursor_before" ? "before" : "after") \(quote(target, limit: 60))"
@@ -1777,7 +1792,9 @@ public final class ComputerUse {
         guard let window = windowID(of: pid, at: point) ?? focusedWindowID(of: pid) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
         }
+        await VirtualCursor.move(to: point, pid: pid, window: window)
         await Input.scroll(at: point, dx: delta.0, dy: delta.1, pid: pid, windowID: window)
+        VirtualCursor.show(.scroll(dx: delta.0, dy: delta.1), pid: pid)
         return try await afterAction(app, "Scrolled \(described) \(direction) \(formatNumber(pages)) page(s) (wheel event sent to the app in the background).")
     }
 
@@ -1792,12 +1809,16 @@ public final class ComputerUse {
         }
         var how = "background mouse events"
         let focus = args.bool("focus") ?? false
+        await VirtualCursor.move(to: start, pid: pid, window: window)
+        // The events take about half a second; the cursor moves with them, pressed.
+        VirtualCursor.glide(to: end, pid: pid, window: window, pressed: true, duration: 0.45)
         if frontmostProcessID() != pid, briefFocusEnabled || focus, await briefFocusPermission(app) == true, await waitForUserIdle(),
            await Input.withBriefFocus(pid: pid, windowID: window, { await Input.drag(from: start, to: end, pid: pid, windowID: window) }) {
             how = "mouse events while the app had keyboard focus for a moment"
         } else {
             await Input.drag(from: start, to: end, pid: pid, windowID: window)
         }
+        VirtualCursor.show(.release, pid: pid)
         return try await afterAction(app, "Dragged from (\(formatNumber(try args.double("from_x") ?? 0)), \(formatNumber(try args.double("from_y") ?? 0))) to (\(formatNumber(try args.double("to_x") ?? 0)), \(formatNumber(try args.double("to_y") ?? 0))) (\(how)).")
     }
 
@@ -1811,6 +1832,7 @@ public final class ComputerUse {
         }
         try checkInputTarget(app)
         let pid = app.processIdentifier
+        await VirtualCursor.typing(VirtualCursor.keycaps(key), pid: pid)
         if let seconds = try args.double("hold_seconds") {
             guard (0.05...10).contains(seconds), count == 1 else {
                 throw ToolError("hold_seconds must be between 0.05 and 10, without repeat.")
@@ -1871,6 +1893,7 @@ public final class ComputerUse {
         }
         try checkInputTarget(app)
         let pid = app.processIdentifier
+        await VirtualCursor.typing("⌨︎", pid: pid)
         // Background Chromium (Electron) reports no focused element even
         // right after a click focused a field: that field is meant.
         let focused = focusedElement(pid) ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }

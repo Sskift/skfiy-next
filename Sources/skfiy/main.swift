@@ -181,6 +181,10 @@ case "call":
     }
     RunLoop.main.run()
 
+case "cursor-overlay":
+    // Internal: draws the agent cursor for `skfiy mcp` (see VirtualCursor).
+    VirtualCursorOverlay.run()
+
 case "capture-window":
     // Internal: a screenshot in a fresh process, for `skfiy mcp` when its own
     // screen capture stalled.

@@ -14,3 +14,4 @@ python3 scripts/bench_reads.py {bin} --rounds 2 --textedit
 python3 scripts/test_flow.py {bin}
 python3 scripts/test_displays.py {bin}
 python3 scripts/test_display_wake.py {bin}
+python3 scripts/test_cursor.py {bin}

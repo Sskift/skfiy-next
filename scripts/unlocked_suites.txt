@@ -13,3 +13,4 @@ python3 scripts/bench_reads.py {bin} --rounds 2 --textedit
 python3 scripts/test_displays.py {bin} --allow-unlocked
 python3 scripts/test_text_entry.py {bin}
 python3 scripts/compat_baseline.py {bin} --mode background
+python3 scripts/test_cursor.py {bin}

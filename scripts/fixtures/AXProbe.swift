@@ -186,6 +186,37 @@ func windows(_ pid: pid_t) -> [String: Any] {
     }]
 }
 
+/// On-screen normal windows (layer 0), front to back.
+func stack() -> [String: Any] {
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return ["windows": list.compactMap { info -> [String: Any]? in
+        guard info[kCGWindowLayer as String] as? Int == 0, let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds) else { return nil }
+        return ["id": info[kCGWindowNumber as String] as? Int ?? 0, "pid": info[kCGWindowOwnerPID as String] as? Int ?? 0,
+                "owner": info[kCGWindowOwnerName as String] as? String ?? "", "alpha": info[kCGWindowAlpha as String] as? Double ?? 1,
+                "x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height]
+    }]
+}
+
+/// The mean colour (0-255) of a rectangle of an image, in its pixels.
+func patch(_ path: String, _ rect: CGRect) -> [String: Any] {
+    guard let image = image(path) else { return ["error": "cannot decode"] }
+    let width = image.width, height = image.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return ["error": "context"] }
+    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    var sum = [0.0, 0.0, 0.0], count = 0.0
+    for y in max(0, Int(rect.minY))..<min(height, Int(rect.maxY)) {
+        for x in max(0, Int(rect.minX))..<min(width, Int(rect.maxX)) {
+            let i = (y * width + x) * 4
+            for c in 0..<3 { sum[c] += Double(pixels[i + c]) }
+            count += 1
+        }
+    }
+    return count == 0 ? ["error": "empty"] : ["r": sum[0] / count, "g": sum[1] / count, "b": sum[2] / count]
+}
+
 func image(_ path: String) -> CGImage? {
     guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -223,6 +254,14 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "dump" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(dump(pid_t(arguments[1])!))
 case "front": output(front())
+case "stack": output(stack())
+case "patch" where arguments.count == 6:
+    let numbers: [Double] = arguments[2...5].compactMap { Double($0) }
+    if numbers.count == 4 {
+        output(patch(arguments[1], CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])))
+    } else {
+        output(["error": "numbers"])
+    }
 case "session": output(session())
 case "displays": output(displays())
 case "windows" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(windows(pid_t(arguments[1])!))
