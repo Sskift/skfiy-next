@@ -275,6 +275,7 @@ python3 scripts/smoke_chromium.py .build/debug/skfiy Safari   # 同一套网页�
 python3 scripts/app_coverage.py     # 只读探测：对正在运行的应用各取一次状态，只报数量和耗时，不输出内容
 python3 eval/run_eval.py            # 真实任务：交给无头 `claude -p`（只开放 skfiy 工具）完成，独立检查结果，并监视前台与最顶层窗口
 skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存到 /tmp/skfiy-screenshot.jpg
+swift scripts/make_extension_icons.swift browser-extension   # 重新画插件图标（browser-extension/icon-*.png，已入库）；之后跑 make embed-extension
 ```
 
 `make smoke-web` / `make smoke-browser` 先运行 `python3 scripts/compat_baseline.py <skfiy> --test-browser`：第一次会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，然后在后台用全新的临时 profile 启动它（加载插件、打开本地测试页服务 `scripts/compat_server.py` 上的 `scripts/fixtures/web.html`），不碰你自己的浏览器。`eval/run_eval.py` 也用这个测试浏览器。测试脚本共用 `scripts/harness.py` 里的 MCP 客户端：它不写你的操作日志；需要你同意的操作（例如上传文件），由测试按脚本里写好的回答答复。
@@ -310,7 +311,7 @@ Sources/skfiy/main.swift   CLI：setup / doctor / uninstall / mcp / tools / call
 install.sh                 一键安装：下载 release 或从源码编译，装到 ~/.local/bin，再运行 skfiy setup
 packaging/homebrew/        Homebrew formula 模板（未发布）
 browser-extension/         MV3 插件：service worker + 注入页面的快照/操作函数
-scripts/                   端到端冒烟测试、应用覆盖探测、测试浏览器启动脚本
+scripts/                   端到端测试（共用 harness.py 的 MCP 客户端）、应用覆盖探测、插件图标生成
 eval/                      真实任务评测：任务、独立判定、前台/最顶层窗口监视（结果在 eval/results，不入库）
 ```
 

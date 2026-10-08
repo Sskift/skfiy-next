@@ -83,7 +83,7 @@ skfiy's own files live under `$HOME/Library` and follow `HOME`, so `HOME=$(mktem
 
 ## Development
 
-`make test` runs the unit tests (use it rather than plain `swift test` with Command Line Tools only), `make test-install` tests install.sh, setup, doctor and uninstall in a throwaway HOME with fake `claude`/`codex` CLIs, and `make dist` builds the release tarball. Python 3 (standard library only) is needed only for the end-to-end test scripts in `scripts/`.
+`make test` runs the unit tests (use it rather than plain `swift test` with Command Line Tools only), `make test-install` tests install.sh, setup, doctor and uninstall in a throwaway HOME with fake `claude`/`codex` CLIs, and `make dist` builds the release tarball. Python 3 (standard library only) is needed only for the end-to-end test scripts in `scripts/`, which share one MCP client (`scripts/harness.py`). `swift scripts/make_extension_icons.swift browser-extension` redraws the committed extension icons (then run `make embed-extension`).
 
 ## License
 

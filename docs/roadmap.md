@@ -474,3 +474,18 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 修正后的验证（23:26–23:30，解锁，锁态采样全部未锁定，前台一直是飞书）：测试应用 25/25，TextEdit 8/8；复核的复现脚本 5/5（测试应用 2/2、TextEdit 3/3，修正前失败）；`compat_baseline --mode background --case textedit` 5/5；表单辅助应用 2/2；窗口 9/9、TextEdit 4/4；验证 13/13、TextEdit 6/6。RustDesk 没有重跑：用户的 RustDesk 开着远程会话，这处修改也不涉及它。
 
 还没处理的复核意见（不会写错数据）：跟随到新窗口后，按旧窗口的元素编号点了旧窗口的文本框，回复说“打字会到这里”，但会话仍是新窗口，接下来的 `type_text` 被拒绝，两次回复互相矛盾；只读 `get_app_state` 期间用户用键盘（而不是鼠标）切到目标应用时，仍会被送回去。
+
+## 测试脚本精简（2026-10-09）
+
+按代码审查里 `scripts/` 重复代码的几条意见整理，skfiy 本身的行为只变了一处（上传一律征求同意）：
+
+- 共用一个 MCP 客户端 `scripts/harness.py`。原来 7 处各写一份 JSON-RPC 客户端：`smoke_textedit`、`smoke_fixture`、`smoke_foreground`、`smoke_chromium`、`smoke_browser`、`app_coverage`，以及 `smoke_locked.py` 里给 `scenario.py`、`compat_baseline.py` 用的那份。新客户端的选项：证据目录、额外环境变量、怎样回答 skfiy 的征求同意（`APPROVE` / `DECLINE`；不给回答就不声明能询问）。没有证据目录时关掉操作日志，测试不写你的日志。`frontmost`、`index`、`status`、`case`、`wait_until` 也只留一份，`smoke_locked.py` 只剩锁屏测试应用的辅助函数。工具报错一律抛 `RuntimeError`（锁屏测试原来抛 `AssertionError`）；`case()` 把报错文字也拿去和期望比对，原来只有 `smoke_browser` 这样做。
+- 删掉只为测试存在的 `SKFIY_UPLOAD_WITHOUT_ASKING`：`test_flow.py`、`test_downloads.py` 的会话改为声明能询问，逐次同意上传，和用户点同意一样；`browser_upload` 一律征求同意。README 的测试变量表和 `skfiy doctor` 的已知变量里也删了。
+- 例行的锁屏、解锁套件不再跑 `bench_reads.py`（各两次）和锁屏键盘实验，按 `eval/results` 的记录约占每轮的五分之一。`bench_reads.py` 留着临时对比用；实验脚本和 `KeyboardProbe.swift` 删除，结论仍在 locked-use/README.md 和上文第 9 节。
+- 测试浏览器只剩一种启动方式 `compat_baseline.launch_chrome`（新增 `fresh`：从空的 profile 启动）。`scripts/test_browser.sh` 删除，改用 `python3 scripts/compat_baseline.py <skfiy> --test-browser`。测试页统一由 `scripts/compat_server.py`（8766 端口）提供，不再另起 8765 端口的 `http.server`，也不再往 `/tmp/skfiy-test` 复制网页和二进制。`make smoke-web` / `make smoke-browser` 直接用 `.build/debug/skfiy`；`smoke_browser.py` 自己起测试页服务，`--user-browser` 不用再手动准备。
+- README 开发一节写上 `scripts/make_extension_icons.swift`（生成已入库的插件图标）。
+- 没做：`smoke_locked.py` 的内嵌探针没有换成 `AXProbe`。锁屏验收用到它的 50 毫秒连续采样（`--watch`）、首尾两次采样的锁态变化和 uid 校验，`AXProbe session` 都没有，换掉就得改验收记录的格式。`compat_baseline.tree_index`（找不到时返回 None）、`test_covered_chromium.py` 自己的测试页服务（8771 端口）也没动。
+
+行数：代码（`scripts/`、`Sources/`、`Makefile`、`eval/`）+414/−874，净减 460 行；其中 Swift −5 行。
+
+验证（只跑了不碰界面的测试；真实应用的套件等用户合并后运行）：`make test` 175/175；`make test-install` 72/72；所有脚本的 `py_compile` 和导入检查；共用客户端对着一个假的 MCP server 检查了同意、拒绝、不能询问三种回答，以及通知记录、截图存盘、报错；对真实的 `skfiy mcp` 只调用了 `tools/list` 和 `list_apps`。
