@@ -238,3 +238,95 @@ public struct ToolError: Error, CustomStringConvertible {
     public let description: String
     public init(_ description: String) { self.description = description }
 }
+
+/// Text in accessibility elements: the caret, the selection, where a click
+/// would put the caret, and a value read back after a change.
+extension ComputerUse {
+    /// The app's focused element, when it takes text.
+    func focusedTextElement(_ pid: pid_t) -> AXUIElement? {
+        focusedElement(pid).flatMap { isTextLike($0) ? $0 : nil }
+    }
+
+    func ancestor(of element: AXUIElement, levels: Int, where matches: (AXUIElement) -> Bool) -> AXUIElement? {
+        var current: AXUIElement? = element
+        for _ in 0...levels {
+            guard let candidate = current else { return nil }
+            if matches(candidate) {
+                return candidate
+            }
+            let role = candidate.string(kAXRoleAttribute) ?? ""
+            if role == "AXWindow" || role == "AXApplication" || role == "AXWebArea" {
+                return nil
+            }
+            current = candidate.element(kAXParentAttribute)
+        }
+        return nil
+    }
+
+    /// The caret index a click at `point` would produce.
+    func textIndex(in element: AXUIElement, at point: CGPoint) -> Int? {
+        let length = (element.string(kAXValueAttribute) as NSString?)?.length ?? 0
+        // Below the last line a click lands at the end; AXRangeForPosition says 0.
+        if length > 0, let last = textBounds(in: element, range: CFRange(location: length - 1, length: 1)),
+           point.y > last.maxY {
+            return length
+        }
+        var position = point
+        guard let value = AXValueCreate(.cgPoint, &position) else { return nil }
+        var result: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, "AXRangeForPosition" as CFString, value, &result) == .success,
+              let result, CFGetTypeID(result) == AXValueGetTypeID() else {
+            return nil
+        }
+        var range = CFRange()
+        return AXValueGetValue(result as! AXValue, .cfRange, &range) ? range.location : nil
+    }
+
+    private func textBounds(in element: AXUIElement, range: CFRange) -> CGRect? {
+        var range = range
+        guard let value = AXValueCreate(.cfRange, &range) else { return nil }
+        var result: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, "AXBoundsForRange" as CFString, value, &result) == .success,
+              let result, CFGetTypeID(result) == AXValueGetTypeID() else {
+            return nil
+        }
+        var rect = CGRect.zero
+        return AXValueGetValue(result as! AXValue, .cgRect, &rect) && rect.height > 0 ? rect : nil
+    }
+
+    func setCaret(_ element: AXUIElement, _ location: Int) {
+        try? setSelection(element, CFRange(location: location, length: 0))
+    }
+
+    /// The selected range of a text element, when it reports one.
+    func selectedRange(_ element: AXUIElement) -> CFRange? {
+        guard let value = element.value(kAXSelectedTextRangeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var range = CFRange(location: 0, length: 0)
+        return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
+    }
+
+    func setSelection(_ element: AXUIElement, _ range: CFRange) throws {
+        var selection = range
+        guard let value = AXValueCreate(.cfRange, &selection) else {
+            throw ToolError("Could not build the selection range.")
+        }
+        try element.set(kAXSelectedTextRangeAttribute, value)
+    }
+
+    /// A web field's value as accessibility reports it after a change:
+    /// Chromium updates its tree asynchronously, so a read right after
+    /// setting can still show the old value for a moment.
+    func settledValue(_ element: AXUIElement, expecting: String? = nil, changedFrom: String? = nil) async -> String? {
+        let timeout = 0.6
+        let started = Date()
+        var value = element.string(kAXValueAttribute)
+        while Date().timeIntervalSince(started) < timeout {
+            if let expecting, value == expecting { return value }
+            if let changedFrom, value != changedFrom { return value }
+            if expecting == nil, changedFrom == nil { return value }
+            await Input.pause(0.05)
+            value = element.string(kAXValueAttribute)
+        }
+        return value
+    }
+}

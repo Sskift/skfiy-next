@@ -1,3 +1,5 @@
+import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -148,4 +150,49 @@ func cutZoom(from capture: CGImage, captureGeometry: CaptureGeometry, screenshot
     let height = max(1, Int((shown.height * factor).rounded()))
     guard let image = resized(crop, width: width, height: height) else { return nil }
     return (image, shown)
+}
+
+extension ComputerUse {
+    // MARK: - zoom
+
+    /// A part of the latest screenshot at the display's full resolution, for
+    /// small text. The coordinate system for x/y arguments does not change.
+    func zoom(_ args: Arguments) async throws -> ToolResult {
+        let (app, session) = try target(args)
+        guard let geometry = session.geometry, let taken = session.captured else {
+            throw ToolError("There is no screenshot to zoom into. Call get_app_state first.")
+        }
+        let region = try zoomRegion(args, geometry: geometry)
+        let pid = app.processIdentifier
+        // The window may have moved since: then the screenshot's pixels no longer
+        // say where things are, and nothing should be mapped from them.
+        let window = session.window ?? AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
+        if session.independent {
+            try checkWindowUnmoved(session)
+        } else if let now = appRegion(pid: pid, focusedWindow: window?.frame), now != geometry.rect {
+            sessions[pid]?.zoom = nil
+            throw ToolError("The window moved or changed size since the latest screenshot (it showed \(geometry.rect), now \(now)). Call get_app_state again; its old coordinates are not used.")
+        }
+        let backing = backingScale(for: geometry.rect)
+        let native = backing / geometry.scale
+        let factor = try ZoomMapping.factor(args, native: native, region: region)
+        let topLeft = geometry.toScreen(x: region.minX, y: region.minY)
+        let bottomRight = geometry.toScreen(x: region.maxX, y: region.maxY)
+        let rect = CGRect(x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
+        // An inspected window is cut from a capture of it alone, as it was shown.
+        let shot = try await captureView(pid: pid, window: inspectedWindow(pid), rect: rect, maxScale: backing)
+        guard let capture = TextRecognition.decode(shot.data),
+              let cut = cutZoom(from: capture, captureGeometry: shot.geometry, screenshot: geometry, region: region, factor: factor) else {
+            throw ToolError("Could not cut that region from the window.")
+        }
+        zoomCount += 1
+        let mapping = ZoomMapping(id: "z\(zoomCount)", region: cut.shown, zoomWidth: cut.image.width, zoomHeight: cut.image.height,
+                                  screenshot: geometry, screenshotTaken: taken)
+        sessions[pid]?.zoom = mapping
+        var lines = mapping.lines(factor: factor, native: native, lasting: ", until the next screenshot of this app.")
+        if args.bool("ocr") ?? false {
+            lines += try await mapping.recognizedText(in: cut.image, showing: rect)
+        }
+        return ToolResult(text: lines.joined(separator: "\n"), image: try encode(cut.image, format: "png"), imageMimeType: "image/png")
+    }
 }

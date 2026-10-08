@@ -293,16 +293,37 @@ skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存�
 ```
 Sources/SkfiyKit/
   MCPServer.swift     stdio JSON-RPC（MCP）
-  ToolSchemas.swift   工具定义与给模型的使用说明
-  ComputerUse.swift   工具实现：状态快照、动作分发、会话（元素编号 ↔ AX 元素，像素 ↔ 屏幕点）
+  ToolSchemas.swift   工具定义、给模型的使用说明；各工具的特性（是否输入、可验证、锁屏可用、急停时仍可用、记入日志），分发用的各个工具列表由此得出
+  ComputerUse.swift   工具分发与会话（元素编号 ↔ AX 元素，像素 ↔ 屏幕点）、前台守护、操作后的截图、共用的检查
+  AppState.swift      list_apps、get_app_state（截图、带编号的树、since 变化）、树里的菜单
+  Actions.swift       click、perform_secondary_action、set_value、scroll、drag
+  Typing.swift        select_text、press_key、type_text
+  Foreground.swift    run_in_front、skfiy 自己的剪贴板（cmd+c/x/v）、read_clipboard、hand_over、快捷键对应的菜单项
+  Documents.swift     open_file、save_document、file_dialog
+  Waiting.swift       等待引擎（wait_for、browser_wait 共用）与解锁时的 wait_for
+  Zoom.swift          zoom
+  Locate.swift / Locator.swift   locate 与 target：按描述查找控件
+  Verification.swift / VerifiedActions.swift   expect：操作结果验证、防重复提交
+  Capabilities.swift  get_app_capabilities
+  FlowTools.swift / Flow.swift   flow_start / flow_record / flow_status
+  DirectLockedUse.swift / DirectLockedCapture.swift   锁屏 direct 模式：单窗口截图、按进程投递的输入
   AXTree.swift        辅助功能树的遍历、裁剪与文本渲染
-  AXElement.swift     AXUIElement 薄封装
+  AXElement.swift     AXUIElement 薄封装、文本元素的光标与选区
+  StateChanges.swift / ChangeEvents.swift   状态版本与变化摘要、辅助功能通知
+  TextRecognition.swift   Vision 文字识别
   Input.swift         投递到进程的键盘/鼠标/滚轮事件，SkyLight 入口
+  Windows.swift       窗口查找、最上层窗口、前台守护（FrontGuard）与 run_in_front 的批准文件
+  WindowTargeting.swift   指针与键盘落在哪个窗口、窗口是否被挡住
   Capture.swift       ScreenCaptureKit 截图与坐标映射
-  Apps.swift          应用列表、名称/路径/bundle id 解析、后台启动
+  VirtualCursor.swift skfiy 自己的光标
+  Apps.swift          应用列表、名称/路径/bundle id 解析、后台启动、锁屏状态
   Keys.swift          xdotool 按键语法解析
+  Clipboard.swift     剪贴板内容与系统剪贴板的借用
+  FilePanel.swift     打开/存储面板
   BrowserBridge.swift native messaging 宿主 ⇄ Unix socket ⇄ MCP 的桥接、安装
   BrowserTools.swift  browser_* 工具
+  EmergencyStop.swift / ActionLog.swift / Instance.swift   急停、操作日志、每个 MCP 服务独立的可执行文件链接
+  Arguments.swift     工具参数的类型化读取
   Setup.swift         skfiy setup / doctor / uninstall：插件文件、native host、Claude Code / Codex 注册、检查清单
   Paths.swift         skfiy 自己的文件位置（跟随 $HOME）
   EmbeddedExtension.swift  二进制里携带的插件副本（scripts/embed_extension.sh 生成）
