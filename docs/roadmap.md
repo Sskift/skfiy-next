@@ -350,3 +350,66 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 - 新增 `scripts/test_cursor.py`，13/13 通过：点击只启动一个辅助进程，它是 `skfiy mcp` 的子进程；点击照常生效；光标窗口在屏幕上，高度不到 80 pt，尖端正落在点击点上；窗口紧贴在测试应用窗口的正上方（那次上面还有飞书、ChatGPT、Ghostty 等 14 个窗口，光标随测试窗口一起被挡住）；前台应用不变；截图里没有光标（光标所在处的像素与出现光标前相同）；测试窗口移动后光标跟着移动；空闲后淡出；滚动和按键时重新出现；始终只有一个辅助进程；会话结束后辅助进程退出。`SKFIY_CURSOR=0` 时不启动辅助进程（1/1）。锁屏时只检查不启动辅助进程。
 - 单独截取光标窗口，确认了箭头和键帽的样子。
 - 光标默认开启，用这个版本回归验证（13/13、TextEdit 6/6）、窗口（9/9、TextEdit 4/4）、定位（13/13、TextEdit 3/3）、等待 15/15、放大 26/26、文字输入 4/4、能力查询 21/21，全部通过。新增单元测试：键帽格式化（共 146 个）。
+
+## 一键安装与安装简化（2026-10-08）
+
+问题：别人装 skfiy 很费劲。二进制本身没有运行时依赖（只链接系统框架，没有 Swift 包依赖），真正的门槛是：
+
+- 必须先装约 1.3 GB 的 Command Line Tools、clone（README 里没有地址）、编译 70–80 秒；
+- 插件文件只能由 `make install` 从源码目录复制；
+- `skfiy doctor` 不在默认 PATH 上；
+- `claude mcp add` 重复运行会报错；
+- 没有 Chromium 浏览器时 `make install` 以错误结束；
+- 经 PATH 运行 `skfiy install-browser-bridge` 会把不存在的 `$PWD/skfiy` 注册成 native host。
+
+另外，skfiy 忽略 `$HOME`（Foundation 的 home 目录不看这个变量），所以 `HOME=临时目录 make install` 会改写真实的 `~/Library` 下的 native host 清单，安装也就没法在临时目录里测试。
+
+改动：
+
+- `install.sh`（`curl -fsSL …/install.sh | bash`）：要求 macOS 14+，不用 sudo。有 GitHub release 时下载通用二进制并校验 sha256；没有时 clone 并编译，缺 Command Line Tools 时说明怎么装。之后经临时文件改名装到 `~/.local/bin`，再运行 `skfiy setup`。在 clone 里运行时直接编译当前代码，`make install` 现在就是它。
+- `skfiy setup`：可反复运行。
+  - 插件文件改为编进二进制（`EmbeddedExtension.swift`，由 `scripts/embed_extension.sh` 生成，单元测试逐字节核对与 `browser-extension/` 一致），只在内容变了时重写，并删掉多余文件。
+  - native host 清单只在内容变了时重写；没有 Chromium 浏览器只是一条说明，不算失败。
+  - 用 `claude mcp get` 读出现有注册：已经指向这个二进制就不动；路径变了就先删再加，保留用户原有的 `-e` 设置；没有就 `claude mcp add --scope user`。Codex 只在传 `--codex` 时添加，已有的 Codex 条目会一直随更新保持正确。
+  - 权限只检查不弹窗，并写出应该授予哪个应用（沿父进程链找到最外层的应用，而不是看 `TERM_PROGRAM`）。
+  - 最后列出还剩的手动步骤。
+- `skfiy uninstall`：注销 Claude Code / Codex 条目，删除 native host 清单、`~/Library` 下 skfiy 的三个文件夹和二进制；Homebrew 安装的二进制留给 `brew uninstall`。
+- `skfiy doctor` 成了检查清单：
+  - 权限和宿主应用、PATH、Claude Code 注册的二进制；
+  - 每个浏览器的 native host 指向哪里、目标是否存在；
+  - 插件文件和已连接插件的版本与二进制携带的是否一致（插件的 hello 早就带了版本号，以前没人比较）；
+  - 急停、仍在跑旧二进制的 MCP server（比较实例硬链接和当前二进制的 inode）；
+  - 无效或拼错的 `SKFIY_*` 设置（例如旧的 `SKFIY_LOCKED_USE=1`）。
+  
+  `--check` 不弹授权提示，供脚本和测试用。
+- skfiy 自己的文件（插件、浏览器 socket、急停标记、流程、操作日志、实例链接）改由 `SkfiyPaths` 统一给出，跟随 `$HOME`。文件面板和“最近使用的应用”仍用真实的 home。`Input.swift` 里的 front-grant 路径等并行改动合并后再改。
+- 注册和 native host 用的是二进制被调用时的路径，不解析符号链接（Homebrew 的 Cellar 路径升级后会失效）。
+- MCP `initialize` 在缺权限时把“设置未完成：缺什么、授予哪个应用”放在 instructions 最前面，让模型在第一次调用失败前就告诉用户。
+- CLI 小问题：
+  - 用法里显示真实路径，不再是 `/path/to/skfiy`；
+  - 未知命令会被点名；
+  - `stop` / `resume` / `status` / `tools` 拒绝多余参数，`skfiy stop --help` 不再真的急停；
+  - `skfiy log abc` 报错；
+  - 在终端里手动运行 `skfiy mcp` 时，在 stderr 说明它在等 MCP 消息；
+  - 未连接浏览器时的提示改为 `skfiy setup`。
+- `browser_wait` 被取消后立即停下（以前 `try? Task.sleep` 吞掉取消，会不停探测页面直到超时，最长 60 秒，期间整个 server 不接受别的请求）。
+- 发布准备（未发布任何东西）：
+  - `scripts/release.sh` / `make dist` 生成通用（arm64 + x86_64）、ad-hoc 签名的 `skfiy-macos-universal.tar.gz` 和 `.sha256`，2.4 MB；
+  - `.github/workflows/release.yml` 在推送 `v*` 标签时构建、测试并发布 release，手动触发时只构建和测试；
+  - `packaging/homebrew/skfiy.rb` 是 formula 模板。
+- `make release` / `make install` 只编译 `skfiy`，不再顺带编译实验性的 guardian。删除误提交的根目录 `control.jsonl`。
+- README 顶部改为“一键安装”，加了卸载、常见问题，环境变量表分成“设置”和“只给测试用”；新增英文的 `README.en.md`。
+
+验证（2026-10-08，只跑了不碰界面的测试，没有运行真实应用的测试套件）：
+
+- `make test` 159 个单元测试全部通过。新增 13 个：`$HOME` 解析、内嵌插件与源码一致、插件安装/更新/保持不动、native host 安装与卸载、Claude Code 和 Codex 注册输出的解析、注册命令的增删改、设置检查、PATH、MCP 的设置未完成提示。
+- `make test-install`（`scripts/test_install.sh`）60/60：
+  - 环境：临时 HOME，PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin` 和记录参数的假 `claude` / `codex`，真的 CLI 不可达。
+  - 首次安装；再次运行不重复注册、不重写文件；`-e` 设置写入后保留；换安装位置后所有注册跟着改。
+  - 从 `file://` 的 release 压缩包安装；校验和不对时什么也不装。
+  - 没有浏览器和 CLI 时退出码为 0 并给出命令。
+  - `doctor --check`；`stop --help` 不急停；`--from-source` 编译安装。
+  - 卸载后什么都不剩。
+  - 前后对比真实的 `~/.local/bin/skfiy`、`~/Library/Application Support/skfiy` 下的插件文件、全部 native host 清单、`~/.claude.json` 里的 skfiy 条目和 `~/.codex/config.toml`，修改时间和哈希都没变。
+- 用 `make dist` 生成的通用二进制再跑一遍安装测试，60/60；`arch -x86_64` 下也能运行。
+- 模拟新用户的 `curl … | bash`：脚本从 stdin 读入，临时 HOME。GitHub 上还没有 release，于是自动 clone 并编译，110 秒装好。
