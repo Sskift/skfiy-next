@@ -11,7 +11,11 @@
 // Commands: text(value, after), clear(after), animate(seconds), open_window(title, key:
 // the name later commands use for it, by default its title), close_window(title),
 // move(title, dx, dy), place(title, x, y), resize(title, width, height),
-// recreate(title), hide, unhide, swap, tiny(code), key(title), quit.
+// recreate(title), hide, unhide, swap, tiny(code), key(title), minimize(title),
+// deminimize(title), quit. open_window with input: true gives the window a text
+// field of its own ("Extra input", its first responder); state.json then has
+// each window's field value, the mouse and wheel events it received, and
+// whether it is the key and main window.
 import AppKit
 import CoreGraphics
 import Darwin
@@ -49,9 +53,11 @@ struct FixtureError: Error, CustomStringConvertible {
 /// Records every key event it dispatches, per window.
 final class RecordingWindow: NSWindow {
     var keyReceived: ((RecordingWindow, NSEvent) -> Void)?
+    var pointerReceived: ((RecordingWindow, NSEvent) -> Void)?
     override var canBecomeKey: Bool { true }
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown { keyReceived?(self, event) }
+        if [.leftMouseDown, .rightMouseDown, .leftMouseDragged, .scrollWheel].contains(event.type) { pointerReceived?(self, event) }
         super.sendEvent(event)
     }
 }
@@ -102,6 +108,8 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private var counters: [String: Int] = [:]
     private var submitted: [String] = []
     private var keys: [String: Int] = [:]
+    private var pointer: [String: [String: Int]] = [:]
+    private var extraInputs: [String: NSTextField] = [:]
     private var canvasClicks: [[String: Any]] = []
     private var lastCommand = 0
     private var animation: Timer?
@@ -125,6 +133,16 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         window.keyReceived = { [weak self] window, event in
             self?.keys[window.title, default: 0] += 1
             self?.record("key", ["window": window.title, "keyCode": Int(event.keyCode), "characters": event.characters ?? ""])
+        }
+        window.pointerReceived = { [weak self] window, event in
+            let kind = switch event.type {
+            case .scrollWheel: "scroll"
+            case .leftMouseDragged: "drag"
+            case .rightMouseDown: "rightDown"
+            default: "down"
+            }
+            self?.pointer[window.title, default: [:]][kind, default: 0] += 1
+            self?.record("pointer", ["window": window.title, "kind": kind])
         }
         return window
     }
@@ -205,7 +223,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func controlTextDidChange(_ notification: Notification) { record("text") }
 
-    private func openWindow(_ title: String, key: String? = nil) {
+    private func openWindow(_ title: String, key: String? = nil, input: Bool = false) {
         let key = key ?? title
         if extra[key] != nil { return }
         let window = makeWindow(title, size: NSSize(width: 360, height: 180))
@@ -218,6 +236,16 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         done.identifier = NSUserInterfaceItemIdentifier("done")
         done.frame = NSRect(x: 240, y: 20, width: 100, height: 30)
         content.addSubview(done)
+        if input {
+            let field = NSTextField(string: "")
+            field.frame = NSRect(x: 20, y: 80, width: 200, height: 26)
+            field.placeholderString = "Extra input"
+            field.setAccessibilityLabel("Extra input")
+            field.delegate = self
+            content.addSubview(field)
+            window.makeFirstResponder(field)
+            extraInputs[key] = field
+        }
         let frame = main.frame
         window.setFrameOrigin(NSPoint(x: frame.minX + 60, y: frame.minY + 60))
         window.orderBack(nil)
@@ -225,6 +253,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.extra[key] = nil
+                self?.extraInputs[key] = nil
                 self?.record("window_closed", ["title": title])
             }
         }
@@ -268,7 +297,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                     }
                 }
             }
-        case "open_window": openWindow(title ?? "Scenario extra \(options.nonce)", key: command["key"] as? String)
+        case "open_window": openWindow(title ?? "Scenario extra \(options.nonce)", key: command["key"] as? String, input: command["input"] as? Bool ?? false)
         case "close_window": window(title)?.close()
         case "move":
             if let window = window(title) {
@@ -306,6 +335,8 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             status.stringValue = "status: layout \(swapped ? "swapped" : "original")"
         case "tiny": canvas.tiny = "tiny \(command["code"] as? String ?? "")"
         case "key": window(title)?.makeKey()
+        case "minimize": window(title)?.miniaturize(nil)
+        case "deminimize": window(title)?.deminiaturize(nil)
         case "quit": NSApp.terminate(nil)
         default: record("unknown_command", ["op": op])
         }
@@ -335,7 +366,9 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         sequence += 1
         let session = CGSessionCopyCurrentDictionary() as? [String: Any]
         let windows = ([main] + extra.values.sorted { $0.title < $1.title }).compactMap { $0 }.map { window -> [String: Any] in
-            ["title": window.title, "number": window.windowNumber, "frame": frame(window), "visible": window.isVisible, "key": window.isKeyWindow]
+            ["title": window.title, "number": window.windowNumber, "frame": frame(window), "visible": window.isVisible, "key": window.isKeyWindow,
+             "main": window.isMainWindow, "minimized": window.isMiniaturized, "pointer": pointer[window.title] ?? [:],
+             "input": (window == main ? input.stringValue : extraInputs.values.first { $0.window == window }?.stringValue) ?? ""]
         }
         var state: [String: Any] = [
             "nonce": options.nonce, "pid": Int(getpid()), "sequence": sequence, "event": event, "details": details,
@@ -343,6 +376,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             "status": status.stringValue, "message": message.stringValue, "input": input.stringValue,
             "counters": counters, "submitted": submitted, "keys": keys, "canvasClicks": canvasClicks,
             "windows": windows, "hidden": NSApp.isHidden, "active": NSApp.isActive,
+            "keyWindow": NSApp.keyWindow?.title ?? "", "mainWindow": NSApp.mainWindow?.title ?? "",
             "lastCommand": lastCommand, "animating": canvas.phase != nil, "tiny": canvas.tiny, "swapped": swapped
         ]
         state["buttons"] = buttons.mapValues { button -> [String: Double] in

@@ -24,6 +24,7 @@ risked the user's own windows or data).
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -139,10 +140,11 @@ class Run:
         self.sampling = True
         self.sampler = threading.Thread(target=self.sample_lock, daemon=True)
         self.sampler.start()
-        # Test windows must never stay over the user's windows.
+        # Test windows must never stay over the user's windows. SKFIY_TEST_WINDOW_GUARD=0 runs
+        # without the guard (it raises the front app's own window, whatever app that is).
         self.guard_log = (evidence_dir / 'window-guard.jsonl').open('w')
         self.guard = subprocess.Popen([str(TOOLS['WindowGuard']), *GUARDED], stdout=self.guard_log,
-                                      stderr=subprocess.DEVNULL) if mode != 'locked' else None
+                                      stderr=subprocess.DEVNULL) if mode != 'locked' and os.environ.get('SKFIY_TEST_WINDOW_GUARD') != '0' else None
 
     def sample_lock(self):
         while self.sampling:

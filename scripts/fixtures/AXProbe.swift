@@ -3,6 +3,9 @@
 // window server, never through skfiy. Read only; prints one JSON object.
 //
 //   AXProbe dump <pid>     windows (AX + CG), sheets with their buttons, focused element, selected rows
+//   AXProbe perwindow <pid> each window by id: its text, selection, scroll bars; the key and main window
+//   AXProbe instances <bundle id>   every process of an app: pid, activation policy, window count
+//   AXProbe attribute <pid> <name>  one attribute of the application element
 //   AXProbe front          the frontmost app and the owner of the top normal window
 //   AXProbe session        whether the console session is locked, and the user's idle seconds
 //   AXProbe displays       the online displays (global top-left points) and their pixels per point
@@ -186,6 +189,64 @@ func windows(_ pid: pid_t) -> [String: Any] {
     }]
 }
 
+typealias GetWindowID = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+let getWindowID = dlsym(dlopen(nil, RTLD_NOW), "_AXUIElementGetWindow").map { unsafeBitCast($0, to: GetWindowID.self) }
+
+func windowNumber(_ window: AXUIElement?) -> Int {
+    guard let window else { return 0 }
+    var id: CGWindowID = 0
+    return getWindowID?(window, &id) == .success ? Int(id) : 0
+}
+
+/// Each window on its own, by id: its text (value length, start and end,
+/// selection), scroll bars, whether it is minimized; and which window is the
+/// app's key (focused) and main window, and holds the focused element.
+func perWindow(_ pid: pid_t) -> [String: Any] {
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 3)
+    var result: [String: Any] = ["pid": Int(pid), "focusedWindow": windowNumber(element(app, kAXFocusedWindowAttribute)),
+                                 "mainWindow": windowNumber(element(app, kAXMainWindowAttribute)),
+                                 "hidden": string(app, kAXHiddenAttribute) == "1"]
+    if let focused = element(app, kAXFocusedUIElementAttribute) {
+        result["focusedElementWindow"] = windowNumber(element(focused, kAXWindowAttribute))
+        result["focusedElementRole"] = string(focused, kAXRoleAttribute) ?? ""
+    }
+    result["windows"] = elements(app, kAXWindowsAttribute).filter { string($0, kAXRoleAttribute) == kAXWindowRole }.map { window -> [String: Any] in
+        let texts = search(window, budget: 3000) { _, role in role == "AXTextArea" || role == "AXTextField" }.prefix(4).map { text -> [String: Any] in
+            let value = string(text, kAXValueAttribute) ?? ""
+            var info: [String: Any] = ["role": string(text, kAXRoleAttribute) ?? "", "label": string(text, kAXDescriptionAttribute) ?? "",
+                                       "length": (value as NSString).length, "head": String(value.prefix(60)), "tail": String(value.suffix(60)),
+                                       "focused": string(text, kAXFocusedAttribute) == "1"]
+            if let selection = range(text) { info["selection"] = selection }
+            return info
+        }
+        let bars = search(window, budget: 3000) { _, role in role == "AXScrollBar" }.compactMap { (attribute($0, kAXValueAttribute) as? NSNumber)?.doubleValue }
+        return ["id": windowNumber(window), "title": string(window, kAXTitleAttribute) ?? "", "minimized": string(window, kAXMinimizedAttribute) == "1",
+                "texts": Array(texts), "scroll": bars]
+    }
+    return result
+}
+
+/// Every process of an app (by bundle id): its pid, activation policy and
+/// how many windows accessibility lists for it.
+func instances(_ bundleID: String) -> [String: Any] {
+    let policies: [NSApplication.ActivationPolicy: String] = [.regular: "regular", .accessory: "accessory", .prohibited: "prohibited"]
+    return ["instances": NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == bundleID.lowercased() }.map { app -> [String: Any] in
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 2)
+        return ["pid": Int(app.processIdentifier), "policy": policies[app.activationPolicy] ?? "?", "active": app.isActive,
+                "windows": elements(element, kAXWindowsAttribute).count]
+    }]
+}
+
+/// One attribute of an app's application element (e.g. AXEnhancedUserInterface).
+func appAttribute(_ pid: pid_t, _ name: String) -> [String: Any] {
+    let element = AXUIElementCreateApplication(pid)
+    var value: CFTypeRef?
+    let status = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+    return ["status": Int(status.rawValue), "value": (value as? NSNumber)?.intValue ?? (value as? String) ?? NSNull()]
+}
+
 /// On-screen normal windows (layer 0), front to back.
 func stack() -> [String: Any] {
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -254,6 +315,9 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "dump" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(dump(pid_t(arguments[1])!))
 case "front": output(front())
+case "instances" where arguments.count == 2: output(instances(arguments[1]))
+case "attribute" where arguments.count == 3 && pid_t(arguments[1]) != nil: output(appAttribute(pid_t(arguments[1])!, arguments[2]))
+case "perwindow" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(perWindow(pid_t(arguments[1])!))
 case "stack": output(stack())
 case "patch" where arguments.count == 6:
     let numbers: [Double] = arguments[2...5].compactMap { Double($0) }
@@ -268,6 +332,6 @@ case "windows" where arguments.count == 2 && pid_t(arguments[1]) != nil: output(
 case "ocr" where arguments.count == 2: output(ocr(arguments[1]))
 case "red" where arguments.count == 2: output(red(arguments[1]))
 default:
-    FileHandle.standardError.write(Data("usage: AXProbe dump <pid> | front | session | displays | windows <pid> | ocr <image> | red <image>\n".utf8))
+    FileHandle.standardError.write(Data("usage: AXProbe dump <pid> | perwindow <pid> | instances <bundle id> | attribute <pid> <name> | front | session | displays | windows <pid> | ocr <image> | red <image>\n".utf8))
     exit(2)
 }
