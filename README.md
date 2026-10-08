@@ -248,7 +248,6 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | 变量 | 作用 |
 | --- | --- |
 | `SKFIY_STOP_FILE` | 急停标记文件的位置（默认 `~/Library/Application Support/skfiy/stopped`；测试用它互不干扰） |
-| `SKFIY_UPLOAD_WITHOUT_ASKING` | `1` 让 `browser_upload` 不再逐次征求同意（只用于无人值守的测试） |
 | `SKFIY_WAIT_EVENTS` | `0`：等待改回固定间隔轮询（`scripts/bench_reads.py` 用来对比） |
 | `SKFIY_FRONT_GRANT_FILE` | `run_in_front` 批准文件的位置（默认 `~/Library/Caches/skfiy/front-grant`） |
 | `SKFIY_OCR_DUMP` | 一个文件夹：把每次文字识别的图片和结果存进去 |

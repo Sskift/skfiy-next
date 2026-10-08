@@ -34,7 +34,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat_baseline as compat  # noqa: E402
-from harness import Client  # noqa: E402
+from harness import APPROVE, Client  # noqa: E402
 from scenario import Session, main_binary  # noqa: E402
 
 STEPS = [{'id': 'download', 'title': 'Download the data file'},
@@ -229,7 +229,8 @@ def textedit_flow(flows, browser):
 
 
 def session(name, flows):
-    return Session(name, fixture=False, environment={'SKFIY_FLOW_DIR': str(flows), 'SKFIY_UPLOAD_WITHOUT_ASKING': '1'})
+    # Uploads ask the user first; this client says yes, as the user would.
+    return Session(name, fixture=False, environment={'SKFIY_FLOW_DIR': str(flows)}, answer=APPROVE)
 
 
 def main():
