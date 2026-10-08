@@ -660,7 +660,13 @@ def launch_chrome(binary, url='about:blank', restart=False):
         subprocess.run(['pkill', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'])
         wait_until(lambda: not chrome_pid(), timeout=10)
     if chrome_pid():
-        return chrome_pid()
+        pid = chrome_pid()
+        # Once its last window closes (a test closed the last tab), Chrome
+        # unloads the profile and the extension with it. Reopening the app
+        # brings a window back, and the extension reconnects.
+        if not (Path.home() / f'Library/Application Support/skfiy/browsers/{pid}.sock').exists():
+            sh(TOOLS['Launch'], chrome_app(), timeout=30)
+        return pid
     profile = WORK / 'chrome-profile'
     extension = WORK / 'extension'
     # Chrome keeps running a cached service worker for an unpacked extension;

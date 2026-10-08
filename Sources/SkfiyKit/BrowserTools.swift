@@ -25,6 +25,7 @@ final class BrowserTools {
 
     static let notConnected = """
     No browser is connected to skfiy. To enable the browser tools, run `make install` in the skfiy repository (or `skfiy install-browser-bridge`), then in Chrome open chrome://extensions, turn on Developer mode, click "Load unpacked", and choose ~/Library/Application Support/skfiy/browser-extension.
+    A running Chrome with no window open has its extensions unloaded until a window opens again.
     Until then, drive the browser with get_app_state and the other app tools.
     """
 
