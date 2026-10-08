@@ -28,7 +28,7 @@ struct Tool {
 
 /// MCP tool definitions. Names and core parameters follow Codex's macOS
 /// Computer Use server, so prompts and habits transfer between the two.
-enum ToolSchemas {
+public enum ToolSchemas {
     private static let app: [String: Any] = [
         "type": "string",
         "description": "App name, full app path, unambiguous bundle identifier, or pid:N"
@@ -108,6 +108,28 @@ enum ToolSchemas {
     /// The names of the tools with any of `traits`, in the order they are listed.
     static func names(_ traits: Tool.Traits, in tools: [Tool] = all + browser) -> [String] {
         tools.filter { !$0.traits.isDisjoint(with: traits) }.map(\.name)
+    }
+
+    /// `skfiy tools`: each tool with its arguments (optional ones marked ?)
+    /// and what it is for, the first sentence of its description.
+    public static func summary() -> String {
+        (all + browser).map { tool in
+            let schema = tool.definition["inputSchema"] as? [String: Any] ?? [:]
+            let required = schema["required"] as? [String] ?? []
+            let optional = ((schema["properties"] as? [String: Any])?.keys.filter { !required.contains($0) } ?? []).sorted()
+            let arguments = (required + optional.map { $0 + "?" }).joined(separator: ", ")
+            return "\(tool.name)(\(arguments))\n    " + firstSentence(tool.definition["description"] as? String ?? "")
+        }.joined(separator: "\n")
+    }
+
+    /// Up to the first full stop, not counting the one in "e.g.".
+    static func firstSentence(_ text: String) -> String {
+        var sentence = ""
+        for part in text.prefix(while: { $0 != "\n" }).components(separatedBy: ". ") {
+            sentence += sentence.isEmpty ? part : ". " + part
+            if !sentence.hasSuffix("e.g"), !sentence.hasSuffix("i.e") { break }
+        }
+        return sentence.hasSuffix(".") ? sentence : sentence + "."
     }
 
     static let all: [Tool] = [

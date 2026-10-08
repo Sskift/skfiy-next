@@ -121,6 +121,19 @@ struct MCPServerTests {
         ])
     }
 
+    /// `skfiy tools`: arguments (required first, optional marked ?) and the
+    /// first sentence of each description.
+    @Test func toolSummaryShowsArgumentsAndPurpose() {
+        #expect(ToolSchemas.firstSentence("Close a tab. Only close tabs you opened.") == "Close a tab.")
+        #expect(ToolSchemas.firstSentence("Invoke an action (e.g. Increment). Works.") == "Invoke an action (e.g. Increment).")
+        #expect(ToolSchemas.firstSentence("Press a key\n  - Avoid keys. Really.") == "Press a key.")
+        let lines = ToolSchemas.summary().split(separator: "\n")
+        #expect(lines.count == 2 * ComputerUse.toolNames.count)
+        #expect(lines.contains("browser_close_tab(tab_id, browser?)"))
+        #expect(lines.contains("zoom(app, x, y, width, height, ocr?, scale?)"))
+        #expect(lines.contains("    Record a step of a flow."))
+    }
+
     @Test func instructionsAndToolsStayWithinWhatClientsCarry() throws {
         // Claude Code shows the first 2048 characters of a server's
         // instructions; the rest would be dropped without a word.

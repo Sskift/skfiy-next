@@ -11,7 +11,7 @@ Usage:
   skfiy doctor [--check]         Check the setup; without --check, macOS asks for missing permissions
   skfiy uninstall [--keep-binary]  Undo setup and remove skfiy's files (and this binary)
   skfiy mcp                      Run the MCP server (your MCP client starts it)
-  skfiy tools                    List the tools
+  skfiy tools                    List the tools: arguments (? optional) and what each is for
   skfiy stop | resume | status   Emergency stop for every running skfiy (also ⌃⌥⌘. anywhere)
   skfiy log [N]                  The last N actions skfiy took (~/Library/Logs/skfiy/actions.jsonl)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
@@ -174,9 +174,7 @@ case "status":
 
 case "tools":
     noArguments(arguments)
-    for name in ComputerUse.toolNames {
-        print(name)
-    }
+    print(ToolSchemas.summary())
 
 case "call":
     guard arguments.count >= 2 else { fail("Usage: skfiy call <tool> [json-args]; `skfiy tools` lists the tools.") }
