@@ -88,14 +88,47 @@ struct MCPServerTests {
         }
     }
 
+    /// The lists the dispatch, the action log and the capability report use
+    /// come from the tool definitions' traits; they must not drift.
+    @Test func toolListsDerivedFromTraits() {
+        #expect(ComputerUse.toolNames == [
+            "list_apps", "get_desktop_status", "get_app_state", "get_app_capabilities", "click", "perform_secondary_action", "set_value",
+            "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
+            "file_dialog", "read_clipboard", "wait_for", "locate", "flow_start", "flow_record", "flow_status", "hand_over",
+            "locked_use_status", "locked_use_end",
+            "browser_tabs", "browser_open", "browser_state", "browser_locate", "browser_click", "browser_type",
+            "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
+            "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
+        ])
+        #expect(Set(ComputerUse.inputTools) == ["click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key",
+                                                "type_text", "open_file", "save_document", "run_in_front", "file_dialog"])
+        #expect(Set(ComputerUse.verifiableTools) == ["click", "type_text", "press_key", "set_value", "scroll", "drag",
+                                                     "perform_secondary_action", "select_text"])
+        #expect(Set(ComputerUse.targetTools) == ["click", "scroll", "set_value", "perform_secondary_action", "select_text"])
+        #expect(Set(ToolSchemas.names(.target, in: ToolSchemas.browser)) == ["browser_click", "browser_type", "browser_select",
+                                                                             "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"])
+        #expect(Set(DirectLockedUse.lockedTools) == ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom", "locate"])
+        #expect(Set(ToolSchemas.names([.whileLocked, .refusedWhileLocked])) == [
+            "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text",
+            "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for", "locate", "read_clipboard"
+        ])
+        #expect(Set(ToolSchemas.names(.whileStopped)) == ["list_apps", "get_desktop_status", "get_app_capabilities"])
+        #expect(ActionLog.recordedTools == [
+            "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text",
+            "open_file", "save_document", "run_in_front", "file_dialog", "read_clipboard", "hand_over",
+            "browser_open", "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll",
+            "browser_navigate", "browser_close_tab", "browser_upload", "browser_hover", "browser_downloads"
+        ])
+    }
+
     @Test func instructionsAndToolsStayWithinWhatClientsCarry() throws {
         // Claude Code shows the first 2048 characters of a server's
         // instructions; the rest would be dropped without a word.
         #expect(ToolSchemas.instructions.count <= 2048)
         // Each tool's definition enters the model's context when it is used.
         for tool in ToolSchemas.all {
-            let size = try JSONSerialization.data(withJSONObject: tool).count
-            #expect(size <= 4096, "\(tool["name"] ?? "?") is \(size) bytes")
+            let size = try JSONSerialization.data(withJSONObject: tool.definition).count
+            #expect(size <= 4096, "\(tool.name) is \(size) bytes")
         }
     }
 

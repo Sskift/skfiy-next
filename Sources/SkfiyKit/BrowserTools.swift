@@ -9,15 +9,6 @@ final class BrowserTools {
     /// Viewport CSS pixels per screenshot pixel, per tab, from its last screenshot.
     private var screenshotScale: [Int: Double] = [:]
 
-    nonisolated static let toolNames = [
-        "browser_tabs", "browser_open", "browser_state", "browser_locate", "browser_click", "browser_type",
-        "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
-        "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
-    ]
-    /// Tools that accept `target` instead of index or x/y.
-    nonisolated static let targetTools: Set<String> = [
-        "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"
-    ]
     /// Asks the user a yes/no question through the client; nil when it cannot.
     var askUser: ((String) async -> Bool?)?
     /// The last typing went into a password field (for the action log).

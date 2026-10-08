@@ -50,7 +50,7 @@ final class DirectLockedUse {
 
     /// Tools this mode serves while macOS is locked, in the order capability
     /// reports list them; everything else is refused.
-    nonisolated static let lockedTools = ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom", "locate"]
+    nonisolated static let lockedTools = ToolSchemas.names(.whileLocked)
 
     /// How long a screenshot's coordinates are used while locked.
     private static let screenshotLifetime: TimeInterval = 30

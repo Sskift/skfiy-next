@@ -133,12 +133,7 @@ public final class ComputerUse {
         settleDelay = Double(ProcessInfo.processInfo.environment["SKFIY_SETTLE_SECONDS"] ?? "") ?? 0.4
     }
 
-    nonisolated public static let toolNames = [
-        "list_apps", "get_desktop_status", "get_app_state", "get_app_capabilities", "click", "perform_secondary_action", "set_value",
-        "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
-        "file_dialog", "read_clipboard", "wait_for", "locate", "flow_start", "flow_record", "flow_status", "hand_over",
-        "locked_use_status", "locked_use_end"
-    ] + BrowserTools.toolNames
+    nonisolated public static let toolNames = (ToolSchemas.all + ToolSchemas.browser).map(\.name)
 
     private let browser = BrowserTools()
 
@@ -187,24 +182,24 @@ public final class ComputerUse {
 
     /// Typing or a value went into a password field, so the log keeps only its length.
     private var lastInputWasSecret = false
-    private static let nativeSessionTools: Set<String> = [
-        "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag",
-        "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for", "locate"
-    ]
+    /// Tools that work on an app's window: while macOS is locked (direct
+    /// mode) they take the locked path, which refuses those it cannot serve.
+    private static let lockedPathTools = ToolSchemas.names([.whileLocked, .refusedWhileLocked])
+    private static let answeringWhileStopped = ToolSchemas.names(.whileStopped)
 
     func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
         if DirectLockedUse.isActive, name == "type_text" || name == "press_key" || name == "set_value" {
             lastInputWasSecret = true
         }
-        if EmergencyStop.isStopped, !["list_apps", "get_desktop_status", "get_app_capabilities"].contains(name) {
+        if EmergencyStop.isStopped, !Self.answeringWhileStopped.contains(name) {
             return ToolResult(text: EmergencyStop.refusal, isError: true)
         }
         do {
             if Self.inputTools.contains(name) || name == "scroll" {
                 try refuseProtectedTarget(args, scrolling: name == "scroll")
             }
-            if DirectLockedUse.isActive, Self.nativeSessionTools.contains(name) || name == "read_clipboard" {
+            if DirectLockedUse.isActive, Self.lockedPathTools.contains(name) {
                 // No foreground preservation, AX fallback, menu emulation, or
                 // clipboard logic is entered by this strictly scoped path.
                 if name == "scroll" { try refuseProtectedTarget(args) }
@@ -314,10 +309,7 @@ public final class ComputerUse {
     }
 
     /// Tools that send input; get_app_state and scroll only look and move the view.
-    static let inputTools: Set<String> = [
-        "click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key", "type_text", "open_file",
-        "save_document", "run_in_front", "file_dialog"
-    ]
+    static let inputTools = ToolSchemas.names(.input)
 
     lazy var hostProcesses = ancestorProcessIDs()
 

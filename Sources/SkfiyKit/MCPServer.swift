@@ -34,7 +34,7 @@ public final class MCPServer {
 
     public init(executor: ToolExecutor, write: @escaping (Data) -> Void = MCPServer.writeToStdout) {
         self.executor = executor
-        self.tools = ToolSchemas.all + ToolSchemas.browser
+        self.tools = (ToolSchemas.all + ToolSchemas.browser).map(\.definition)
         self.write = write
     }
 
