@@ -104,7 +104,7 @@ def main():
               "get_app_state find listed only the text area")
         # zoom reads part of the screenshot at the display's resolution.
         zoomed = client.call("zoom", x=0, y=0, width=200, height=100)
-        match = re.search(r"px, ([\d.]+)× its detail", zoomed)
+        match = re.search(r"as \d+×\d+ px \(([\d.]+)×;", zoomed)
         check(match is not None, f"zoom answered: {zoomed.splitlines()[0][:100]}")
         detail = float(match.group(1))
         check(detail >= 1, f"zoom returned the region at {detail}× the screenshot's detail")
@@ -154,7 +154,7 @@ def main():
         threading.Timer(1.0, subprocess.run, args=(["osascript", "-e", script],), kwargs={"capture_output": True}).start()
         started = time.time()
         waited = client.call("wait_for", text="Ready now", timeout=8)
-        check(waited.startswith('"ready now" appeared after') and time.time() - started >= 0.8,
+        check(waited.lower().startswith('"ready now" appeared after') and time.time() - started >= 0.8,
               f"wait_for saw the text appear after {time.time() - started:.1f} s")
         client.call("wait_for", text="ready now", gone=True, timeout=1, expect_error=True)
         check(True, "wait_for timed out while the text stayed")

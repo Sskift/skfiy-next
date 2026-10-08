@@ -26,7 +26,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import ROOT, Session, main_binary  # noqa: E402
+from scenario import ROOT, Session, main_binary, open_in_background  # noqa: E402
 
 
 class Calls:
@@ -113,7 +113,7 @@ def run_textedit(s, incremental):
     between steps."""
     path = s.directory / f'bench-{s.nonce}.txt'
     path.write_text(''.join(f'Bench line {i:03d}\n' for i in range(1, 121)))
-    subprocess.run(['open', '-g', '-F', '-a', 'TextEdit', str(path)], check=True)
+    open_in_background('TextEdit', path, fresh=True)
     time.sleep(2.5)
     calls = Calls(s, incremental, app='TextEdit', window=path.name, ocr=True)
     call, look = calls.call, calls.look

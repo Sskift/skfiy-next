@@ -493,3 +493,9 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 行数：代码（`scripts/`、`Sources/`、`Makefile`、`eval/`）+414/−874，净减 460 行；其中 Swift −5 行。
 
 验证（只跑了不碰界面的测试；真实应用的套件等用户合并后运行）：`make test` 175/175；`make test-install` 72/72；所有脚本的 `py_compile` 和导入检查；共用客户端对着一个假的 MCP server 检查了同意、拒绝、不能询问三种回答，以及通知记录、截图存盘、报错；对真实的 `skfiy mcp` 只调用了 `tools/list` 和 `list_apps`。
+
+### 合并后的复测（2026-10-09 00:30–00:50，解锁，你在用 Ghostty）
+
+- 冒烟测试 `make smoke` / `make smoke-fixture` 不在例行套件里，三处期望早已过时，与这次整理无关：zoom 的回复格式、`wait_for` 回复里保留原文大小写（“Cancel”、“Ready now”）、操作日志对密码写作“(7 characters, redacted)”。已按现在的输出改正。
+- 测试本身抢了前台：TextEdit 一启动就到了前台并盖在最上层，持续 16 秒；测试应用也闪到前台一次（0.2 秒，随即被 skfiy 的前台保护送回）。原因是测试用 `open -g` 启动应用，而测试是从 Ghostty 里跑的；Ghostty 在前台时，macOS 允许从它的进程里启动的应用自己激活（之前几轮前台是飞书，所以没出现）。skfiy 自己启动应用（`NSWorkspace`，不激活）不受影响。修正：`scripts/fixtures/Launch` 能打开文档和网址，`scenario.open_in_background` 和 compat 基线改用它启动 TextEdit、预览、Finder 窗口和 Chrome 页面，测试里不再有 `open -g`。
+- 复测时每 0.2 秒采样一次前台，从头到尾都是 Ghostty。结果：smoke_textedit 通过；smoke_fixture 17/17；后台窗口 26/26、TextEdit 8/8；窗口 9/9、TextEdit 4/4；验证 13/13、TextEdit 6/6；定位 13/13、TextEdit 3/3；文字输入、光标、前台确认（只测拒绝）通过；compat 的 TextEdit 5/5，预览的弹出菜单照旧被拒绝（后台时“前往页面…”不可用，与之前相同）。

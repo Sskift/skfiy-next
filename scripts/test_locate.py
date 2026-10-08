@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, main_binary, ocr_lines  # noqa: E402
+from scenario import Session, main_binary, ocr_lines, open_in_background  # noqa: E402
 
 
 def candidates(text):
@@ -146,7 +146,7 @@ def textedit_suite(s):
         return
     path = s.directory / f'locate-{s.nonce}.txt'
     path.write_text('Section Alpha\n\n    item: apple\n    item: banana\n\nSection Beta\n\n    item: apple\n    item: cherry\n')
-    subprocess.run(['open', '-g', '-F', '-a', 'TextEdit', str(path)], check=True)
+    open_in_background('TextEdit', path, fresh=True)
     try:
         time.sleep(2.5)
         s.call('get_app_state', app='TextEdit', window=path.name, ocr=True)

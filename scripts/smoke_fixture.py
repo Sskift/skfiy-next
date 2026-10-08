@@ -266,7 +266,7 @@ def main():
             logged = open(ACTION_LOG).read()
             entry = [json.loads(line) for line in logged.splitlines() if '"type_text"' in line][-1]
             return ("secret leaked" if "hunter2" in logged else "no secret") + " | " + entry["arguments"]["text"]
-        case("the action log records only the length of a password", password_log, r"^no secret \| \(7 characters, password field\)$")
+        case("the action log records only the length of a password", password_log, r"^no secret \| \(7 characters, redacted\)$")
 
         # A window that publishes no accessibility: its text is recognized from
         # the pixels, positioned for click x/y, and wait_for matches it.
@@ -279,7 +279,7 @@ def main():
             waited = client.call("wait_for", window="skfiy opaque", text="Cancel", timeout=5).splitlines()[0]
             return status(client.call("get_app_state", window="skfiy fixture")) + " | " + waited
         case("text in a window without accessibility is recognized and clicked", recognized_text,
-             r'^text 发送消息 clicked \| "cancel" appeared after')
+             r'^text 发送消息 clicked \| "Cancel" appeared after')
 
         def click_canvas(name):
             def run():

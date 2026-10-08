@@ -47,6 +47,17 @@ def tool(name):
     return binary
 
 
+def open_in_background(app, *documents, fresh=False):
+    """Opens documents (or URLs) in app without bringing it forward, as `open
+    -g [-F] -a app` means to, which an app started from the terminal in front
+    can ignore. app: a name in /System/Applications, or a path. Returns the pid."""
+    path = app if '/' in app else f'/System/Applications/{app}.app'
+    extra = ['-ApplePersistenceIgnoreState', 'YES'] if fresh else []
+    out = subprocess.run([str(tool('Launch')), path, *extra, '--open', *map(str, documents)],
+                         capture_output=True, text=True, timeout=30, check=True).stdout
+    return int(out.split()[0])
+
+
 def probe(*args):
     return json.loads(subprocess.run([str(tool('AXProbe')), *map(str, args)], capture_output=True, text=True, timeout=20, check=True).stdout)
 

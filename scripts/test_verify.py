@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, main_binary, ocr_find, ocr_lines  # noqa: E402
+from scenario import Session, main_binary, ocr_find, ocr_lines, open_in_background  # noqa: E402
 
 
 def verdict(result):
@@ -106,7 +106,7 @@ def textedit(s):
         return
     path = s.directory / f'verify-{s.nonce}.txt'
     path.write_text(''.join(f'Verify line {i:03d}\n' for i in range(1, 121)))
-    subprocess.run(['open', '-g', '-F', '-a', 'TextEdit', str(path)], check=True)
+    open_in_background('TextEdit', path, fresh=True)
     try:
         time.sleep(2.5)
         state = s.call('get_app_state', app='TextEdit', window=path.name, ocr=True)

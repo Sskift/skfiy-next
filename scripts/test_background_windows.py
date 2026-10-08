@@ -42,7 +42,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, geometry, main_binary, ocr_lines, probe, to_pixels, tool, wait_until  # noqa: E402
+from scenario import Session, geometry, main_binary, ocr_lines, open_in_background, probe, to_pixels, tool, wait_until  # noqa: E402
 
 TEST_OWNERS = ('SkfiyScenario', 'TextEdit')
 
@@ -355,10 +355,10 @@ def textedit_case(s):
     alpha.write_text(''.join(f'Alpha line {i:03d}\n' for i in range(1, 151)))
     beta.write_text(''.join(f'Beta line {i:03d}\n' for i in range(1, 151)))
     try:
-        subprocess.run(['open', '-g', '-F', '-a', 'TextEdit', str(alpha)], check=True)
+        open_in_background('TextEdit', alpha, fresh=True)
         pid = wait_until(lambda: int(subprocess.run(['pgrep', '-x', 'TextEdit'], capture_output=True, text=True).stdout.split()[0]), timeout=10)
         wait_until(lambda: any(x['title'].startswith('alpha') for x in probe('perwindow', pid)['windows']), timeout=10)
-        subprocess.run(['open', '-g', '-a', 'TextEdit', str(beta)], check=True)
+        open_in_background('TextEdit', beta)
         wait_until(lambda: len(probe('perwindow', pid)['windows']) == 2, timeout=10)
         time.sleep(1)
         windows = {x['title'].split('-')[0]: x for x in probe('perwindow', pid)['windows']}

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, main_binary, ocr_lines  # noqa: E402
+from scenario import Session, main_binary, ocr_lines, open_in_background  # noqa: E402
 
 WINDOW = re.compile(r'Window: "([^"]*)" \(id (\d+)\)')
 
@@ -116,9 +116,9 @@ def textedit(s):
         path = folder / 'twin.txt'
         path.write_text(''.join(f'{word} line {i:03d}\n' for i in range(1, 151)))
         paths.append(path)
-    subprocess.run(['open', '-g', '-F', '-a', 'TextEdit', str(paths[0])], check=True)
+    open_in_background('TextEdit', paths[0], fresh=True)
     time.sleep(2)
-    subprocess.run(['open', '-g', '-a', 'TextEdit', str(paths[1])], check=True)
+    open_in_background('TextEdit', paths[1])
     try:
         time.sleep(2.5)
         same = s.call('get_app_state', app='TextEdit', window='twin.txt')

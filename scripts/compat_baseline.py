@@ -336,7 +336,7 @@ class TextEdit(Case):
         self.path.write_text(''.join(f'TextEdit line {i:03d} {self.nonce}\n' for i in range(1, 161)))
         self.window = self.path.name
         # -F: no restored windows from an earlier run, only this document.
-        sh('open', '-g', '-F', '-a', 'TextEdit', self.path)
+        sh(TOOLS['Launch'], '/System/Applications/TextEdit.app', '-ApplePersistenceIgnoreState', 'YES', '--open', self.path)
         self.pid = wait_until(lambda: pids_of('TextEdit') and pids_of('TextEdit')[0], timeout=10)
         require(self.pid, 'TextEdit did not start')
         wait_until(lambda: any(self.nonce in w['title'] for w in self.dump()['windows']), timeout=10)
@@ -460,7 +460,7 @@ class Preview(Case):
         self.path = folder / f'preview-{self.nonce}.pdf'
         sh(TOOLS['make_pdf'], self.path, *[f'Preview page {i} {self.nonce}' for i in range(1, 7)])
         self.window = self.path.stem
-        sh('open', '-g', '-F', '-a', 'Preview', self.path)
+        sh(TOOLS['Launch'], '/System/Applications/Preview.app', '-ApplePersistenceIgnoreState', 'YES', '--open', self.path)
         self.pid = wait_until(lambda: pids_of('Preview') and pids_of('Preview')[0], timeout=10)
         require(self.pid, 'Preview did not start')
         wait_until(lambda: any(self.nonce in w['title'] for w in self.dump()['windows']), timeout=10)
@@ -559,7 +559,7 @@ class Finder(Case):
         self.window = self.folder.name
         self.pid = pids_of('Finder')[0]
         if self.run.mode == 'locked':
-            sh('open', '-g', self.folder)
+            sh(TOOLS['Launch'], '/System/Library/CoreServices/Finder.app', '--open', self.folder)
         else:
             result = self.run.call('open_file', path=str(self.folder))
             require(not result['is_error'], result['text'])
@@ -806,7 +806,7 @@ class Chrome(WebApp):
         if not chrome_pid():
             launch_chrome(self.run.binary, f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}', fresh=True)
         else:
-            sh('open', '-g', '-a', chrome_app(), f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
+            sh(TOOLS['Launch'], chrome_app(), '--open', f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
         require(self.wait_page(lambda s: s.get('run') == self.run_id, timeout=20), 'the compat page did not load in Chrome')
         self.pid = wait_until(chrome_pid, timeout=5)
         self.window = 'skfiy compat ' + self.run_id
