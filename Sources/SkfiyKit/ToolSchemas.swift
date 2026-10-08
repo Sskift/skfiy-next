@@ -414,7 +414,6 @@ enum ToolSchemas {
             required: ["message"]
         )
     ] + [
-        tool("locked_use_status", "Inspect this MCP session's locked-use mode and actual OS lock state. Does not unlock the Mac.", properties: [:], required: [], readOnly: true),
         tool("locked_use_end", "End locked use for this MCP session; macOS stays locked. Call when the task is finished.", properties: [:], required: [], recorded: false)
     ]
 

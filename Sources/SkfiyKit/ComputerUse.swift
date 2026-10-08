@@ -141,10 +141,9 @@ public final class ComputerUse {
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         if DirectLockedUse.enabled {
             if directLockedUse.observeTransition() { forgetApps() }
-            if name == "locked_use_status" { return directLockedUse.status() }
             if name == "locked_use_end" { return directLockedUse.status(end: true) }
         }
-        if name == "locked_use_status" || name == "locked_use_end" {
+        if name == "locked_use_end" {
             return ToolResult(text: "Locked use is off. To keep macOS locked while skfiy works, the user starts a new MCP session with SKFIY_LOCKED_USE=direct.")
         }
         lastInputWasSecret = false

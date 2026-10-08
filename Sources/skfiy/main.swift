@@ -149,7 +149,7 @@ case "stop":
     noArguments(arguments)
     let playing = EmergencyStop.set(stopped: true)
     Thread.sleep(forTimeInterval: playing + 0.1)
-    print("skfiy is stopped; every action and read is refused until `skfiy resume` or \(EmergencyStop.shortcut) (only list_apps, get_desktop_status, get_app_capabilities and the locked-use status tools still answer).")
+    print("skfiy is stopped; every action and read is refused until `skfiy resume` or \(EmergencyStop.shortcut) (only list_apps, get_desktop_status, get_app_capabilities and locked_use_end still answer).")
 
 case "resume":
     noArguments(arguments)

@@ -335,7 +335,7 @@ struct CapabilityReport {
         // Tools usable now, from the same decisions.
         let usable = Dictionary(uniqueKeysWithValues: channels.map { ($0.name, $0.available) })
         var tools: [String] = ["list_apps", "get_app_capabilities"]
-        if facts.mode == .direct || facts.mode == .directEnded { tools += ["locked_use_status", "locked_use_end"] }
+        if facts.mode == .direct || facts.mode == .directEnded { tools += ["get_desktop_status", "locked_use_end"] }
         if usable["browser"] == true { tools += ["browser_*"] }
         if blocker == nil {
             if lockedDirect {
