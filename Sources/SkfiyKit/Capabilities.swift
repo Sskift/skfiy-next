@@ -388,7 +388,7 @@ extension ComputerUse {
     func appCapabilities(_ args: Arguments) async throws -> ToolResult {
         let query = try args.requiredString("app")
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
-        let lock = DirectLockedUse.lockState
+        let lock = sessionLockState()
         var facts = CapabilityInputs(
             session: lock == .locked ? .locked : lock == .unlocked ? .unlocked : .unknown,
             mode: DirectLockedUse.enabled ? (directLockedUse.isEnded ? .directEnded : .direct) : .normal,

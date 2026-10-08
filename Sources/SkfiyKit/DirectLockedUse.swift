@@ -9,9 +9,8 @@ final class DirectLockedUse {
     static var enabled: Bool { ProcessInfo.processInfo.environment["SKFIY_LOCKED_USE"] == "direct" }
     /// Direct mode is on and macOS is not known to be unlocked: tools take
     /// the locked path.
-    static var isActive: Bool { enabled && lockState != .unlocked }
+    static var isActive: Bool { enabled && isScreenLocked() }
 
-    enum LockState { case locked, unlocked, unavailable }
     /// Notifications remember a complete lock/unlock cycle between calls,
     /// even when polling sees the same state before and after that cycle.
     struct TransitionTracker {
@@ -26,14 +25,6 @@ final class DirectLockedUse {
             previousState = current
             return changed
         }
-    }
-
-    static var lockState: LockState {
-        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-              session["kCGSSessionOnConsoleKey"] as? Bool == true,
-              session["kCGSessionLoginDoneKey"] as? Bool == true,
-              session["kCGSSessionUserIDKey"] as? Int == Int(getuid()) else { return .unavailable }
-        return session["CGSSessionScreenIsLocked"] as? Bool == true ? .locked : .unlocked
     }
 
     private struct State {
@@ -90,7 +81,7 @@ final class DirectLockedUse {
     /// Tell the ordinary AX path to discard indices across an observed lock
     /// transition as well. Direct snapshots are never usable as AX sessions.
     func observeTransition() -> Bool {
-        guard transitions.observe(Self.lockState) else { return false }
+        guard transitions.observe(sessionLockState()) else { return false }
         generation &+= 1
         states.removeAll()
         return true
@@ -107,7 +98,7 @@ final class DirectLockedUse {
 
     func status(end: Bool = false) -> ToolResult {
         if end { ended = true; generation &+= 1; states.removeAll() }
-        let state = Self.lockState
+        let state = sessionLockState()
         let object: [String: Any] = [
             "enabled": !ended, "mode": "direct", "screenLocked": state == .locked,
             "lockStateKnown": state != .unavailable, "temporarilyUnlocks": false,
@@ -124,7 +115,7 @@ final class DirectLockedUse {
         if let expected, expected != generation {
             throw ToolError("The locked session changed during this operation. Refresh get_app_state; no further input was sent.")
         }
-        guard Self.lockState == .locked else {
+        guard sessionLockState() == .locked else {
             states.removeAll()
             throw ToolError("The locked session changed or is unavailable. No further direct input was sent; call get_app_state again.")
         }
@@ -165,7 +156,7 @@ final class DirectLockedUse {
 
     private func validationProblem(_ state: State, keyboardWindows: Set<CGWindowID>? = nil) -> String? {
         guard !ended, state.generation == generation else { return "locked session generation changed" }
-        guard Self.lockState == .locked else { return "OS session is no longer locked" }
+        guard sessionLockState() == .locked else { return "OS session is no longer locked" }
         guard sameProcess(state) else { return "app process identity changed" }
         let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         if let keyboardWindows {
@@ -479,7 +470,7 @@ final class DirectLockedUse {
                                  previous: (PixelFingerprint, String)?) async -> (VerifyObservation, (PixelFingerprint, String)?) {
         var observation = VerifyObservation(text: "", windows: [:], targetPresent: false)
         if ended { observation.interruption = "direct locked use ended"; return (observation, previous) }
-        switch Self.lockState {
+        switch sessionLockState() {
         case .unlocked: observation.interruption = "macOS was unlocked, so the locked screenshot no longer applies"; return (observation, previous)
         case .unavailable: observation.interruption = "the lock state became unknown"; return (observation, previous)
         case .locked: break
@@ -676,7 +667,7 @@ final class DirectLockedUse {
     private func waitCheck(_ expected: UInt64, pid: pid_t, executable: URL?, launched: Date?) throws {
         if EmergencyStop.isStopped { throw WaitStopped("emergency stop is on.") }
         if ended { throw WaitStopped("direct locked use ended for this MCP session.") }
-        switch Self.lockState {
+        switch sessionLockState() {
         case .unlocked: throw WaitStopped("macOS was unlocked, so direct screenshots no longer apply (get_app_state now reads the accessibility tree).")
         case .unavailable: throw WaitStopped("the lock state became unknown (another session or the login window).")
         case .locked: break

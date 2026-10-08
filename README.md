@@ -251,7 +251,6 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | `SKFIY_WAIT_EVENTS` | `0`：等待改回固定间隔轮询（`scripts/bench_reads.py` 用来对比） |
 | `SKFIY_FRONT_GRANT_FILE` | `run_in_front` 批准文件的位置（默认 `~/Library/Caches/skfiy/front-grant`） |
 | `SKFIY_OCR_DUMP` | 一个文件夹：把每次文字识别的图片和结果存进去 |
-| `SKFIY_SIMULATE_CAPTURE_STALL` | `1`：一开始就当作截图卡住，测试改用独立进程截图的路径 |
 | `SKFIY_SCREENSHOT_OUT` | `skfiy call` 保存截图的位置 |
 
 skfiy 自己的文件（插件、急停标记、流程、操作日志、实例链接）都放在 `$HOME/Library` 下并跟随 `HOME` 变量，所以 `HOME=$(mktemp -d) skfiy setup` 这样的试装不会碰到真实的配置。例外：`run_in_front` 的批准文件目前仍按真实用户目录定位（要隔离就设 `SKFIY_FRONT_GRANT_FILE`），待后台窗口那部分改动合并后再改。

@@ -62,11 +62,6 @@ func captureDirectLockedWindow(_ window: DirectLockedWindow, maxScale: Double = 
     return try encodeScreenshot(image, geometry: geometry)
 }
 
-func encodeScreenshot(_ image: CGImage, geometry: CaptureGeometry) throws -> Screenshot {
-    let format = ProcessInfo.processInfo.environment["SKFIY_SCREENSHOT_FORMAT"]?.lowercased() == "png" ? "png" : "jpeg"
-    return Screenshot(geometry: geometry, data: try encode(image, format: format), mimeType: format == "png" ? "image/png" : "image/jpeg")
-}
-
 /// A display in global screen points with a top-left origin (the space of
 /// window frames and events): displays left of or above the main one have
 /// negative coordinates.
@@ -252,7 +247,7 @@ enum DisplayWake {
     /// Throws, saying why, when the display showing `frame` is asleep and
     /// cannot be woken here; wakes it when it can.
     static func require(for frame: CGRect) async throws {
-        let lockedDirect = DirectLockedUse.enabled && DirectLockedUse.lockState == .locked
+        let lockedDirect = DirectLockedUse.enabled && sessionLockState() == .locked
         if lockedDirect { hold() }
         guard asleep(frame) else { return }
         guard lockedDirect else {

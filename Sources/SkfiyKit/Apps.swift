@@ -289,12 +289,20 @@ func frontmostProcessID() -> pid_t? {
     return NSWorkspace.shared.frontmostApplication?.processIdentifier
 }
 
+enum LockState { case locked, unlocked, unavailable }
+
+/// This user's session as the window server sees it: unavailable while it is
+/// not on the console (another user, the login window) or not logged in.
+func sessionLockState() -> LockState {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+          session[kCGSessionOnConsoleKey as String] as? Bool == true,
+          session[kCGSessionLoginDoneKey as String] as? Bool == true,
+          session[kCGSessionUserIDKey as String] as? Int == Int(getuid()) else { return .unavailable }
+    return session["CGSSessionScreenIsLocked"] as? Bool == true ? .locked : .unlocked
+}
+
 func isScreenLocked() -> Bool {
-    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
-        return true
-    }
-    guard session[kCGSessionOnConsoleKey as String] as? Bool == true else { return true }
-    return (session["CGSSessionScreenIsLocked"] as? Bool) == true
+    sessionLockState() != .unlocked
 }
 
 /// Why no screenshot can be taken right now, if that is the case. Screen
