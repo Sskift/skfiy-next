@@ -17,7 +17,8 @@ import time
 import uuid
 
 from diagnose_locked_direct import no_custom_authorization
-from smoke_locked import Evidence, ROOT, build_helpers, probe_sample, require, run, wait_for
+from harness import Evidence, ROOT, require
+from smoke_locked import build_helpers, probe_sample, run, wait_for
 from smoke_locked_direct import DirectClient
 
 

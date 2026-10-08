@@ -9,11 +9,16 @@ running (so no real documents are touched); it is quit without saving.
 """
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import threading
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness  # noqa: E402
+from harness import frontmost, index  # noqa: E402
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 # This test's own emergency-stop flag, so stopping it never stops the user's skfiy.
@@ -24,61 +29,19 @@ STOP_ENV["SKFIY_ACTION_LOG"] = ACTION_LOG
 APP = "TextEdit"
 
 
-class Client:
-    def __init__(self, binary):
-        self.proc = subprocess.Popen(
-            [binary, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env=STOP_ENV
-        )
-        self.next_id = 0
-
-    def request(self, method, params=None):
-        self.next_id += 1
-        message = {"jsonrpc": "2.0", "id": self.next_id, "method": method}
-        if params is not None:
-            message["params"] = params
-        self.proc.stdin.write(json.dumps(message) + "\n")
-        self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line:
-            raise RuntimeError("server exited")
-        response = json.loads(line)
-        assert response["id"] == self.next_id, response
-        if "error" in response:
-            raise RuntimeError(response["error"])
-        return response["result"]
-
-    def notify(self, method):
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
-        self.proc.stdin.flush()
-
+class Client(harness.Client):
     def call(self, tool, expect_error=False, **arguments):
         before = frontmost()
         started = time.time()
-        result = self.request("tools/call", {"name": tool, "arguments": {"app": APP, **arguments}})
-        text = result["content"][0]["text"]
-        images = [c for c in result["content"] if c["type"] == "image"]
+        result = super().call(tool, allow_error=True, **{"app": APP, **arguments})
         elapsed = time.time() - started
-        status = "error" if result["isError"] else "ok"
-        print(f"  {tool}({', '.join(f'{k}={v!r}' for k, v in arguments.items())}) -> {status} in {elapsed:.2f}s, {len(images)} image(s)")
+        status = "error" if result["is_error"] else "ok"
+        print(f"  {tool}({', '.join(f'{k}={v!r}' for k, v in arguments.items())}) -> {status} in {elapsed:.2f}s, {len(result['images'])} image(s)")
         if "TextEdit" not in before and "TextEdit" in frontmost():
             raise AssertionError(f"{tool} brought TextEdit to the front")
-        if result["isError"] != expect_error:
-            raise AssertionError(f"{tool} returned isError={result['isError']}: {text}")
-        return text
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait(timeout=5)
-
-
-def find(tree, pattern):
-    """Index of the first tree line matching `pattern`."""
-    for line in tree.splitlines():
-        if re.search(pattern, line):
-            match = re.search(r"\[(\d+)\]", line)
-            if match:
-                return match.group(1)
-    raise AssertionError(f"no line matches {pattern!r} in:\n{tree}")
+        if result["is_error"] != expect_error:
+            raise AssertionError(f"{tool} returned isError={result['is_error']}: {result['text']}")
+        return result["text"]
 
 
 def text_value(tree):
@@ -94,12 +57,6 @@ def vscroll(tree):
         if "ScrollArea" in line and "vscroll=" in line:
             return int(re.search(r"vscroll=(\d+)%", line).group(1))
     raise AssertionError("no scroll position in tree")
-
-
-def frontmost():
-    asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
-    info = subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True).stdout
-    return info.strip()
 
 
 def pasteboard_change_count():
@@ -120,21 +77,19 @@ def main():
         sys.exit("TextEdit is running; quit it first so no real document is touched.")
 
     print(f"frontmost app at start: {frontmost()}")
-    client = Client(BINARY)
+    client = Client(BINARY, env=STOP_ENV)
     try:
-        info = client.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}})
-        client.notify("notifications/initialized")
-        tools = [t["name"] for t in client.request("tools/list")["tools"]]
+        tools = [t["name"] for t in client.request("tools/list", {})["tools"]]
         core = {"list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
                 "select_text", "scroll", "drag", "press_key", "type_text"}
-        check(info["serverInfo"]["name"] == "skfiy" and core <= set(tools), f"initialize + {len(tools)} tools")
+        check(client.info["serverInfo"]["name"] == "skfiy" and core <= set(tools), f"initialize + {len(tools)} tools")
 
         state = client.call("get_app_state")
         check("App: TextEdit" in state, "get_app_state launched TextEdit")
         # A fresh launch may show the open panel; a new document is what we want.
         client.call("press_key", key="cmd+n")
         state = client.call("get_app_state")
-        area = find(state, r"\] TextArea")
+        area = index(state, r"\] TextArea")
 
         client.call("click", element_index=area)
         sample = "Hello skfiy\n你好，世界 🌍"
@@ -154,13 +109,13 @@ def main():
         detail = float(match.group(1))
         check(detail >= 1, f"zoom returned the region at {detail}× the screenshot's detail")
 
-        area = find(found, r"\] TextArea")
+        area = index(found, r"\] TextArea")
         client.call("select_text", element_index=area, text="skfiy")
         client.call("type_text", text="world")
         state = client.call("get_app_state")
         check(text_value(state).startswith("Hello world\n"), "select_text + type_text replaced the selection")
 
-        area = find(state, r"\] TextArea")
+        area = index(state, r"\] TextArea")
         client.call("select_text", element_index=area, text="Hello", selection="cursor_after")
         client.call("press_key", key="comma")
         state = client.call("get_app_state")
@@ -168,7 +123,7 @@ def main():
 
         # Copy and paste go through skfiy's own clipboard; the user's is never touched.
         clipboard_before = pasteboard_change_count()
-        area = find(state, r"\] TextArea")
+        area = index(state, r"\] TextArea")
         client.call("select_text", element_index=area, text="Hello")
         client.call("press_key", key="cmd+c")
         client.call("select_text", element_index=area, text="world", selection="cursor_after")
@@ -185,7 +140,7 @@ def main():
         stop("resume")
         state = client.call("get_app_state")
         check("App: TextEdit" in state, "skfiy stop refused calls until skfiy resume")
-        area = find(state, r"\] TextArea")
+        area = index(state, r"\] TextArea")
         client.call("select_text", element_index=area, text="Hello, world", selection="cursor_before")
         threading.Timer(0.25, stop, args=("stop",)).start()
         client.call("type_text", text="z" * 180, expect_error=True)
@@ -207,7 +162,7 @@ def main():
         check(waited.startswith("The window stopped changing"), "wait_for without a text returned once the window was still")
 
         state = client.call("get_app_state")
-        area = find(state, r"\] TextArea")
+        area = index(state, r"\] TextArea")
         client.call("set_value", element_index=area, value="set by accessibility")
         state = client.call("get_app_state")
         check(text_value(state) == "set by accessibility", "set_value replaced the text")
@@ -222,7 +177,7 @@ def main():
         client.call("press_key", key="cmd+Up")
         state = client.call("get_app_state")
         top = vscroll(state)
-        scroll_area = find(state, r"\] ScrollArea")
+        scroll_area = index(state, r"\] ScrollArea")
         client.call("scroll", element_index=scroll_area, direction="down", pages=1.5)
         state = client.call("get_app_state")
         after_down = vscroll(state)
@@ -234,7 +189,7 @@ def main():
         # A pixel click in the text area moves the caret (hit-tested through
         # accessibility): park the caret at the start, click below the text,
         # and the typed character must land at the end.
-        area = find(state, r"\] TextArea")
+        area = index(state, r"\] TextArea")
         client.call("set_value", element_index=area, value="alpha\nbeta\ngamma")
         client.call("select_text", element_index=area, text="alpha", selection="cursor_before")
         # Screen capture occasionally stalls system-wide for up to a minute;

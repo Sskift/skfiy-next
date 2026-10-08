@@ -39,14 +39,14 @@ smoke-fixture: build
 
 # Web pages through the app tools, in a throwaway Chrome for Testing.
 smoke-web: build
-	scripts/test_browser.sh .build/debug/skfiy
-	python3 scripts/smoke_chromium.py /tmp/skfiy-test/bin/skfiy
+	python3 scripts/compat_baseline.py .build/debug/skfiy --test-browser
+	python3 scripts/smoke_chromium.py .build/debug/skfiy
 
 # Web pages through the browser bridge extension, in a throwaway Chrome for Testing.
 smoke-browser: build
 	python3 scripts/test_bridge_host.py .build/debug/skfiy
-	scripts/test_browser.sh .build/debug/skfiy
-	python3 scripts/smoke_browser.py /tmp/skfiy-test/bin/skfiy
+	python3 scripts/compat_baseline.py .build/debug/skfiy --test-browser
+	python3 scripts/smoke_browser.py .build/debug/skfiy
 
 # Real-app compatibility baseline (TextEdit, Preview, Finder, Chrome for Testing,
 # Electron) with the target apps in the background; see docs/compatibility.md.

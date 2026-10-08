@@ -20,6 +20,7 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat_baseline as compat  # noqa: E402
+from harness import APPROVE  # noqa: E402
 from scenario import Session, main_binary  # noqa: E402
 
 
@@ -28,7 +29,8 @@ def main():
     compat.TOOLS.update(compat.build_tools())
     compat.ensure_server()
     pid = compat.launch_chrome(binary, restart='--restart-chrome' in sys.argv)
-    with Session('downloads', fixture=False, environment={'SKFIY_UPLOAD_WITHOUT_ASKING': '1'}) as s:
+    # The hand-off uploads a file, which asks the user first; this client says yes.
+    with Session('downloads', fixture=False, answer=APPROVE) as s:
         browser = str(pid)
         connected = compat.wait_until(lambda: not s.call('browser_tabs', browser=browser)['is_error'], timeout=60, interval=1)
         if not s.check('test browser connected', connected, f'pid {pid}'):

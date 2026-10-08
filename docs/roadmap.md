@@ -126,7 +126,7 @@
 - 窗口身份贯穿读取与操作：`get_app_state` 的窗口行与“其他窗口”列表都带窗口 id（解锁与锁屏一致）；`window` 参数可传 id；多个窗口匹配同一标题时拒绝并列出各自 id，不猜。点击、输入、按键、滚动、拖拽可带 `window_id`：最新截图不是该窗口时拒绝且不发送。
 - 坐标不偏移：解锁状态下按 x/y（或 `zoom_id`）操作前，核对截图所示窗口仍在、位置与尺寸未变；窗口移动、缩放、跨屏移动或关闭后拒绝旧坐标（此前解锁状态不检查，窗口挪动后点击会落到别处）。按元素编号的操作不受影响。锁屏状态原本就逐次核对，现在拒绝时说明具体原因：窗口移动/缩放、截图过期，或窗口已关闭——若出现同标题的新窗口，指出它是被重建的、新 id 是多少。
 - 多显示器与 Retina：显示器几何改为纯函数（`DisplayInfo`、`display(for:among:)`、`backingScale(for:displays:)`），全局坐标采用左上角原点，主屏左侧/上方的显示器为负坐标；窗口所在显示器按中心点判定，跨屏时取包含中心者，完全离屏时取最近者；截图、OCR 与 `zoom` 都按窗口所在显示器自己的缩放比例。
-- 锁屏多窗口键盘输入可行性实验：见 [locked-use/README.md](../locked-use/README.md)。结论是无法事先确认接收窗口，继续拒绝；实验脚本保留，可在其他机器或系统版本上复测。
+- 锁屏多窗口键盘输入可行性实验：见 [locked-use/README.md](../locked-use/README.md)。结论是无法事先确认接收窗口，继续拒绝。实验脚本和它的 `KeyboardProbe.swift` 已于 2026-10-09 删除（结论留在文档里）；要在其他机器或系统版本上复测，从提交 c662a80 取回。
 - 顺带修复 OCR：在一个 TextEdit 窗口上，Vision 对 2 倍分辨率截图只识别出标题，1 倍时却能读出全部 77 行等宽文字。现在两种分辨率各识别一次并合并（以高分辨率结果为主，补上它漏掉的行），解锁与锁屏路径都用。
 - 模拟测试：`DisplayGeometryTests`（主屏 Retina、左侧 1× 负 x、上方 Retina 负 y：窗口归属与缩放、跨屏与离屏、截图与放大坐标在负坐标上的换算、大窗口降采样后的换算）、`TextRecognitionTests` 新增合并用例。
 - 专用测试窗口：`scripts/test_windows.py`，2026-10-05 01:26 锁屏实测 8/8：两个同标题窗口按标题选择被拒并列出两个 id；按 id 选中副本；`window_id` 与截图不符被拒且未发送；点击副本的“完成”只关闭副本，主窗口计数不变（不串窗）；窗口关闭后重建（同标题新 id）时旧截图被拒并指出新 id；主窗口移动后旧坐标被拒，重新截图后在新位置命中同一按钮。锁态采样全部为锁定。OCR 合并改动后，等待、放大、验证、能力、窗口五套锁屏测试全部重跑通过。
@@ -478,3 +478,18 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 - 跟随到新窗口后，按旧窗口的元素编号点了旧窗口的文本框，回复说“打字会到这里”，会话却仍是新窗口，接下来的 `type_text` 被拒绝。现在点击另一个窗口里的文本框时，会话换回那个窗口（`workInWindow`），回复写明；截图显示它，`type_text`、`press_key` 也对着它。`test_background_windows.py` 加了一项：跟随新窗口后按旧编号点主窗口的输入框，文字进了主窗口，新窗口没收到（26/26）。
 - 只读 `get_app_state` 期间，用户用键盘（cmd-tab、Spotlight、启动器）或点程序坞切到目标应用时，以前仍会被送回去，因为只认“鼠标点在目标窗口上”。现在目标应用前台化之前 0.6 秒内有按键、修饰键或点击，就当作用户自己切的，之后这次调用都不再送回（`userActed`）。这一条没有实测：模拟用户切应用就得抢前台。
 - 验证（2026-10-09 00:08–00:11，解锁，锁态采样全部未锁定）：测试应用 26/26、TextEdit 8/8；关窗口复现 5/5；窗口 9/9、TextEdit 4/4；验证 13/13、TextEdit 6/6；光标 13/13、1/1；单元测试 175 个。
+
+## 测试脚本精简（2026-10-09）
+
+按代码审查里 `scripts/` 重复代码的几条意见整理，skfiy 本身的行为只变了一处（上传一律征求同意）：
+
+- 共用一个 MCP 客户端 `scripts/harness.py`。原来 7 处各写一份 JSON-RPC 客户端：`smoke_textedit`、`smoke_fixture`、`smoke_foreground`、`smoke_chromium`、`smoke_browser`、`app_coverage`，以及 `smoke_locked.py` 里给 `scenario.py`、`compat_baseline.py` 用的那份。新客户端的选项：证据目录、额外环境变量、怎样回答 skfiy 的征求同意（`APPROVE` / `DECLINE`；不给回答就不声明能询问）。没有证据目录时关掉操作日志，测试不写你的日志。`frontmost`、`index`、`status`、`case`、`wait_until` 也只留一份，`smoke_locked.py` 只剩锁屏测试应用的辅助函数。工具报错一律抛 `RuntimeError`（锁屏测试原来抛 `AssertionError`）；`case()` 把报错文字也拿去和期望比对，原来只有 `smoke_browser` 这样做。
+- 删掉只为测试存在的 `SKFIY_UPLOAD_WITHOUT_ASKING`：`test_flow.py`、`test_downloads.py` 的会话改为声明能询问，逐次同意上传，和用户点同意一样；`browser_upload` 一律征求同意。README 的测试变量表和 `skfiy doctor` 的已知变量里也删了。
+- 例行的锁屏、解锁套件不再跑 `bench_reads.py`（各两次）和锁屏键盘实验，按 `eval/results` 的记录约占每轮的五分之一。`bench_reads.py` 留着临时对比用；实验脚本和 `KeyboardProbe.swift` 删除，结论仍在 locked-use/README.md 和上文第 9 节。
+- 测试浏览器只剩一种启动方式 `compat_baseline.launch_chrome`（新增 `fresh`：从空的 profile 启动）。`scripts/test_browser.sh` 删除，改用 `python3 scripts/compat_baseline.py <skfiy> --test-browser`。测试页统一由 `scripts/compat_server.py`（8766 端口）提供，不再另起 8765 端口的 `http.server`，也不再往 `/tmp/skfiy-test` 复制网页和二进制。`make smoke-web` / `make smoke-browser` 直接用 `.build/debug/skfiy`；`smoke_browser.py` 自己起测试页服务，`--user-browser` 不用再手动准备。
+- README 开发一节写上 `scripts/make_extension_icons.swift`（生成已入库的插件图标）。
+- 没做：`smoke_locked.py` 的内嵌探针没有换成 `AXProbe`。锁屏验收用到它的 50 毫秒连续采样（`--watch`）、首尾两次采样的锁态变化和 uid 校验，`AXProbe session` 都没有，换掉就得改验收记录的格式。`compat_baseline.tree_index`（找不到时返回 None）、`test_covered_chromium.py` 自己的测试页服务（8771 端口）也没动。
+
+行数：代码（`scripts/`、`Sources/`、`Makefile`、`eval/`）+414/−874，净减 460 行；其中 Swift −5 行。
+
+验证（只跑了不碰界面的测试；真实应用的套件等用户合并后运行）：`make test` 175/175；`make test-install` 72/72；所有脚本的 `py_compile` 和导入检查；共用客户端对着一个假的 MCP server 检查了同意、拒绝、不能询问三种回答，以及通知记录、截图存盘、报错；对真实的 `skfiy mcp` 只调用了 `tools/list` 和 `list_apps`。

@@ -189,12 +189,7 @@ final class BrowserTools {
         let site = url.flatMap { URL(string: $0)?.host } ?? "tab \(tabID)"
         let name = (path as NSString).lastPathComponent
         let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-        let allowed: Bool?
-        if ProcessInfo.processInfo.environment["SKFIY_UPLOAD_WITHOUT_ASKING"] == "1" {
-            allowed = true
-        } else {
-            allowed = await askUser?("skfiy wants to upload \(name) (\(size), from \(path)) to \(site).")
-        }
+        let allowed = await askUser?("skfiy wants to upload \(name) (\(size), from \(path)) to \(site).")
         switch allowed {
         case nil: throw ToolError("Uploading sends a file to a website, so the user must approve it, and this client cannot ask them. Tell the user which file to attach.")
         case false?: throw ToolError("The user declined uploading \(name). Do not ask again; tell them what is left to do.")

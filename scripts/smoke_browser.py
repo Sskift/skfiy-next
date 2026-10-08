@@ -2,9 +2,10 @@
 """Browser bridge smoke test: drives scripts/fixtures/web.html in a new
 background tab through the skfiy extension.
 
-Needs a Chromium browser with the extension loaded and the fixture served at
-FIXTURE_URL (see `make smoke-browser`). Asserts that the tab the user is
-looking at never changes and the browser never comes to the front.
+Needs a Chromium browser with the extension loaded (see `make smoke-browser`);
+the fixture is served by scripts/compat_server.py, started here if need be.
+Asserts that the tab the user is looking at never changes and the browser
+never comes to the front.
 
 With --user-browser it runs against your own browser: only in its own
 background tab, without the debugger (which shows an infobar) and without
@@ -12,59 +13,37 @@ touching the tab you are looking at.
 
     python3 scripts/smoke_browser.py [path/to/skfiy] [--user-browser]
 """
-import base64
-import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import compat_baseline as compat  # noqa: E402
+import harness  # noqa: E402
+from harness import APPROVE, case, frontmost, index, results, status  # noqa: E402
 
 USER_BROWSER = "--user-browser" in sys.argv
 ARGS = [arg for arg in sys.argv[1:] if arg != "--user-browser"]
 BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
 BROWSER_APP = "Google Chrome" if USER_BROWSER else "Chrome for Testing"
 BROWSER_NAME = "Google Chrome" if USER_BROWSER else "Chromium"  # as the extension reports itself
-FIXTURE_URL = "http://127.0.0.1:8765/web.html"
 CAME_TO_FRONT = False
 
 
-class Client:
-    def __init__(self):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, "SKFIY_ACTION_LOG": "off"})
-        self.next_id = 0
-        self.asked = []  # approvals the server asked for (answered yes)
-        self.send({"jsonrpc": "2.0", "id": 0, "method": "initialize",
-                   "params": {"protocolVersion": "2025-11-25", "capabilities": {"elicitation": {"form": {}}}}})
-        self.read(0)
-
-    def send(self, message):
-        self.proc.stdin.write(json.dumps(message) + "\n")
-        self.proc.stdin.flush()
-
-    def read(self, wanted):
-        while True:
-            message = json.loads(self.proc.stdout.readline())
-            if message.get("method") == "elicitation/create":
-                self.asked.append(message["params"]["message"])
-                self.send({"jsonrpc": "2.0", "id": message["id"], "result": {"action": "accept", "content": {"allow": True}}})
-            elif message.get("id") == wanted:
-                return message
-
+class Client(harness.Client):
     def call(self, tool, **arguments):
         global CAME_TO_FRONT
         before = frontmost()
-        self.next_id += 1
-        arguments = {"browser": BROWSER_NAME, **arguments}  # other browsers may be connected too
-        self.send({"jsonrpc": "2.0", "id": self.next_id, "method": "tools/call", "params": {"name": tool, "arguments": arguments}})
-        result = self.read(self.next_id)["result"]
-        self.last = result
-        text = result["content"][0]["text"]
+        # Other browsers may be connected too.
+        self.last = super().call(tool, allow_error=True, **{"browser": BROWSER_NAME, **arguments})
         if not is_browser(before) and is_browser(frontmost()):
             CAME_TO_FRONT = True
-        if result["isError"]:
-            raise RuntimeError(f"{tool}: {text}")
-        return text
+        if self.last["is_error"]:
+            raise RuntimeError(f"{tool}: {self.last['text']}")
+        return self.last["text"]
 
 
 def find_color(jpeg, rgb, tolerance=40):
@@ -90,50 +69,20 @@ def front_tabs(text):
     return sorted(re.findall(r"tab (\d+) \[(?:shown|front tab of its window)\]", text))
 
 
-def index(tree, pattern):
-    match = re.search(r"\[(\d+)\] " + pattern, tree)
-    if not match:
-        raise AssertionError(f"no element matches {pattern!r} in:\n{tree}")
-    return int(match.group(1))
-
-
-def status(text):
-    match = re.search(r"^status: (.*)$", text, re.M)
-    return match.group(1) if match else "?"
-
-
-results = []
-
-
-def case(name, run, expect):
-    try:
-        observed = run()
-        ok = re.search(expect, observed) is not None
-    except Exception as error:  # noqa: BLE001 - scored, not raised
-        observed = f"error: {error}"
-        ok = re.search(expect, observed) is not None
-    results.append(ok)
-    print(f"  {'✔' if ok else '✘'} {name}: {observed}")
-
-
 def is_browser(front):
     # "Google Chrome" must not match "Google Chrome for Testing" and vice versa.
     return re.search(re.escape(BROWSER_APP) + (r'"' if USER_BROWSER else ""), front) is not None
 
 
-def frontmost():
-    asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
-    return subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True).stdout
-
-
 def main():
-    client = Client()
+    compat.ensure_server()
+    client = Client(BINARY, answer=APPROVE)  # uploads ask the user first; this client says yes
     before = client.call("browser_tabs")
     if not USER_BROWSER:
         print(before)  # the user's own tab titles stay private
     shown_before = front_tabs(before)
 
-    opened = client.call("browser_open", url=FIXTURE_URL)
+    opened = client.call("browser_open", url=compat.WEB_PAGE)
     tab = int(re.search(r"background tab (\d+)", opened).group(1))
     tree = client.call("browser_state", tab_id=tab)
 
@@ -217,10 +166,9 @@ def main():
         # then address browser_click, here the canvas's green half.
         def background_canvas():
             client.call("browser_state", tab_id=tab, background_screenshot=True)
-            images = [c for c in client.last["content"] if c["type"] == "image"]
-            if not images:
+            if not client.last["images"]:
                 return "no screenshot"
-            spot = find_color(base64.b64decode(images[0]["data"]), (68, 170, 136))
+            spot = find_color(client.last["images"][0], (68, 170, 136))
             if not spot:
                 return "no canvas in the screenshot"
             return status(client.call("browser_click", tab_id=tab, x=spot[0] + 20, y=spot[1] + 20))
@@ -254,7 +202,7 @@ def main():
     case("browser never came to the front", lambda: "never" if not CAME_TO_FRONT else "came to the front", r"^never$")
 
     print(f"{sum(results)}/{len(results)} browser checks passed")
-    client.proc.stdin.close()
+    client.close()
     sys.exit(0 if all(results) else 1)
 
 

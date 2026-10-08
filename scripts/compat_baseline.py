@@ -16,6 +16,7 @@ or the page's own reports to the local server (scripts/compat_server.py).
     python3 scripts/compat_baseline.py .build/debug/skfiy --mode locked        # only while locked
     python3 scripts/compat_baseline.py .build/debug/skfiy --mode front --allow-front
     python3 scripts/compat_baseline.py --report    # docs/compatibility.md from the latest runs
+    python3 scripts/compat_baseline.py .build/debug/skfiy --test-browser   # only start the test browser on web.html
 
 Statuses: pass (verified independently), fail (did not happen, or skfiy
 errored), refused (skfiy declined by design, with its reason), untested (the
@@ -36,11 +37,12 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Client, Evidence, ROOT, ocr_find, ocr_lines, probe, require, tool  # noqa: E402
-from scenario import wait_until as scenario_wait_until  # noqa: E402
+from harness import Client, Evidence, ROOT, require, wait_until as harness_wait_until  # noqa: E402
+from scenario import ocr_find, ocr_lines, probe, tool  # noqa: E402
 
 WORK = Path('/tmp/skfiy-compat')
 PORT = 8766
+WEB_PAGE = f'http://127.0.0.1:{PORT}/web.html'  # scripts/fixtures/web.html, for the smoke tests and eval/run_eval.py
 OPS = ['screenshot', 'click', 'type', 'scroll', 'popup']
 MODES = ['front', 'background', 'locked']
 CASES = ['textedit', 'preview', 'finder', 'chrome', 'chrome-extension', 'electron']
@@ -90,7 +92,7 @@ def page_state(run):
 
 def wait_until(check, timeout=6, interval=0.2):
     # Any error is a probe that cannot answer yet (an app still starting, a page not loaded).
-    return scenario_wait_until(check, timeout, interval, errors=Exception)
+    return harness_wait_until(check, timeout, interval, errors=Exception)
 
 
 def tree_index(text, pattern):
@@ -175,7 +177,7 @@ class Run:
     def start_client(self):
         environment = {'SKFIY_LOCKED_USE': 'direct'} if self.mode == 'locked' else {}
         environment['SKFIY_SETTLE_SECONDS'] = '0.5'
-        self.client = Client(self.binary, self.evidence, environment=environment, name='skfiy-compat-baseline')
+        self.client = Client(self.binary, self.evidence, env=environment, name='skfiy-compat-baseline')
 
     def call(self, tool, **arguments):
         """A tool call; in background mode, also checks that the front app stayed."""
@@ -654,11 +656,12 @@ def ready_test_chrome(session):
     return pid if connected else None
 
 
-def launch_chrome(binary, url='about:blank', restart=False):
+def launch_chrome(binary, url='about:blank', restart=False, fresh=False):
     """Chrome for Testing with its own profile, the current extension files,
     and downloads going to /tmp/skfiy-compat/downloads (never the user's
-    Downloads folder). restart=True quits it first so new extension files load."""
-    if restart and chrome_pid():
+    Downloads folder), opening url when it starts. restart=True quits it first
+    so new extension files load; fresh=True also starts from an empty profile."""
+    if (restart or fresh) and chrome_pid():
         subprocess.run(['pkill', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'])
         wait_until(lambda: not chrome_pid(), timeout=10)
     if chrome_pid():
@@ -671,6 +674,8 @@ def launch_chrome(binary, url='about:blank', restart=False):
         return pid
     profile = WORK / 'chrome-profile'
     extension = WORK / 'extension'
+    if fresh:
+        shutil.rmtree(profile, ignore_errors=True)
     # Chrome keeps running a cached service worker for an unpacked extension;
     # clearing the test profile's cache makes it load the current files.
     shutil.rmtree(profile / 'Default/Service Worker', ignore_errors=True)
@@ -696,6 +701,21 @@ def launch_chrome(binary, url='about:blank', restart=False):
 def chrome_app():
     found = sorted((Path.home() / '.cache/skfiy-test').glob(CFT_GLOB))
     return found[-1] if found else None
+
+
+def test_browser(binary):
+    """--test-browser: a fresh Chrome for Testing in the background showing
+    web.html, for smoke_chromium.py, smoke_browser.py and eval/run_eval.py.
+    Downloaded into ~/.cache/skfiy-test the first time; never your own browser."""
+    if not chrome_app():
+        sh('npx', '-y', '@puppeteer/browsers', 'install', 'chrome@stable', '--path', Path.home() / '.cache/skfiy-test', timeout=900)
+    ensure_server()
+    pid = launch_chrome(binary, WEB_PAGE, fresh=True)
+    # Only this browser, by pid: the user's own Chrome may be connected too.
+    connected = pid and wait_until(lambda: subprocess.run([binary, 'call', 'browser_tabs', json.dumps({'browser': str(pid)})],
+                                                          capture_output=True).returncode == 0, timeout=30, interval=0.5)
+    require(connected, 'the extension did not connect')
+    print(f'test browser ready (pid {pid}, {WEB_PAGE})')
 
 
 class WebApp(Case):
@@ -777,16 +797,14 @@ class Chrome(WebApp):
 
     def precondition(self):
         if not chrome_app():
-            return 'Chrome for Testing is not installed (scripts/test_browser.sh downloads it)'
+            return 'Chrome for Testing is not installed (compat_baseline.py --test-browser downloads it)'
         return None
 
     def prepare(self):
         ensure_server()
         self.run_id = f'{self.nonce}-{self.key}'
-        profile = WORK / 'chrome-profile'
         if not chrome_pid():
-            shutil.rmtree(profile, ignore_errors=True)
-            launch_chrome(self.run.binary, f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
+            launch_chrome(self.run.binary, f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}', fresh=True)
         else:
             sh('open', '-g', '-a', chrome_app(), f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
         require(self.wait_page(lambda s: s.get('run') == self.run_id, timeout=20), 'the compat page did not load in Chrome')
@@ -1042,11 +1060,14 @@ def main():
     parser.add_argument('--case', choices=CASES, action='append')
     parser.add_argument('--allow-front', action='store_true')
     parser.add_argument('--report', action='store_true')
+    parser.add_argument('--test-browser', action='store_true', help='only start the test browser on web.html')
     args = parser.parse_args()
     TOOLS.update(build_tools())
     if args.report:
         return report()
     require(args.binary and args.binary.exists(), 'pass the skfiy binary')
+    if args.test_browser:
+        return test_browser(args.binary.resolve())
     failed = False
     for mode in args.mode or ['background']:
         summary = run_mode(args.binary.resolve(), mode, args.case or CASES, args.allow_front)

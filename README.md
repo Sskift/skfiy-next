@@ -248,7 +248,6 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | 变量 | 作用 |
 | --- | --- |
 | `SKFIY_STOP_FILE` | 急停标记文件的位置（默认 `~/Library/Application Support/skfiy/stopped`；测试用它互不干扰） |
-| `SKFIY_UPLOAD_WITHOUT_ASKING` | `1` 让 `browser_upload` 不再逐次征求同意（只用于无人值守的测试） |
 | `SKFIY_WAIT_EVENTS` | `0`：等待改回固定间隔轮询（`scripts/bench_reads.py` 用来对比） |
 | `SKFIY_FRONT_GRANT_FILE` | `run_in_front` 批准文件的位置（默认 `~/Library/Caches/skfiy/front-grant`） |
 | `SKFIY_OCR_DUMP` | 一个文件夹：把每次文字识别的图片和结果存进去 |
@@ -271,14 +270,15 @@ make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 T
 make smoke-fixture  # 自建的小应用（窗口放在所有窗口之后）：悬停提示、打开/存储面板、自绘视图的点击
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
 make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变（先跑 scripts/test_bridge_host.py：插件重连时旧桥接进程不会删掉新进程的连接）
-python3 scripts/smoke_browser.py ~/.local/bin/skfiy --user-browser   # 同上，但跑在你自己的 Chrome 里：只用自己开的后台标签页，不用调试接口（需先起测试页服务，见 scripts/test_browser.sh）
+python3 scripts/smoke_browser.py ~/.local/bin/skfiy --user-browser   # 同上，但跑在你自己的 Chrome 里：只用自己开的后台标签页，不用调试接口
 python3 scripts/smoke_chromium.py .build/debug/skfiy Safari   # 同一套网页测试跑在 Safari 上（先在后台打开测试页）
 python3 scripts/app_coverage.py     # 只读探测：对正在运行的应用各取一次状态，只报数量和耗时，不输出内容
 python3 eval/run_eval.py            # 真实任务：交给无头 `claude -p`（只开放 skfiy 工具）完成，独立检查结果，并监视前台与最顶层窗口
 skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存到 /tmp/skfiy-screenshot.jpg
+swift scripts/make_extension_icons.swift browser-extension   # 重新画插件图标（browser-extension/icon-*.png，已入库）；之后跑 make embed-extension
 ```
 
-`scripts/test_browser.sh` 会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，在后台用全新的临时 profile 启动它（加载插件、打开 `scripts/fixtures/web.html`），不碰你自己的浏览器。
+`make smoke-web` / `make smoke-browser` 先运行 `python3 scripts/compat_baseline.py <skfiy> --test-browser`：第一次会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，然后在后台用全新的临时 profile 启动它（加载插件、打开本地测试页服务 `scripts/compat_server.py` 上的 `scripts/fixtures/web.html`），不碰你自己的浏览器。`eval/run_eval.py` 也用这个测试浏览器。测试脚本共用 `scripts/harness.py` 里的 MCP 客户端：它不写你的操作日志；需要你同意的操作（例如上传文件），由测试按脚本里写好的回答答复。
 
 最近一次结果（2026-09-29，macOS 26.6.1）：
 
@@ -311,7 +311,7 @@ Sources/skfiy/main.swift   CLI：setup / doctor / uninstall / mcp / tools / call
 install.sh                 一键安装：下载 release 或从源码编译，装到 ~/.local/bin，再运行 skfiy setup
 packaging/homebrew/        Homebrew formula 模板（未发布）
 browser-extension/         MV3 插件：service worker + 注入页面的快照/操作函数
-scripts/                   端到端冒烟测试、应用覆盖探测、测试浏览器启动脚本
+scripts/                   端到端测试（共用 harness.py 的 MCP 客户端）、应用覆盖探测、插件图标生成
 eval/                      真实任务评测：任务、独立判定、前台/最顶层窗口监视（结果在 eval/results，不入库）
 ```
 

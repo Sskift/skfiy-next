@@ -7,11 +7,13 @@ and nothing is clicked or typed. Fails if any call changes the front app.
     python3 scripts/app_coverage.py [path/to/skfiy] [app ...]
 """
 import collections
-import json
+from pathlib import Path
 import re
-import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import Client, frontmost  # noqa: E402
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
 ONLY = sys.argv[2:]
@@ -22,29 +24,8 @@ ACTIONABLE = {"Button", "Link", "TextField", "TextArea", "CheckBox", "RadioButto
               "Incrementor", "DisclosureTriangle", "SearchField"}
 
 
-class Client:
-    def __init__(self):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
-        self.next_id = 0
-        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "coverage", "version": "0"}})
-
-    def request(self, method, params):
-        self.next_id += 1
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}) + "\n")
-        self.proc.stdin.flush()
-        return json.loads(self.proc.stdout.readline())["result"]
-
-    def call(self, tool, **arguments):
-        return self.request("tools/call", {"name": tool, "arguments": arguments})
-
-
-def frontmost():
-    asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
-    return subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True).stdout.strip()
-
-
 def running_apps(client):
-    text = client.call("list_apps")["content"][0]["text"]
+    text = client.call("list_apps")["text"]
     section = text.split("\n\n")[0]
     return [m.group(1) for m in re.finditer(r"^- (.+?) — ", section, re.M)]
 
@@ -52,11 +33,11 @@ def running_apps(client):
 def measure(client, app):
     before = frontmost()
     started = time.time()
-    result = client.call("get_app_state", app=app)
+    result = client.call("get_app_state", allow_error=True, app=app)
     elapsed = time.time() - started
     stole = before != frontmost() and app in frontmost()
-    text = result["content"][0]["text"]
-    if result.get("isError"):
+    text = result["text"]
+    if result["is_error"]:
         # Our own error message, not app content.
         return {"error": text.splitlines()[0][:120], "seconds": elapsed, "stole_front": stole}
     element_lines = re.findall(r"^\s*\[(\d+)\] (\w+)", text, re.M)
@@ -68,14 +49,14 @@ def measure(client, app):
         "elements": len(element_lines),
         "actionable": sum(count for role, count in roles.items() if role in ACTIONABLE),
         "web": any(role in WEB_ROLES for role in roles),
-        "screenshot": any(block.get("type") == "image" for block in result["content"]),
+        "screenshot": bool(result["images"]),
         "focus": "Keyboard focus:" in text,
         "top_roles": ", ".join(f"{role}×{count}" for role, count in roles.most_common(4)),
     }
 
 
 def main():
-    client = Client()
+    client = Client(BINARY, name="skfiy-coverage")
     apps = ONLY or [app for app in running_apps(client) if app not in SKIP]
     print(f"{'app':<20} {'1st s':>6} {'2nd s':>6} {'elems':>6} {'act':>5} {'lines':>6} shot web focus  top roles")
     stolen = []
@@ -90,7 +71,7 @@ def main():
         print(f"{app:<20} {first['seconds']:6.2f} {second['seconds']:6.2f} {first['elements']:6d} {first['actionable']:5d} "
               f"{first['lines']:6d} {'yes' if first['screenshot'] else 'no':>4} {'yes' if first['web'] else '-':>3} "
               f"{'yes' if first['focus'] else '-':>5}  {first['top_roles']}")
-    client.proc.stdin.close()
+    client.close()
     if stolen:
         print(f"FAIL: front app changed during get_app_state for {', '.join(stolen)}")
         sys.exit(1)
