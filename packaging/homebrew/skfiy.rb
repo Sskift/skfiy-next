@@ -1,13 +1,14 @@
 # Template for a Homebrew tap (not published). To use it: create a tap repo
-# (e.g. Sskift/homebrew-skfiy), copy this file to Formula/skfiy.rb, set url and
-# sha256 for the release tag, and add a license line once the repo has one.
+# (e.g. Sskift/homebrew-skfiy) and copy this file to Formula/skfiy.rb; for a new
+# release, update url and sha256 (of the tag's source tarball).
 # Builds from source, so it needs Xcode or the Command Line Tools (Swift 6).
 # A cask is not suitable: casks are quarantined and the binary is ad-hoc signed.
 class Skfiy < Formula
   desc "macOS computer use for Claude Code and other MCP clients, in the background"
   homepage "https://github.com/Sskift/skfiy-next"
   url "https://github.com/Sskift/skfiy-next/archive/refs/tags/v0.6.0.tar.gz"
-  sha256 "REPLACE_WITH_THE_TARBALL_SHA256"
+  sha256 "ce8bd1cbb5675683b4d902d7d682d5b4b4eb0179ee7b63661ff7ce8ac531381d"
+  license "MIT"
 
   depends_on xcode: ["16.0", :build]
   depends_on macos: :sonoma

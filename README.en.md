@@ -84,3 +84,7 @@ skfiy's own files live under `$HOME/Library` and follow `HOME`, so `HOME=$(mktem
 ## Development
 
 `make test` runs the unit tests (use it rather than plain `swift test` with Command Line Tools only), `make test-install` tests install.sh, setup, doctor and uninstall in a throwaway HOME with fake `claude`/`codex` CLIs, and `make dist` builds the release tarball. Python 3 (standard library only) is needed only for the end-to-end test scripts in `scripts/`.
+
+## License
+
+[MIT](LICENSE).
