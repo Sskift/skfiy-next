@@ -476,6 +476,15 @@ func userMayHaveSwitched(since date: Date) -> Bool {
     return idle < Date().timeIntervalSince(date)
 }
 
+/// A key, modifier or click in the last `seconds`: an app that came forward
+/// right then was most likely brought there by the user (cmd-tab, Spotlight,
+/// a launcher, the Dock), not by a tool that sends no input.
+func userActed(within seconds: TimeInterval) -> Bool {
+    let kinds: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+    let idle = kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? .infinity
+    return idle < seconds
+}
+
 /// A mouse click since `date` with the pointer now on a window of `pid`:
 /// the user clicked into that app themselves.
 func userClicked(into pid: pid_t, since date: Date) -> Bool {
@@ -553,6 +562,9 @@ final class FrontGuard: @unchecked Sendable {
     private let userApp: pid_t
     private let target: pid_t?
     private let started = Date()
+    /// The user brought the target forward themselves during a tool that
+    /// sends no input; it stays where they put it.
+    private var userTookTarget = false
 
     private let onlyTarget: Bool
 
@@ -595,7 +607,11 @@ final class FrontGuard: @unchecked Sendable {
         // Another app may be the user's own choice. The target app is not,
         // since skfiy acts on it, unless the user clicked into it during a
         // tool that sends no input (they were working in it: RustDesk).
-        let restore = front == target ? !(onlyTarget && userClicked(into: front, since: started))
+        if front == target, onlyTarget, !userTookTarget,
+           userClicked(into: front, since: started) || userActed(within: 0.6) {
+            userTookTarget = true
+        }
+        let restore = front == target ? !(onlyTarget && userTookTarget)
                                       : !onlyTarget && !userMayHaveSwitched(since: started)
         guard restore,
               let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }

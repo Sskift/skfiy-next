@@ -326,6 +326,23 @@ def new_window_and_sheet(s, w, main_id, key_window):
         index = tree_index(w.call('get_app_state', main_id, app=app, window=str(main_id))['text'], r'Button[^\n]*"Keep"')
         w.call('click', main_id, app=app, element_index=index)
 
+    # After following a new window, a click on the inspected window's field by
+    # its index from the earlier look works in that window again: typing lands there.
+    look = w.call('get_app_state', main_id, app=app, window=str(main_id))
+    field = tree_index(look['text'], r'TextField[^\n]*Scenario input')
+    w.call('click', main_id, app=app, element_index=tree_index(look['text'], r'Button[^\n]*"New window"'))
+    fx.wait(lambda st: window(st, new_title) is not None)
+    main_input = fx.state()['input']
+    back = w.call('click', main_id, app=app, element_index=field)
+    typed = w.call('type_text', main_id, app=app, text='wfback')
+    state = fx.state()
+    s.check('after following a new window, clicking the inspected window\'s field by index works there again: typing lands in it',
+            not back['is_error'] and f'(id {main_id}) again' in back['text'] and not typed['is_error']
+            and state['input'] == main_input + 'wfback' and window(state, new_title)['input'] == '',
+            (back['text'][:300], typed['text'][:200], state['input'], window(state, new_title)['input']))
+    fx.command('close_window', title=new_title)
+    fx.wait(lambda st: window(st, new_title) is None)
+
 
 def textedit_case(s):
     if subprocess.run(['pgrep', '-x', 'TextEdit'], capture_output=True).returncode == 0:

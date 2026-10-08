@@ -1562,9 +1562,10 @@ public final class ComputerUse {
                 // A click lands the caret under the pointer; by index, at the end.
                 let length = (element.string(kAXValueAttribute) as NSString?)?.length ?? 0
                 let location = point.flatMap { textIndex(in: element, at: $0) } ?? length
+                let returned = workInWindow(of: element)
                 let keyboard = await makeFieldWindowKey(element)
                 setCaret(element, location)
-                return "focused the field and placed the caret (accessibility)" + keyboard
+                return "focused the field and placed the caret (accessibility)" + keyboard + returned
             }
             // In web content AXPress only dispatches a click event: plain text or a
             // canvas would not take focus the way a real click does, so those

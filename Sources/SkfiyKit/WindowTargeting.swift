@@ -553,6 +553,24 @@ extension ComputerUse {
             + " that did not take the keyboard; get_app_state with window: \"\(opened.sorted()[0])\" shows it."
     }
 
+    /// A click on a text field in another window of the app than the one
+    /// worked in (an element index from before the session followed a new
+    /// window): that window is worked in again, so keys follow the field as
+    /// after a real click, and the next screenshot shows it.
+    func workInWindow(of field: AXUIElement) -> String {
+        guard let pid = field.pid, let session = sessions[pid], session.window != nil,
+              let window = containingWindow(of: field), let id = windowID(of: window), id != session.windowID else { return "" }
+        sessions[pid]?.window = window
+        sessions[pid]?.windowID = id
+        sessions[pid]?.windowFrame = window.frame
+        // The latest screenshot was of the other window: its pixels map nothing here.
+        sessions[pid]?.geometry = nil
+        sessions[pid]?.shownFingerprint = nil
+        sessions[pid]?.zoom = nil
+        let title = window.string(kAXTitleAttribute) ?? ""
+        return ". skfiy works in " + (title.isEmpty ? "that window" : quote(title, limit: 60)) + " (id \(id)) again, the window of this field: the screenshot shows it, and type_text and press_key aim at it"
+    }
+
     /// After a click focused a text field: a real click would also have made
     /// its window the app's key window, where typing goes. Does the same, and
     /// says what came of it (empty when the window already was the key window).
