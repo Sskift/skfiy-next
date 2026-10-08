@@ -18,6 +18,7 @@ reports its own clicks, field value, scroll position and visibility to
 scripts/compat_server.py. Unlocked only; needs Electron in
 ~/.cache/skfiy-test/electron (as the compatibility baseline does).
 """
+import atexit
 import json
 from pathlib import Path
 import subprocess
@@ -97,6 +98,8 @@ def main():
     if subprocess.run(['pgrep', '-x', 'Electron'], capture_output=True).returncode == 0:
         sys.exit('another app named Electron is running')
     started = server()
+    if started:  # also when a check returns early
+        atexit.register(started.terminate)
     with Session('covered-chromium', window_guard=False, environment={'SKFIY_CURSOR': '0'}) as s:
         if s.locked:
             s.check('the Mac is unlocked', False, 'skipped')
@@ -189,8 +192,6 @@ def main():
             control.write_text(json.dumps({'quit': True}))
             if not wait_until(lambda: subprocess.run(['kill', '-0', str(pid)], capture_output=True).returncode != 0, timeout=5):
                 subprocess.run(['kill', '-TERM', str(pid)])
-    if started:
-        started.terminate()
 
 
 if __name__ == '__main__':
