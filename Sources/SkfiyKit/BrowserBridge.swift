@@ -12,8 +12,7 @@ public enum BrowserBridge {
     public static let extensionID = "fkllhjogckpegfdomkajlkmjaaahnhbd"
 
     static var socketDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/skfiy/browsers", isDirectory: true)
+        SkfiyPaths.support.appendingPathComponent("browsers", isDirectory: true)
     }
 }
 
@@ -227,6 +226,8 @@ public struct ConnectedBrowser {
     public let socketPath: String
     public let name: String
     public let pid: Int
+    /// The extension's version, as its hello message reported it.
+    public var version: String? = nil
 }
 
 extension BrowserBridge {
@@ -273,7 +274,7 @@ extension BrowserBridge {
             let pid = info["pid"] as? Int ?? Int(file.dropLast(5)) ?? 0
             let name = (info["browser"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 ?? NSRunningApplication(processIdentifier: pid_t(pid))?.localizedName ?? "Browser"
-            return ConnectedBrowser(socketPath: path, name: name, pid: pid)
+            return ConnectedBrowser(socketPath: path, name: name, pid: pid, version: info["version"] as? String)
         }
     }
 }
@@ -297,24 +298,61 @@ extension BrowserBridge {
         ]
     }
 
+    /// The Chromium browsers installed for this user (their support folders).
+    static func installedBrowserFolders(support: URL = SkfiyPaths.applicationSupport) -> [URL] {
+        browserSupportDirectories
+            .map { support.appendingPathComponent($0, isDirectory: true) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    static func manifestFile(in browserFolder: URL) -> URL {
+        browserFolder.appendingPathComponent("NativeMessagingHosts/\(hostName).json")
+    }
+
     /// Writes the host manifest for every installed Chromium browser, or only
-    /// for the given --user-data-dir folders. Returns the files written.
-    public static func install(executable: String, extraUserDataDirectories: [String] = []) throws -> [String] {
-        let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+    /// for the given --user-data-dir folders. Returns the manifests that now
+    /// point at `executable`; files that already did are left untouched.
+    public static func install(executable: String, extraUserDataDirectories: [String] = [],
+                               support: URL = SkfiyPaths.applicationSupport) throws -> [String] {
         let targets = extraUserDataDirectories.isEmpty
-            ? browserSupportDirectories
-                .map { support.appendingPathComponent($0) }
-                .filter { FileManager.default.fileExists(atPath: $0.path) }
-            : extraUserDataDirectories.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-        let data = try JSONSerialization.data(withJSONObject: hostManifest(executable: executable), options: [.prettyPrinted, .withoutEscapingSlashes])
+            ? installedBrowserFolders(support: support)
+            : extraUserDataDirectories.map { URL(fileURLWithPath: expandingTilde($0), isDirectory: true) }
+        let data = try JSONSerialization.data(withJSONObject: hostManifest(executable: executable), options: [.prettyPrinted, .withoutEscapingSlashes, .sortedKeys])
         var written: [String] = []
         for directory in targets {
-            let hosts = directory.appendingPathComponent("NativeMessagingHosts", isDirectory: true)
-            try FileManager.default.createDirectory(at: hosts, withIntermediateDirectories: true)
-            let file = hosts.appendingPathComponent("\(hostName).json")
-            try data.write(to: file)
+            let file = manifestFile(in: directory)
+            if (try? Data(contentsOf: file)) != data {
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: file, options: .atomic)
+            }
             written.append(file.path)
         }
         return written
+    }
+
+    /// The host manifests present, with the binary each one launches.
+    public static func installedHosts(support: URL = SkfiyPaths.applicationSupport) -> [(manifest: String, executable: String?)] {
+        installedBrowserFolders(support: support).compactMap { folder in
+            let file = manifestFile(in: folder)
+            guard let data = try? Data(contentsOf: file) else { return nil }
+            let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return (file.path, manifest?["path"] as? String)
+        }
+    }
+
+    /// Removes the skfiy host manifests except those whose binary `keep`
+    /// accepts; returns the files removed.
+    public static func uninstall(support: URL = SkfiyPaths.applicationSupport,
+                                 keep: (String?) -> Bool = { _ in false }) -> [String] {
+        installedHosts(support: support).compactMap { host in
+            keep(host.executable) || (try? FileManager.default.removeItem(atPath: host.manifest)) == nil ? nil : host.manifest
+        }
+    }
+
+    /// ~ and ~/… against $HOME, which NSString's expansion ignores.
+    static func expandingTilde(_ path: String) -> String {
+        if path == "~" { return SkfiyPaths.home.path }
+        if path.hasPrefix("~/") { return SkfiyPaths.home.path + path.dropFirst() }
+        return path
     }
 }

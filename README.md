@@ -2,28 +2,75 @@
 
 macOS 的 computer use 内核：一个 MCP server，让 Claude Code（或任何 MCP 客户端）看见并操作 Mac 上的应用，能力对标 Codex 的 Computer Use，并且**全程在后台进行**——不抢焦点、不改变窗口层级、不移动鼠标、不打断你正在进行的输入，你的剪贴板最多被借用一瞬间并原样放回。唯一的例外是 `run_in_front`：只有你在 Claude Code 里点了同意，它才会把应用提到前台一秒左右。
 
-单个 Swift 二进制，无运行时依赖；另有一个可选的 Chromium 浏览器插件，让 agent 在你真实的 Chrome（带登录态）里用**后台标签页**工作。
+单个 Swift 二进制，无运行时依赖（只链接 macOS 自带的框架，浏览器插件也打包在二进制里）；另有一个可选的 Chromium 浏览器插件，让 agent 在你真实的 Chrome（带登录态）里用**后台标签页**工作。
 
-## 安装与接入 Claude Code
+English: [README.en.md](README.en.md)
+
+## 一键安装
+
+需要 macOS 14 或更新版本。在终端里运行：
 
 ```bash
-make install                     # 编译 release 版装到 ~/.local/bin/skfiy，复制浏览器插件，注册 native messaging
-skfiy doctor                     # 检查辅助功能 + 屏幕录制权限
-claude mcp add --scope user skfiy -- ~/.local/bin/skfiy mcp
+curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh | bash
 ```
 
-浏览器插件（可选，推荐）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`。工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。以后 `make install` 更新了插件文件，需要在 `chrome://extensions` 的 skfiy 卡片上点一下刷新按钮。插件 0.5.0 新增了 `downloads` 权限（用于 `browser_downloads`），0.6.0 起支持按描述定位（`browser_locate`、`target`），从旧版本更新后同样要刷新一次。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
+这条命令会：
 
-macOS 把这两项权限授予**启动 skfiy 的宿主进程**（你的终端，如 Ghostty / Terminal / iTerm），而不是 skfiy 本身。`skfiy doctor` 会触发系统授权提示；授权后需重启终端与 Claude Code。
+1. 有 GitHub release 时下载预编译的通用二进制（Apple 芯片和 Intel 都能用，校验 sha256）；还没有 release 时自动改为从源码编译，这需要 Xcode Command Line Tools（`xcode-select --install`，约 1.3 GB，不需要完整的 Xcode；编译约 1 分钟）。
+2. 装到 `~/.local/bin/skfiy`，不需要 `sudo`。
+3. 运行 `skfiy setup`：写入浏览器插件文件、注册 native messaging；装了 `claude` 命令行时把 skfiy 注册到 Claude Code（用户级）；检查权限（只检查，不弹窗）；最后列出还剩哪几步要你手动做。`skfiy setup` 可以反复运行，只补缺的、改过时的，不会重复注册。
+
+通常剩下两件事要你自己做：
+
+- **权限**：macOS 把辅助功能和屏幕录制授予**运行 Claude Code 的应用**（终端如 Ghostty / Terminal / iTerm，或 VS Code、Claude 桌面版），而不是 skfiy 本身。在那个应用里运行 `~/.local/bin/skfiy doctor` 会弹出系统授权提示；授权后重启该应用和 Claude Code。
+- **浏览器插件（可选，推荐）**：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选 `~/Library/Application Support/skfiy/browser-extension`（文件夹对话框里按 cmd+shift+G 粘贴路径）。插件 ID 固定为 `fkllhjogckpegfdomkajlkmjaaahnhbd`；工具栏图标悬停时显示是否已连上 skfiy，未连上时角标为灰色「!」。插件不要从 `~/Desktop`、`~/Documents` 加载——那里受隐私保护，Chrome 会弹权限请求。
 
 之后在 Claude Code 里直接说「在备忘录里新建一条……」「把 Finder 里的……」即可。
 
+**更新**：再运行一次同一条命令。插件文件有变化时 `skfiy setup` 会提醒你在 `chrome://extensions` 的 skfiy 卡片上点刷新；已经在运行的 Claude Code 会话要重启才会用上新版本（`skfiy doctor` 会列出还在跑旧版本的会话）。
+
+**已经 clone 了仓库**：`./install.sh` 或 `make install` 从当前代码编译安装，其余步骤相同。
+
+常用选项（经 curl 运行时写成 `curl … | bash -s -- --codex`；前三行也可以直接传给 `skfiy setup`，后三行只有安装脚本认）：
+
+| 选项 | 作用 |
+| --- | --- |
+| `--codex` | 同时注册到 Codex（`codex mcp add`）；已经注册过的会一直随更新保持正确 |
+| `-e SKFIY_LOCKED_USE=direct` | 注册时带上设置，这里是下文的锁屏 direct 模式；以后运行 `skfiy setup` 会保留你的设置 |
+| `--no-claude` / `--no-browser` | 不动 Claude Code 注册 / 不装浏览器插件 |
+| `--from-source` | 不下载，强制从源码编译 |
+| `--prefix DIR` | 装到 `DIR/bin` 而不是 `~/.local/bin` |
+| `--uninstall` | 卸载（见下） |
+
+其他 MCP 客户端：命令填 `~/.local/bin/skfiy` 的完整路径，参数 `mcp`。
+
+`skfiy doctor` 随时检查整体状态：权限（以及应该授予哪个应用）、PATH、Claude Code 注册的是哪个二进制、各浏览器的 native host 指向哪里、插件版本与连接、急停、仍在跑旧版本的 MCP server、无效或拼错的 `SKFIY_*` 设置。`skfiy doctor --check` 只检查、不弹授权提示。
+
+`~/.local/bin` 默认不在 PATH 里：要直接敲 `skfiy`，运行 `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile` 后重开终端；否则用完整路径 `~/.local/bin/skfiy`。
+
+### 卸载
+
+`~/.local/bin/skfiy uninstall`（或 `install.sh --uninstall`、`make uninstall`）：从 Claude Code 和 Codex 注销 skfiy，删除各浏览器的 native host 清单、`~/Library/Application Support/skfiy`、`~/Library/Caches/skfiy`、`~/Library/Logs/skfiy`（含操作日志和流程记录）以及二进制本身（`--keep-binary` 保留二进制）。注册或 native host 指向另一份仍然存在的 skfiy（例如用 `--prefix` 装的第二份）时，这些注册、清单和共用的文件夹都保留，只删当前这份二进制；用 `--user-data-dir` 给自定义配置目录写的 native host 清单要手动删（该目录下的 `NativeMessagingHosts/com.skfiy.bridge.json`）。剩下要你做的：在 `chrome://extensions` 里移除 skfiy 卡片，重启还在用 skfiy 的 Claude Code 会话。
+
+### 常见问题
+
+| 现象 | 处理 |
+| --- | --- |
+| 工具说缺少辅助功能或屏幕录制权限 | 授予运行 Claude Code 的应用（`skfiy doctor` 会写出它的名字），然后重启它和 Claude Code |
+| 浏览器工具说没有连接 | 运行 `skfiy setup`，再在 `chrome://extensions` 加载插件；Chrome 没有打开任何窗口时插件不运行 |
+| 每个调用都被拒绝 | 急停开着：`skfiy resume` 或按 ⌃⌥⌘. |
+| 更新后行为没变 | 重启 Claude Code 会话；插件文件更新过时在 `chrome://extensions` 点刷新 |
+| `skfiy: command not found` | 见上文 PATH 一段，或用完整路径 |
+| 不想装 Command Line Tools | 等有 release 后用上面的一键命令下载预编译版本 |
+
 ### 锁屏后继续操作（direct 模式）
 
-使用上面的普通安装即可，不需要 `sudo`、Apple 开发者证书或额外系统插件。给 MCP server 设置 `SKFIY_LOCKED_USE=direct`：
+使用上面的普通安装即可，不需要 `sudo`、Apple 开发者证书或额外系统插件。给 MCP server 设置 `SKFIY_LOCKED_USE=direct`，最简单的是让 setup 把它写进注册：
 
 ```bash
-SKFIY_LOCKED_USE=direct ~/.local/bin/skfiy mcp
+~/.local/bin/skfiy setup -e SKFIY_LOCKED_USE=direct
+# 手动做法（已注册过的先 claude mcp remove --scope user skfiy）：
+# claude mcp add --scope user skfiy -e SKFIY_LOCKED_USE=direct -- ~/.local/bin/skfiy mcp
 ```
 
 direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口，并向目标进程投递坐标点击、滚动、拖拽、按键和文字；不解锁系统，不启动 guardian，也不修改系统授权规则。MCP 可以在已经锁屏时启动，但目标应用须已运行，宿主须已获得辅助功能和屏幕录制权限。解锁状态仍走原有 AX 等功能。
@@ -169,24 +216,45 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 
 ## 环境变量
 
+设置写进 MCP server 的注册里：`skfiy setup -e 变量=值`（会保留到以后的 setup），或 `claude mcp add --scope user skfiy -e 变量=值 -- ~/.local/bin/skfiy mcp`（名字 `skfiy` 要写在 `-e` 前面：`-e` 可以接多个值，写在后面会被当成又一个设置）。`skfiy doctor` 会指出无效的值（例如旧的 `SKFIY_LOCKED_USE=1`）和拼错的变量名。
+
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `SKFIY_SETTLE_SECONDS` | `0.4` | 动作后等待界面稳定再截图的时间 |
-| `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` 可得到无损截图 |
-| `SKFIY_ACTION_LOG` | `~/Library/Logs/skfiy/actions.jsonl` | 操作日志的路径；`off` 不记录 |
 | `SKFIY_LOCKED_USE` | 关 | `direct`：启用保持系统锁定的单窗口截图和 PID 定向输入；与实验性 guardian 参数 `--locked-use` 互斥，旧值 `1` 不再支持 |
+| `SKFIY_LOCKED_WAKE_DISPLAY` | 开 | `0`：锁屏时不唤醒熄灭的显示器（此时截图不可用，见上文 direct 模式） |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1`：所有指针点击都用上文的空闲时短暂应用内聚焦，不再逐个应用询问 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
-| `SKFIY_UPLOAD_WITHOUT_ASKING` | 关 | `1` 让 `browser_upload` 不再逐次征求同意（只适合无人值守的测试） |
 | `SKFIY_CURSOR` | 开 | `0`：不显示 skfiy 自己的光标（见“自己的光标”） |
 | `SKFIY_CURSOR_IDLE` | `20` | 没有操作多少秒后光标淡出 |
-| `SKFIY_STOP_FILE` | `~/Library/Application Support/skfiy/stopped` | 急停标记文件的位置（测试用它互不干扰） |
+| `SKFIY_ACTION_LOG` | `~/Library/Logs/skfiy/actions.jsonl` | 操作日志的路径；`off` 不记录 |
+| `SKFIY_FLOW_DIR` | `~/Library/Application Support/skfiy/flows` | 流程检查点（`flow_*`）存放的位置 |
+| `SKFIY_SETTLE_SECONDS` | `0.4` | 动作后等待界面稳定再截图的时间 |
+| `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` 可得到无损截图 |
+
+只给测试和调试用的（平时不要设）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `SKFIY_STOP_FILE` | 急停标记文件的位置（默认 `~/Library/Application Support/skfiy/stopped`；测试用它互不干扰） |
+| `SKFIY_UPLOAD_WITHOUT_ASKING` | `1` 让 `browser_upload` 不再逐次征求同意（只用于无人值守的测试） |
+| `SKFIY_WAIT_EVENTS` | `0`：等待改回固定间隔轮询（`scripts/bench_reads.py` 用来对比） |
+| `SKFIY_FRONT_GRANT_FILE` | `run_in_front` 批准文件的位置（默认 `~/Library/Caches/skfiy/front-grant`） |
+| `SKFIY_OCR_DUMP` | 一个文件夹：把每次文字识别的图片和结果存进去 |
+| `SKFIY_SIMULATE_CAPTURE_STALL` | `1`：一开始就当作截图卡住，测试改用独立进程截图的路径 |
+| `SKFIY_SCREENSHOT_OUT` | `skfiy call` 保存截图的位置 |
+
+skfiy 自己的文件（插件、急停标记、流程、操作日志、实例链接）都放在 `$HOME/Library` 下并跟随 `HOME` 变量，所以 `HOME=$(mktemp -d) skfiy setup` 这样的试装不会碰到真实的配置。例外：`run_in_front` 的批准文件目前仍按真实用户目录定位（要隔离就设 `SKFIY_FRONT_GRANT_FILE`），待后台窗口那部分改动合并后再改。
 
 ## 开发
+
+除了 Swift 工具链，开发只在跑端到端测试时需要 Python 3（只用标准库）；`make` 是可选的快捷方式。只装了 Command Line Tools 时，单元测试要用 `make test`（它补上 swift-testing 宏插件的路径；直接 `swift test` 会报 TestingMacros 找不到）。
 
 ```bash
 make build          # swift build
 make test           # 单元测试（swift-testing）
+make test-install   # install.sh、skfiy setup / doctor / uninstall：在临时 HOME 里用假的 claude/codex 跑一遍，并核对你真实的配置没被改动；不碰界面
+make embed-extension  # 改了 browser-extension/ 之后：重新生成二进制里携带的插件副本（make release/install、源码安装和 release.sh 会自动做；不一致时 make test 失败）
+make dist           # 发布用的通用二进制压缩包（dist/），不发布任何东西；打 vX.Y.Z 标签后由 .github/workflows/release.yml 构建并发布
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
 make smoke-fixture  # 自建的小应用（窗口放在所有窗口之后）：悬停提示、打开/存储面板、自绘视图的点击
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
@@ -224,7 +292,12 @@ Sources/SkfiyKit/
   Keys.swift          xdotool 按键语法解析
   BrowserBridge.swift native messaging 宿主 ⇄ Unix socket ⇄ MCP 的桥接、安装
   BrowserTools.swift  browser_* 工具
-Sources/skfiy/main.swift   CLI：mcp / doctor / tools / call / install-browser-bridge（浏览器以扩展 origin 作参数启动时即为宿主）
+  Setup.swift         skfiy setup / doctor / uninstall：插件文件、native host、Claude Code / Codex 注册、检查清单
+  Paths.swift         skfiy 自己的文件位置（跟随 $HOME）
+  EmbeddedExtension.swift  二进制里携带的插件副本（scripts/embed_extension.sh 生成）
+Sources/skfiy/main.swift   CLI：setup / doctor / uninstall / mcp / tools / call / install-browser-bridge（浏览器以扩展 origin 作参数启动时即为宿主）
+install.sh                 一键安装：下载 release 或从源码编译，装到 ~/.local/bin，再运行 skfiy setup
+packaging/homebrew/        Homebrew formula 模板（未发布）
 browser-extension/         MV3 插件：service worker + 注入页面的快照/操作函数
 scripts/                   端到端冒烟测试、应用覆盖探测、测试浏览器启动脚本
 eval/                      真实任务评测：任务、独立判定、前台/最顶层窗口监视（结果在 eval/results，不入库）

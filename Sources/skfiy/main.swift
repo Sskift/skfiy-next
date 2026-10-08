@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import Foundation
 import SkfiyKit
 
@@ -7,21 +6,31 @@ let usage = """
 skfiy \(skfiyVersion) — macOS computer use for AI agents
 
 Usage:
-  skfiy mcp [--locked-use]       Run MCP; --locked-use selects the experimental guardian
-  skfiy doctor                   Check (and request) Accessibility + Screen Recording access
+  skfiy setup                    Finish installing: browser extension files and bridge, Claude Code
+                                 registration, permission check. Safe to run again.
+  skfiy doctor [--check]         Check the setup; without --check, macOS asks for missing permissions
+  skfiy uninstall [--keep-binary]  Undo setup and remove skfiy's files (and this binary)
+  skfiy mcp                      Run the MCP server (your MCP client starts it)
   skfiy tools                    List the tools
-  skfiy install-browser-bridge   Register the browser extension's native messaging host
   skfiy stop | resume | status   Emergency stop for every running skfiy (also ⌃⌥⌘. anywhere)
   skfiy log [N]                  The last N actions skfiy took (~/Library/Logs/skfiy/actions.jsonl)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
                                  is saved to $SKFIY_SCREENSHOT_OUT (default /tmp/skfiy-screenshot.<ext>)
+  skfiy install-browser-bridge [--user-data-dir <dir>]...
+                                 Only the browser part of setup (with --user-data-dir: only the bridge
+                                 for that browser profile)
 
-Locked computer use without an authorization plugin:
-  SKFIY_LOCKED_USE=direct skfiy mcp
-  Do not combine direct mode with --locked-use.
+Setup options:
+  --codex             also add skfiy to Codex (an existing Codex entry is always kept up to date)
+  --no-claude, --no-codex, --no-browser   leave that part alone
+  --user-data-dir <dir>                   register the bridge for a custom browser profile too
+  -e KEY=VALUE        a setting for the MCP server, e.g. -e SKFIY_LOCKED_USE=direct
 
-Register with Claude Code:
-  claude mcp add --scope user skfiy -- \(CommandLine.arguments[0].hasPrefix("/") ? CommandLine.arguments[0] : "/path/to/skfiy") mcp
+Locked computer use (the Mac stays locked): SKFIY_LOCKED_USE=direct in the server's environment.
+  The experimental guardian (`skfiy mcp --locked-use`) is separate; do not combine the two.
+
+Register by hand with Claude Code:
+  claude mcp add --scope user skfiy -- \(SkfiyPaths.executable) mcp
 """
 
 func fail(_ message: String) -> Never {
@@ -29,24 +38,12 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
-func doctor() {
-    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-    let accessibility = AXIsProcessTrustedWithOptions(prompt)
-    var screen = CGPreflightScreenCaptureAccess()
-    if !screen {
-        screen = CGRequestScreenCaptureAccess()
-    }
-    let host = ProcessInfo.processInfo.environment["TERM_PROGRAM"] ?? "the app that launched skfiy"
-    print("Accessibility:    \(accessibility ? "granted" : "MISSING")")
-    print("Screen Recording: \(screen ? "granted" : "MISSING")")
-    if !accessibility || !screen {
-        print("""
-
-        macOS grants these to the host process (\(host)), not to skfiy itself.
-        Enable it in System Settings → Privacy & Security → Accessibility / Screen & System Audio Recording,
-        then quit and reopen \(host) (and Claude Code).
-        """)
-        exit(1)
+/// Commands that take no arguments: anything extra (even --help) prints the
+/// usage instead of running them, so `skfiy stop --help` does not stop skfiy.
+func noArguments(_ arguments: [String]) {
+    guard arguments.count <= 1 else {
+        if ["-h", "--help", "help"].contains(arguments[1]) { print(usage); exit(0) }
+        fail("`skfiy \(arguments[0])` takes no arguments.\n\n" + usage)
     }
 }
 
@@ -57,47 +54,74 @@ if arguments.first?.hasPrefix("chrome-extension://") == true {
     BrowserBridge.runHost()
 }
 switch arguments.first {
-case "install-browser-bridge":
-    var extra: [String] = []
+case "setup", "install-browser-bridge":
+    var options = Setup.Options()
+    if arguments[0] == "install-browser-bridge" {
+        options.claude = false
+        options.skipCodex = true
+    }
     var rest = arguments.dropFirst()
     while let flag = rest.popFirst() {
-        guard flag == "--user-data-dir", let directory = rest.popFirst() else { fail("Usage: skfiy install-browser-bridge [--user-data-dir <dir>]...") }
-        extra.append(directory)
+        switch flag {
+        case "--no-claude": options.claude = false
+        case "--codex": options.codex = true
+        case "--no-codex": options.skipCodex = true
+        case "--no-browser": options.browser = false
+        case "--user-data-dir":
+            guard let directory = rest.popFirst() else { fail("--user-data-dir needs a folder.") }
+            options.userDataDirectories.append(directory)
+        case "-e", "--env":
+            guard let pair = rest.popFirst(), let equals = pair.firstIndex(of: "="), pair.first != "=" else {
+                fail("\(flag) needs KEY=VALUE, e.g. -e SKFIY_LOCKED_USE=direct.")
+            }
+            options.environment[String(pair[..<equals])] = String(pair[pair.index(after: equals)...])
+        case "-h", "--help": print(usage); exit(0)
+        default: fail("Unknown option \(flag) for `skfiy \(arguments[0])`.\n\n" + usage)
+        }
     }
-    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().standardizedFileURL.path
-    let absolute = executable.hasPrefix("/") ? executable : FileManager.default.currentDirectoryPath + "/" + executable
-    do {
-        let written = try BrowserBridge.install(executable: absolute, extraUserDataDirectories: extra)
-        guard !written.isEmpty else { fail("No Chromium browser profile folder found. Pass --user-data-dir for a custom profile.") }
-        print("Native messaging host registered for \(absolute):")
-        written.forEach { print("  \($0)") }
-        let installed = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/skfiy/browser-extension").path
-        let folder = FileManager.default.fileExists(atPath: installed + "/manifest.json")
-            ? installed : "the browser-extension folder of the skfiy repository"
-        let connected = BrowserBridge.connectedBrowsers()
-        if connected.isEmpty {
-            print("""
+    if arguments[0] == "install-browser-bridge", !options.userDataDirectories.isEmpty {
+        // A test or custom profile: only its bridge manifest, nothing else.
+        do {
+            let written = try BrowserBridge.install(executable: SkfiyPaths.executable, extraUserDataDirectories: options.userDataDirectories)
+            print("Native messaging host registered for \(SkfiyPaths.executable):")
+            written.forEach { print("  \($0)") }
+        } catch {
+            fail("Could not register the host: \(error.localizedDescription)")
+        }
+        exit(0)
+    }
+    exit(Setup.run(options))
 
-            Now load the extension (id \(BrowserBridge.extensionID)):
-              1. Open chrome://extensions and turn on Developer mode.
-              2. Click "Load unpacked" and choose: \(folder)
-                 (in the folder dialog, press cmd+shift+G and paste the path).
-            Re-run this command if you move the skfiy binary.
-            """)
-        }
-        // chrome.runtime.reload() did not bring the extension back in testing, so this stays manual.
-        for browser in connected {
-            print("\(browser.name) runs the extension: click the reload button on its skfiy card in chrome://extensions to pick up new files.")
-        }
-    } catch {
-        fail("Could not register the host: \(error.localizedDescription)")
+case "uninstall":
+    let rest = Array(arguments.dropFirst())
+    guard rest.isEmpty || rest == ["--keep-binary"] else {
+        if rest.contains(where: { ["-h", "--help"].contains($0) }) { print(usage); exit(0) }
+        fail("Usage: skfiy uninstall [--keep-binary]")
     }
+    exit(Setup.uninstall(keepBinary: !rest.isEmpty))
+
+case "doctor":
+    let rest = Array(arguments.dropFirst())
+    guard rest.isEmpty || rest == ["--check"] else {
+        if rest.contains(where: { ["-h", "--help"].contains($0) }) { print(usage); exit(0) }
+        fail("Usage: skfiy doctor [--check]")
+    }
+    exit(Setup.doctor(prompt: rest.isEmpty))
 
 case "mcp":
-    guard arguments.dropFirst().isEmpty || Array(arguments.dropFirst()) == ["--locked-use"] else { fail(usage) }
+    guard arguments.dropFirst().isEmpty || Array(arguments.dropFirst()) == ["--locked-use"] else {
+        fail("Usage: skfiy mcp [--locked-use]\n\n" + usage)
+    }
     if arguments.contains("--locked-use"), ProcessInfo.processInfo.environment["SKFIY_LOCKED_USE"] == "direct" {
         fail("SKFIY_LOCKED_USE=direct cannot be combined with --locked-use. Choose one locked-use mode.")
+    }
+    if isatty(STDIN_FILENO) != 0 {
+        FileHandle.standardError.write(Data("""
+        skfiy mcp talks MCP (JSON-RPC) on stdin and stdout; your MCP client starts it for you.
+        To register it with Claude Code: claude mcp add --scope user skfiy -- \(SkfiyPaths.executable) mcp
+        Waiting for MCP messages (ctrl-C to quit)…
+
+        """.utf8))
     }
     Instance.runFromOwnLink()
     atexit { Instance.removeOwnLink() }
@@ -127,34 +151,40 @@ case "mcp":
     NSApplication.shared.run()
 
 case "stop":
+    noArguments(arguments)
     let playing = EmergencyStop.set(stopped: true)
     Thread.sleep(forTimeInterval: playing + 0.1)
     print("skfiy is stopped; every action and read is refused until `skfiy resume` or \(EmergencyStop.shortcut) (only list_apps, get_desktop_status, get_app_capabilities and the locked-use status tools still answer).")
 
 case "resume":
+    noArguments(arguments)
     let playing = EmergencyStop.set(stopped: false)
     Thread.sleep(forTimeInterval: playing + 0.1)
     print("skfiy is running again.")
 
 case "log":
     // What skfiy did: the last N actions (default 30).
-    let count = arguments.count > 1 ? Int(arguments[1]) ?? 30 : 30
+    guard arguments.count <= 2 else { fail("Usage: skfiy log [N]") }
+    var count = 30
+    if arguments.count == 2 {
+        guard let number = Int(arguments[1]), number > 0 else { fail("Usage: skfiy log [N], where N is a positive number.") }
+        count = number
+    }
     let lines = ActionLog.standard?.recent(count) ?? []
     print(lines.isEmpty ? "No actions recorded (SKFIY_ACTION_LOG=off turns recording off)." : lines.joined(separator: "\n"))
 
 case "status":
+    noArguments(arguments)
     print(EmergencyStop.isStopped ? "stopped (resume with `skfiy resume` or \(EmergencyStop.shortcut))" : "running")
 
-case "doctor":
-    doctor()
-
 case "tools":
+    noArguments(arguments)
     for name in ComputerUse.toolNames {
         print(name)
     }
 
 case "call":
-    guard arguments.count >= 2 else { fail(usage) }
+    guard arguments.count >= 2 else { fail("Usage: skfiy call <tool> [json-args]; `skfiy tools` lists the tools.") }
     let name = arguments[1]
     var toolArguments: [String: Any] = [:]
     if arguments.count >= 3 {
@@ -204,5 +234,5 @@ case "--version", "version":
     print(skfiyVersion)
 
 default:
-    fail(usage)
+    fail("Unknown command \"\(arguments[0])\".\n\n" + usage)
 }

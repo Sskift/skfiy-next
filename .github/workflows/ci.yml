@@ -23,6 +23,8 @@ jobs:
         run: swift build
       - name: Unit tests
         run: swift test
+      - name: One-step install, setup and uninstall (throwaway HOME, fake claude/codex)
+        run: make test-install
       - name: Locked-use policy tests
         run: make test-locked-use
       - name: Authorization plugin boundary tests (no system installation)

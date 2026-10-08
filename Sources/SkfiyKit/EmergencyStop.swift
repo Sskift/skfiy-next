@@ -15,7 +15,7 @@ public enum EmergencyStop {
         if let path = ProcessInfo.processInfo.environment["SKFIY_STOP_FILE"] {
             return URL(fileURLWithPath: path)
         }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/skfiy/stopped")
+        return SkfiyPaths.support.appendingPathComponent("stopped")
     }
 
     public static var isStopped: Bool {

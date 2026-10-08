@@ -266,7 +266,7 @@ struct CapabilityReport {
             channels.append(Capability(name: "browser", available: true, detail: "browser_* tools through the skfiy extension: tabs by id, in background tabs, independent of the screen lock.",
                                        limits: facts.connectedBrowsers.count > 1 ? ["Several browsers are connected: pass browser (name or pid)."] : []))
         } else {
-            channels.append(Capability(name: "browser", available: false, detail: "The skfiy extension is not connected in this browser (make install, then load it in chrome://extensions).",
+            channels.append(Capability(name: "browser", available: false, detail: "The skfiy extension is not connected in this browser (run `skfiy setup`, then load it in chrome://extensions).",
                                        limits: facts.connectedBrowsers.isEmpty ? [] : ["Connected: " + facts.connectedBrowsers.joined(separator: ", ") + "."]))
         }
 

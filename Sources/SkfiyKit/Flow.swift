@@ -162,8 +162,7 @@ struct FlowStore {
         if let custom = ProcessInfo.processInfo.environment["SKFIY_FLOW_DIR"], !custom.isEmpty {
             return FlowStore(directory: URL(fileURLWithPath: custom, isDirectory: true))
         }
-        return FlowStore(directory: FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/skfiy/flows", isDirectory: true))
+        return FlowStore(directory: SkfiyPaths.support.appendingPathComponent("flows", isDirectory: true))
     }
 
     static func validName(_ name: String) throws -> String {
