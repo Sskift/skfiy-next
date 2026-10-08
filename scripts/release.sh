@@ -18,9 +18,17 @@ if [ -n "${1:-}" ] && [ "${1#v}" != "$version" ]; then
 fi
 
 scripts/embed_extension.sh  # the binary carries browser-extension/; a no-op when it is current
-flags=(-c release --arch arm64 --arch x86_64 --product skfiy --scratch-path .build/universal)
-swift build "${flags[@]}"
-binary="$(swift build "${flags[@]}" --show-bin-path)/skfiy"
+# One architecture per build, then lipo: with two --arch flags SwiftPM hands
+# the build to Xcode's build system, which fails on this package.
+slices=()
+for arch in arm64 x86_64; do
+    flags=(-c release --arch "$arch" --product skfiy --scratch-path ".build/release-$arch")
+    swift build "${flags[@]}"
+    slices+=("$(swift build "${flags[@]}" --show-bin-path)/skfiy")
+done
+mkdir -p .build/universal
+binary=.build/universal/skfiy
+lipo -create -output "$binary" "${slices[@]}"
 archs=$(lipo -archs "$binary")
 for arch in arm64 x86_64; do
     case " $archs " in *" $arch "*) ;; *) echo "release: $arch missing (has $archs)" >&2; exit 1 ;; esac
