@@ -271,10 +271,9 @@ public enum Setup {
             "SKFIY_LOCKED_USE", "SKFIY_LOCKED_WAKE_DISPLAY", "SKFIY_BRIEF_FOCUS", "SKFIY_ALLOW_TERMINALS", "SKFIY_CURSOR",
             "SKFIY_CURSOR_IDLE", "SKFIY_ACTION_LOG", "SKFIY_SETTLE_SECONDS", "SKFIY_SCREENSHOT_FORMAT", "SKFIY_SCREENSHOT_OUT",
             "SKFIY_STOP_FILE", "SKFIY_FLOW_DIR", "SKFIY_WAIT_EVENTS", "SKFIY_FRONT_GRANT_FILE", "SKFIY_OCR_DUMP",
-            "SKFIY_SIMULATE_CAPTURE_STALL", "SKFIY_UPLOAD_WITHOUT_ASKING", "SKFIY_INSTANCE", "SKFIY_GUARDIAN",
-            // install.sh, scripts/test_install.sh and the locked-use build
-            "SKFIY_PREFIX", "SKFIY_VERSION", "SKFIY_RELEASE_URL", "SKFIY_REPO", "SKFIY_SOURCE_DIR", "SKFIY_TEST_FROM_SOURCE",
-            "SKFIY_SOCKET_ROOT", "SKFIY_PLUGINS", "SKFIY_RIGHTS", "SKFIY_SIGN_IDENTITY"
+            "SKFIY_SIMULATE_CAPTURE_STALL", "SKFIY_UPLOAD_WITHOUT_ASKING", "SKFIY_INSTANCE",
+            // install.sh and scripts/test_install.sh
+            "SKFIY_PREFIX", "SKFIY_VERSION", "SKFIY_RELEASE_URL", "SKFIY_REPO", "SKFIY_SOURCE_DIR", "SKFIY_TEST_FROM_SOURCE"
         ]
         for name in environment.keys.sorted() where name.hasPrefix("SKFIY_") && !known.contains(name) {
             lines.append(Line(.warning, "\(name) is set but skfiy does not read it (a typo?)"))

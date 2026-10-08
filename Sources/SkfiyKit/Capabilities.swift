@@ -7,7 +7,7 @@ import Foundation
 /// Kept as plain values so the decisions below can be tested without an app.
 struct CapabilityInputs: Equatable {
     enum Session: String { case unlocked, locked, unknown }
-    enum Mode: String { case normal, direct, directEnded = "direct-ended", guardian }
+    enum Mode: String { case normal, direct, directEnded = "direct-ended" }
     enum Protection: String { case terminal, host, system }
 
     struct Window: Equatable {
@@ -271,9 +271,9 @@ struct CapabilityReport {
         }
 
         // Foreground, file panels, clipboard: the user's visible desktop only.
-        let desktop = blocker == nil && unlocked && facts.mode != .guardian
+        let desktop = blocker == nil && unlocked
         if !desktop {
-            let why = blocker ?? (facts.mode == .guardian ? "Unavailable under locked-use protection." : "macOS is locked.")
+            let why = blocker ?? "macOS is locked."
             channels.append(Capability(name: "foreground", available: false, detail: why))
             channels.append(Capability(name: "file_dialog", available: false, detail: why))
             channels.append(Capability(name: "clipboard", available: false, detail: why))
@@ -350,7 +350,7 @@ extension ComputerUse {
         let lock = DirectLockedUse.lockState
         var facts = CapabilityInputs(
             session: lock == .locked ? .locked : lock == .unlocked ? .unlocked : .unknown,
-            mode: DirectLockedUse.enabled ? (directLockedUse.isEnded ? .directEnded : .direct) : lockedUse != nil ? .guardian : .normal,
+            mode: DirectLockedUse.enabled ? (directLockedUse.isEnded ? .directEnded : .direct) : .normal,
             appName: query)
         facts.emergencyStopped = EmergencyStop.isStopped
         facts.accessibility = AXIsProcessTrusted()

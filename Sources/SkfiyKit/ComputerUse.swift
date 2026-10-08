@@ -83,7 +83,6 @@ public final class ComputerUse {
     /// themselves (sign in, enter a code); nil when the client cannot ask.
     public var waitForUser: ((String) async -> Bool?)?
     private let settleDelay: Double
-    var lockedUse: LockedUseClient?
     let directLockedUse = DirectLockedUse()
     /// Refuses repeating a risky action whose effect was not verified.
     var repeatGuard = RepeatGuard()
@@ -97,18 +96,7 @@ public final class ComputerUse {
     /// app (Electron) reports no focused element, so typing needs to know.
     var typingTargets: [pid_t: AXUIElement] = [:]
 
-    public func enableLockedUse() async throws {
-        guard !DirectLockedUse.enabled else {
-            throw ToolError("SKFIY_LOCKED_USE=direct cannot be combined with --locked-use. Choose direct mode to keep macOS locked.")
-        }
-        let client = LockedUseClient()
-        try await client.start()
-        lockedUse = client
-        Input.lockedUseIsValid = { [weak client] in client != nil && client?.failure == nil }
-    }
-
     public func disconnect() {
-        lockedUse?.disconnect()
         _ = directLockedUse.status(end: true)
         forgetApps()
     }
@@ -143,27 +131,11 @@ public final class ComputerUse {
             if name == "locked_use_end" { return directLockedUse.status(end: true) }
         }
         if name == "locked_use_status" || name == "locked_use_end" {
-            if name == "locked_use_end" { lockedUse?.disconnect() }
-            return ToolResult(text: lockedUse?.status ?? "Locked use is disabled. Start a new MCP session with SKFIY_LOCKED_USE=direct to keep macOS locked, or --locked-use for the experimental guardian.")
+            return ToolResult(text: "Locked use is off. To keep macOS locked while skfiy works, the user starts a new MCP session with SKFIY_LOCKED_USE=direct.")
         }
         lastInputWasSecret = false
         browser.lastInputWasSecret = false
-        let needsDesktop = Self.toolNames.contains(name) && !name.hasPrefix("browser_") &&
-            !["list_apps", "get_desktop_status", "hand_over", "get_app_capabilities"].contains(name)
-        var result: ToolResult
-        if let lockedUse, needsDesktop, !EmergencyStop.isStopped {
-            do {
-                try await lockedUse.begin()
-                result = await act(name, raw)
-                // End also verifies relock. An interrupted/partial operation is
-                // an error, even when the app's action itself already succeeded.
-                try await lockedUse.end()
-            } catch {
-                result = ToolResult(text: "Locked use stopped: \(error). The last action may be partial; inspect the app after manual unlock before retrying.", isError: true)
-            }
-        } else {
-            result = await act(name, raw)
-        }
+        let result = await act(name, raw)
         if ["get_app_state", "wait_for"].contains(name), !result.isError { noteLooked(raw) }
         actionLog?.record(tool: name, arguments: raw, result: result, secret: lastInputWasSecret || browser.lastInputWasSecret)
         return result
@@ -210,7 +182,6 @@ public final class ComputerUse {
             return ToolResult(text: EmergencyStop.refusal, isError: true)
         }
         do {
-            if Self.nativeSessionTools.contains(name) { try lockedUse?.check() }
             if Self.inputTools.contains(name) || name == "scroll" {
                 try refuseProtectedTarget(args, scrolling: name == "scroll")
             }
@@ -225,7 +196,7 @@ public final class ComputerUse {
             case "list_apps": return listApps()
             case "get_desktop_status":
                 if DirectLockedUse.enabled { return directLockedUse.status() }
-                return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: \(lockedUse?.status ?? "disabled; start skfiy mcp --locked-use to opt in").\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
+                return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: off.\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
             case "get_app_state": return try await keepingFront(args) { try await self.getAppState(args) }
             case "get_app_capabilities": return try await appCapabilities(args)
             case "click": return try await keepingFront(args) { try await self.click(args) }
@@ -239,9 +210,6 @@ public final class ComputerUse {
             case "open_file": return try await keepingFront(args) { try await self.openFile(args) }
             case "save_document": return try await keepingFront(args) { try await self.saveDocument(args) }
             case "run_in_front":
-                guard lockedUse?.protected != true else {
-                    throw ToolError("run_in_front needs the user's visible desktop. Use background actions during locked use, or unlock manually.")
-                }
                 return try await runInFront(args)
             case "zoom": return try await zoom(args)
             case "wait_for": return try await waitFor(args)
@@ -272,9 +240,6 @@ public final class ComputerUse {
     /// top and menus that popped up are closed. Nothing is undone when the user
     /// clicked or pressed a modifier meanwhile, since that may have been them.
     private func keepingFront(_ args: Arguments, _ body: () async throws -> ToolResult) async throws -> ToolResult {
-        // loginwindow and the guardian's covers must never become restoration
-        // targets. The guardian owns presentation during temporary unlock.
-        if lockedUse?.protected == true { return try await body() }
         guard let before = frontmostProcessID() else {
             return try await body()
         }
@@ -2087,7 +2052,6 @@ public final class ComputerUse {
     }
 
     private func checkInputTarget(_ app: NSRunningApplication) throws {
-        try lockedUse?.check()
         guard !isScreenLocked() else {
             throw ToolError("The screen is locked. No input was sent.")
         }

@@ -4,9 +4,9 @@ its Client, Evidence and require are also the MCP client and evidence log of
 scenario.py and compat_baseline.py.
 
 This is a support module. Run smoke_locked_direct.py or
-smoke_locked_direct_multiwindow.py for direct-mode acceptance; the separate
-upstream guardian harness is smoke_locked_use.py. These helpers never install
-an authorization plugin, lock/unlock macOS, or inject global HID events.
+smoke_locked_direct_multiwindow.py for direct-mode acceptance. These helpers
+never install an authorization plugin, lock/unlock macOS, or inject global HID
+events.
 """
 import base64
 import json

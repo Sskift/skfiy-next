@@ -1,6 +1,6 @@
 # 锁屏期间继续使用 skfiy
 
-direct 模式通过 ScreenCaptureKit 的独立窗口捕获和按 PID 投递的键鼠事件，在 macOS 会话保持锁定时操作已经运行的应用。它使用普通 skfiy MCP 二进制，不解锁系统，不需要 guardian、系统授权插件、管理员安装或 Apple 开发者签名身份，也不读取或保存登录密码。
+direct 模式通过 ScreenCaptureKit 的独立窗口捕获和按 PID 投递的键鼠事件，在 macOS 会话保持锁定时操作已经运行的应用。它使用普通 skfiy MCP 二进制，不解锁系统，不需要系统授权插件、管理员安装或 Apple 开发者签名身份，也不读取或保存登录密码。
 
 ## 当前验收状态
 
@@ -8,7 +8,7 @@ direct 模式通过 ScreenCaptureKit 的独立窗口捕获和按 PID 投递的�
 
 双窗口回归还验证了同一进程的两个真实窗口（一个标题为空）均可截图，但键盘输入因目标不唯一而被拒绝，实际收到的键事件为零。测试从已锁定状态启动 MCP；有限采样不能证明未采样的每个瞬间，也没有替代所有第三方应用、多显示器或解锁切换场景的兼容性验证。
 
-合并至 `main` 后，71 项 Swift 测试、9 项安装策略测试、C lease 与插件边界测试、release 及 guardian 构建均通过。合并后的真机重测在前置检查时发现会话已再次解锁，因此该轮未完成；上面的完整锁屏验收结果来自合并前的 direct release。
+合并至 `main` 后，71 项 Swift 测试和 release 构建均通过（当时还有已移除的 guardian 方案的安装策略、C lease 与插件边界测试和构建，也都通过）。合并后的真机重测在前置检查时发现会话已再次解锁，因此该轮未完成；上面的完整锁屏验收结果来自合并前的 direct release。
 
 原始截图、日志和结果保存在执行测试的本机 `eval/results/` 中，不随代码发布。本次记录为 `locked-direct-mcp-20261004-201554-01360e619bb8/summary.json` 和 `locked-direct-multiwindow-20261004-201753-f9d30551aefa/summary.json`；可按下方“验证”步骤生成自己的记录。
 
@@ -29,7 +29,7 @@ make install
 SKFIY_LOCKED_USE=direct ~/.local/bin/skfiy mcp
 ```
 
-在 MCP 客户端配置中，`command` 使用普通 `skfiy` 二进制的绝对路径，`args` 为 `["mcp"]`，给该 server 的 `env` 添加 `"SKFIY_LOCKED_USE": "direct"`。更新二进制或环境变量后重新启动 MCP 会话。不需要安装 guardian 或系统授权插件；不要同时添加 `--locked-use` 参数。
+在 MCP 客户端配置中，`command` 使用普通 `skfiy` 二进制的绝对路径，`args` 为 `["mcp"]`，给该 server 的 `env` 添加 `"SKFIY_LOCKED_USE": "direct"`。更新二进制或环境变量后重新启动 MCP 会话。不需要安装系统授权插件。
 
 截取窗口需要显示器亮着。锁屏后显示器通常很快熄灭，此时 ScreenCaptureKit 只返回内部错误（-3811）。direct 模式在需要截图而显示器已熄灭时，会用电源管理的“用户活动”把显示器唤醒到锁屏画面（屏幕上只有锁屏界面，系统保持锁定），并在最后一次截图后 2 分钟内阻止显示器休眠，之后放开，显示器照常熄灭；MCP 进程退出时也随之放开。设置 `SKFIY_LOCKED_WAKE_DISPLAY=0` 可禁止唤醒，此时显示器熄灭期间截图、文字识别和坐标操作不可用，`get_app_capabilities` 与报错会说明原因。解锁状态下不会唤醒显示器。
 
@@ -86,10 +86,8 @@ python3 scripts/smoke_locked_direct_multiwindow.py ~/.local/bin/skfiy --run
 
 此测试只操作自己创建的 fixture，通过真实 MCP 工具获取截图及坐标，再发送输入；fixture 独立记录收到的事件，另一个采样器记录系统锁态。它不请求解锁，运行结束仍保持原有锁定状态。单窗口结果保存在 `eval/results/locked-direct-mcp-*`，双窗口拒绝回归结果保存在 `eval/results/locked-direct-multiwindow-*`。`diagnose_locked_direct.py --already-locked` 则只用于底层 API 能力诊断，不是产品 MCP 的验收替代品。
 
-## 独立的实验性 guardian 方案
+## 已移除的 guardian 方案
 
-仓库另保留 `skfiy mcp --locked-use` 路径：经本地身份验证后，由授权插件和 guardian 在桌面操作期间遮屏、短暂解锁，完成后重新锁定。其安装器、签名配置、测试和恢复流程见 [GUARDIAN.md](GUARDIAN.md)。该路径仍未完成 M1 Pro / macOS Tahoe 26.6.1 真机验收；上面的 direct 测试不能用于证明它可用。
+仓库曾保留另一条实验路径 `skfiy mcp --locked-use`：经本地身份验证后，由系统授权插件和 guardian 在桌面操作期间遮屏、短暂解锁，完成后重新锁定。它一直没有完成真机验收，2026-10-08 起已从代码中移除（约 2,000 行，包括 guardian 程序、C 目标、授权插件和对应测试），`--locked-use` 参数现在会报错并提示改用 direct。最后一版代码保留在标签 `guardian-experimental-2026-10`。
 
-`SKFIY_LOCKED_USE=direct` 与 `--locked-use` 是互斥的启用方式。direct 的安装与使用不依赖 guardian；停止 direct MCP 会话或移除环境变量即可停用，不需要管理员卸载。
-
-早期开发分支还曾使用 `SKFIY_LOCKED_USE=1` 和另一套插件/guardian。该版本已从当前代码移除，旧安装命令不适用于此版本。其 ad-hoc 插件曾被系统宿主拒绝加载，本机实验组件随后已撤回；这一历史结果既不是 direct 的前提，也不是当前 `--locked-use` guardian 的真机验收结果。相关本机记录保留在 `eval/results/locked-use-20261004-193856-10f0c0e4fe6b/` 与 `eval/results/locked-use-audit-20261004-194734/summary.json`，不随代码发布。
+早期开发分支还曾使用 `SKFIY_LOCKED_USE=1` 和另一套插件/guardian。该版本已从当前代码移除，旧安装命令不适用于此版本。其 ad-hoc 插件曾被系统宿主拒绝加载，本机实验组件随后已撤回；这一历史结果不是 direct 的前提。相关本机记录保留在 `eval/results/locked-use-20261004-193856-10f0c0e4fe6b/` 与 `eval/results/locked-use-audit-20261004-194734/summary.json`，不随代码发布。

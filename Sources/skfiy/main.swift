@@ -27,7 +27,6 @@ Setup options:
   -e KEY=VALUE        a setting for the MCP server, e.g. -e SKFIY_LOCKED_USE=direct
 
 Locked computer use (the Mac stays locked): SKFIY_LOCKED_USE=direct in the server's environment.
-  The experimental guardian (`skfiy mcp --locked-use`) is separate; do not combine the two.
 
 Register by hand with Claude Code:
   claude mcp add --scope user skfiy -- \(SkfiyPaths.executable) mcp
@@ -109,11 +108,11 @@ case "doctor":
     exit(Setup.doctor(prompt: rest.isEmpty))
 
 case "mcp":
-    guard arguments.dropFirst().isEmpty || Array(arguments.dropFirst()) == ["--locked-use"] else {
-        fail("Usage: skfiy mcp [--locked-use]\n\n" + usage)
+    if arguments.dropFirst().first == "--locked-use" {
+        fail("The experimental --locked-use guardian was removed. To keep macOS locked while skfiy works, set SKFIY_LOCKED_USE=direct in the server's environment instead.")
     }
-    if arguments.contains("--locked-use"), ProcessInfo.processInfo.environment["SKFIY_LOCKED_USE"] == "direct" {
-        fail("SKFIY_LOCKED_USE=direct cannot be combined with --locked-use. Choose one locked-use mode.")
+    guard arguments.dropFirst().isEmpty else {
+        fail("Usage: skfiy mcp\n\n" + usage)
     }
     if isatty(STDIN_FILENO) != 0 {
         FileHandle.standardError.write(Data("""
@@ -127,10 +126,6 @@ case "mcp":
     atexit { Instance.removeOwnLink() }
     Task { @MainActor in
         let computerUse = ComputerUse()
-        if arguments.contains("--locked-use") {
-            do { try await computerUse.enableLockedUse() }
-            catch { fail("Could not enable locked use: \(error)") }
-        }
         let server = MCPServer(executor: computerUse)
         computerUse.askUser = { [weak server] message in await server?.confirm(message) }
         computerUse.waitForUser = { [weak server] message in await server?.confirm(message, timeout: 1800) }

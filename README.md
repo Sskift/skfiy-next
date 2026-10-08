@@ -73,11 +73,11 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 # claude mcp add --scope user skfiy -e SKFIY_LOCKED_USE=direct -- ~/.local/bin/skfiy mcp
 ```
 
-direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口，并向目标进程投递坐标点击、滚动、拖拽、按键和文字；不解锁系统，不启动 guardian，也不修改系统授权规则。MCP 可以在已经锁屏时启动，但目标应用须已运行，宿主须已获得辅助功能和屏幕录制权限。解锁状态仍走原有 AX 等功能。
+direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口，并向目标进程投递坐标点击、滚动、拖拽、按键和文字；不解锁系统，也不修改系统授权规则。MCP 可以在已经锁屏时启动，但目标应用须已运行，宿主须已获得辅助功能和屏幕录制权限。解锁状态仍走原有 AX 等功能。
 
 锁屏时先调用 `get_app_state` 获取新截图，再使用截图坐标操作；`wait_for` 可等待文字出现、消失或窗口画面稳定，`zoom` 可放大局部看清小字并按放大图坐标操作。AX 元素编号、前台操作、文件面板和剪贴板功能不可用；多个窗口时拒绝键盘输入。截取窗口需要显示器亮着：锁屏后显示器熄灭时，skfiy 会把它唤醒到锁屏画面（只显示锁屏界面，不解锁），并在最后一次截图后 2 分钟内保持点亮，之后照常熄灭；设置 `SKFIY_LOCKED_WAKE_DISPLAY=0` 可关闭这一行为，此时显示器熄灭期间截图不可用，`get_app_capabilities` 和报错会说明原因。`locked_use_end` 结束当前 MCP 会话的 direct 操作权限，不改变系统锁定状态。不同应用是否接受后台输入仍须逐个验证。
 
-2026-10-04：合并前的 direct release 版本已安装并通过真实锁屏 MCP 测试，覆盖截图、文字输入、点击提交、按键、滚动、拖动及拒绝路径；518 个锁态采样保持锁定。另通过双窗口键盘拒绝回归，当时 72 项自动测试通过。验收范围是本机专用 fixture，不表示所有第三方应用都兼容。配置、限制和验证记录见 [locked-use/README.md](locked-use/README.md)。另保留独立的实验性 `skfiy mcp --locked-use` guardian 路径，其短暂解锁方案尚未完成真机验收，见 [guardian 文档](locked-use/GUARDIAN.md)；不要与 direct 同时启用。
+2026-10-04：合并前的 direct release 版本已安装并通过真实锁屏 MCP 测试，覆盖截图、文字输入、点击提交、按键、滚动、拖动及拒绝路径；518 个锁态采样保持锁定。另通过双窗口键盘拒绝回归，当时 72 项自动测试通过。验收范围是本机专用 fixture，不表示所有第三方应用都兼容。配置、限制和验证记录见 [locked-use/README.md](locked-use/README.md)。
 
 真实应用的兼容性基线（TextEdit、预览、Finder、Chrome、Electron 在解锁前台/后台/锁屏下的截图、点击、输入、滚动、弹窗）见 [docs/compatibility.md](docs/compatibility.md)；后台与锁屏能力建设的进度和验证记录见 [docs/roadmap.md](docs/roadmap.md)。
 
@@ -110,7 +110,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `hand_over` | 把一步交给你：登录、验证码、付款确认、系统权限弹窗、输密码。Claude Code 里显示要你做什么，你做完点确认（最多等 30 分钟）再继续；给了 `app` 和 `expect` 时，还会在 10 秒内核对应用里是否真的出现了预期的文字。你拒绝时，agent 被告知不要自己去做 |
 | `wait_for` | 不发送任何输入，等某段文字在窗口里出现（或 `gone` 时消失；不公开辅助功能的窗口也匹配截图里识别出的文字），不给文字则等窗口停止变化（`stable_for` 秒）；满足后返回新状态，超时报错并附当前状态。锁屏 direct 模式下按窗口截图的识别文字和像素判断，可用 `region` 只看截图的一部分；锁态变化、窗口关闭、应用退出时立即停下并说明原因；客户端可取消。解锁时由应用的辅助功能通知唤醒（每秒兜底看一次），锁屏时比对小截图、画面不变时放慢、像素变了才识别文字；可带 `since` 只返回变化。用来代替反复调 `get_app_state` |
 | `flow_start` / `flow_record` / `flow_status` | 长任务的检查点（存在磁盘上，断线、重启、你接手后都在）：每步完成时附上能复核的证据（文件及其内容指纹、应用窗口或文字、标签页文字、已完成的下载），当场核对成立才记下；只能做一次的动作（提交、发送）先记为待确认。`flow_status` 每次都对照现实重新核对：哪些仍成立、哪些已失效及原因（文件没了、窗口关了、应用重启过）、待确认的动作是否已生效，给出下一步或“需要重新规划” |
-| `get_desktop_status` | 查看桌面锁定、实验性 guardian 授权和急停状态，不触发解锁 |
+| `get_desktop_status` | 查看桌面锁定、锁屏模式和急停状态，不触发解锁 |
 | `locked_use_status` | direct 模式下查看当前 MCP 会话是否启用、系统是否锁定及锁态是否已知，不触发解锁 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
@@ -220,7 +220,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `SKFIY_LOCKED_USE` | 关 | `direct`：启用保持系统锁定的单窗口截图和 PID 定向输入；与实验性 guardian 参数 `--locked-use` 互斥，旧值 `1` 不再支持 |
+| `SKFIY_LOCKED_USE` | 关 | `direct`：启用保持系统锁定的单窗口截图和 PID 定向输入；旧值 `1` 不再支持 |
 | `SKFIY_LOCKED_WAKE_DISPLAY` | 开 | `0`：锁屏时不唤醒熄灭的显示器（此时截图不可用，见上文 direct 模式） |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1`：所有指针点击都用上文的空闲时短暂应用内聚焦，不再逐个应用询问 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |

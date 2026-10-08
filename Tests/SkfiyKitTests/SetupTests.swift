@@ -165,9 +165,8 @@ struct SetupChecksTests {
         let old = Setup.settingWarnings(environment: ["SKFIY_LOCKED_USE": "1"])
         #expect(old.count == 1 && old[0].text.contains("direct"))
         #expect(Setup.settingWarnings(environment: ["SKFIY_CURSER": "0"]).first?.text.contains("SKFIY_CURSER") == true)
-        // The installer's and the locked-use build's own variables are not typos.
-        #expect(Setup.settingWarnings(environment: ["SKFIY_SOURCE_DIR": "/src", "SKFIY_TEST_FROM_SOURCE": "1", "SKFIY_SOCKET_ROOT": "/x",
-                                                    "SKFIY_PLUGINS": "/p", "SKFIY_RIGHTS": "r", "SKFIY_SIGN_IDENTITY": "-"]).isEmpty)
+        // The installer's own variables are not typos.
+        #expect(Setup.settingWarnings(environment: ["SKFIY_SOURCE_DIR": "/src", "SKFIY_TEST_FROM_SOURCE": "1", "SKFIY_PREFIX": "/p"]).isEmpty)
     }
 
     @Test func uninstallLeavesOtherInstallsAlone() throws {

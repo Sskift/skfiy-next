@@ -415,3 +415,9 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 - 用 `make dist` 生成的通用二进制再跑一遍安装测试（当时 60 项），全部通过；`arch -x86_64` 下也能运行。
 - README 里手动注册的写法改为 `claude mcp add --scope user skfiy -e SKFIY_LOCKED_USE=direct -- …`：真实的 `claude` 的 `-e` 接受多个值，名字写在 `-e` 后面会被当成第二个设置而失败；新写法在临时 HOME 里用真实 CLI 验证过。
 - 模拟新用户的 `curl … | bash`：脚本从 stdin 读入，临时 HOME。GitHub 上还没有 release，于是自动 clone 并编译，110 秒装好。
+
+## 一键安装合并后的收尾（2026-10-08）
+
+- 一键安装分支合并进 main。合并后补了两处审查意见：`skfiy doctor` 会检查 Claude Code 注册里的设置（例如写错的 `SKFIY_LOCKED_USE=1`），注册里有 `SKFIY_LOCKED_USE=direct` 时显示 “Locked use: direct”；`skfiy setup` 检查用 `-e` 传入的设置，给出的手动注册命令也带上这些设置。`make test-install` 72/72。
+- release 编译改为每个架构单独编译再用 `lipo` 合并：同时传两个 `--arch` 时，SwiftPM 会改用 Xcode 的构建系统，GitHub 的 macos-15 上直接失败（`SWIFT_VERSION '' is unsupported`、`Unexpected duplicate tasks`）。改后在本机和 GitHub 上手动触发的 Release 流程（只编译和测试，不发布）都通过，包括用打出的压缩包跑安装测试。
+- 移除实验性的 guardian 锁屏方案（`skfiy mcp --locked-use`）：它从未完成真机验收，却让每次编译多出一个可执行文件和一个 C 目标，并在每个工具调用的路径上留有分支。删掉了 `skfiy-guardian`、`LockedUseCore`、授权插件、`LockedUseClient`、`Input.lockedUseIsValid`、能力查询里的 guardian 模式、三个 Makefile 目标和 CI 里的五个步骤，约 2,000 行。`--locked-use` 现在报错并提示改用 `SKFIY_LOCKED_USE=direct`；没有开 direct 时，`locked_use_status` / `locked_use_end` 只说明锁屏模式没开。direct 模式不受影响。最后一版代码保留在标签 `guardian-experimental-2026-10`。本机没有装过 guardian（`/Library/Application Support/skfiy` 不存在），不需要卸载。

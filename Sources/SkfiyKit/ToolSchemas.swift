@@ -86,7 +86,7 @@ enum ToolSchemas {
         ),
         tool(
             "get_desktop_status",
-            "Read whether the desktop is locked/unavailable, whether a locked-use grant is armed, and whether emergency stop is active. Does not unlock the Mac or request authorization. Locked use is set up by the user only: direct mode (SKFIY_LOCKED_USE=direct) keeps macOS locked; the experimental guardian exists only when they started mcp --locked-use and approved its prompt. Never enable either yourself, operate loginwindow, type an unlock password, or retry a failed automatic unlock; when locked use is revoked or an action was cut short, ask the user to unlock manually and look at the state before retrying.",
+            "Read whether the desktop is locked/unavailable, whether locked use is on, and whether emergency stop is active. Does not unlock the Mac or request authorization. Locked use is set up by the user only: direct mode (SKFIY_LOCKED_USE=direct) keeps macOS locked. Never enable it yourself, operate loginwindow or type an unlock password; when an action was cut short, look at the state before retrying.",
             properties: [:], required: [], readOnly: true
         ),
         tool(
@@ -358,7 +358,7 @@ enum ToolSchemas {
         )
     ] + [
         tool("locked_use_status", "Inspect this MCP session's locked-use mode and actual OS lock state. Does not unlock the Mac.", properties: [:], required: [], readOnly: true),
-        tool("locked_use_end", "End locked use for this MCP session. Direct mode leaves the OS locked; experimental guardian mode revokes its grant and requests protected cleanup. Call when the task is finished.", properties: [:], required: [])
+        tool("locked_use_end", "End locked use for this MCP session; macOS stays locked. Call when the task is finished.", properties: [:], required: [])
     ]
 
     private static let tab: [String: Any] = ["type": "integer", "description": "Tab id from browser_tabs or browser_open"]

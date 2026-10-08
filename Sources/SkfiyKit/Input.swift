@@ -58,12 +58,11 @@ enum SkyLight {
 /// user approved.
 @MainActor
 enum Input {
-    static var lockedUseIsValid: (() -> Bool)?
     private static var desktopAllowsNormalInput: Bool {
         !isScreenLocked() && !DirectLockedUse.isActive
     }
     static var canSend: Bool {
-        !EmergencyStop.isStopped && !Task.isCancelled && desktopAllowsNormalInput && (lockedUseIsValid?() ?? true)
+        !EmergencyStop.isStopped && !Task.isCancelled && desktopAllowsNormalInput
     }
     /// A private source, so the user's physically held modifiers never leak in.
     private static let keySource = CGEventSource(stateID: .privateState)
@@ -77,15 +76,14 @@ enum Input {
     private static var cancelled: Bool {
         if let validation = directLockedValidation {
             guard !directLockedAborted else { return true }
-            guard !EmergencyStop.isStopped, !Task.isCancelled,
-                  lockedUseIsValid?() ?? true, validation() else {
+            guard !EmergencyStop.isStopped, !Task.isCancelled, validation() else {
                 directLockedAborted = true
                 return true
             }
             return false
         }
         // The locked-session exception exists only inside a validated direct
-        // action. Normal input and the guardian path retain the unlocked gate.
+        // action. Normal input keeps the unlocked gate.
         return !canSend
     }
 
