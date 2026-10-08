@@ -6,11 +6,8 @@ python3 scripts/test_wait.py {bin} --chrome
 python3 scripts/test_zoom.py {bin} --chrome
 python3 scripts/test_verify.py {bin} --textedit
 python3 scripts/test_windows.py {bin} --textedit
-python3 scripts/experiment_locked_keyboard.py --trials 12
 python3 scripts/test_downloads.py {bin}
 python3 scripts/test_locate.py {bin} --textedit --chrome
-python3 scripts/bench_reads.py {bin} --rounds 2
-python3 scripts/bench_reads.py {bin} --rounds 2 --textedit
 python3 scripts/test_flow.py {bin}
 python3 scripts/test_displays.py {bin}
 python3 scripts/test_display_wake.py {bin}
