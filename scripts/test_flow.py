@@ -306,6 +306,7 @@ def main():
         agent.call('browser_close_tab', tab_id=agent.tab())
 
     # replan: the file is deleted and the tab closed behind the flow's back.
+    path = tab = None
     with session('flow-replan-1', flows) as s:
         run = s.nonce
         flow, file_name = f'replan {run}', f'data-{run}.txt'
@@ -314,6 +315,8 @@ def main():
         agent.download()
         agent.open()
         path, tab = agent.memory['path'], agent.tab()
+    if not path:  # the session above failed and recorded why
+        return
     Path(path).unlink()
     with session('flow-replan-outside', flows) as other:
         other.call('browser_close_tab', browser=browser, tab_id=tab)

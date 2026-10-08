@@ -347,13 +347,8 @@ final class BrowserTools {
     private func browser(for args: Arguments, tabID: Int?) async throws -> ConnectedBrowser {
         let browsers = await connected()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
-        if let wanted = args.string("browser")?.lowercased(), !wanted.isEmpty {
-            // Two browsers can share a name (Chrome and Chrome for Testing); a pid is exact.
-            guard let match = browsers.first(where: { String($0.pid) == wanted })
-                    ?? browsers.first(where: { $0.name.lowercased().contains(wanted) }) else {
-                throw ToolError("No connected browser matches \"\(wanted)\". Connected: \(browsers.map(\.name).joined(separator: ", ")).")
-            }
-            return match
+        if let wanted = args.string("browser"), !wanted.isEmpty {
+            return try Self.matching(wanted, in: browsers)[0]
         }
         if browsers.count == 1 { return browsers[0] }
         if let tabID {
@@ -368,11 +363,27 @@ final class BrowserTools {
         throw ToolError("Several browsers are connected (\(browsers.map(\.name).joined(separator: ", "))); pass browser.")
     }
 
+    /// The connected browsers that `browser` names: a process id exactly (two
+    /// browsers can share a name, as Chrome and Chrome for Testing do), else
+    /// every one whose name contains it. Naming none is an error, not an
+    /// empty list.
+    nonisolated static func matching(_ wanted: String, in browsers: [ConnectedBrowser]) throws -> [ConnectedBrowser] {
+        let wanted = wanted.lowercased()
+        let found = Int(wanted) != nil
+            ? browsers.filter { String($0.pid) == wanted }
+            : browsers.filter { $0.name.lowercased().contains(wanted) }
+        guard !found.isEmpty else {
+            let connected = browsers.map { "\($0.name) (pid \($0.pid))" }.joined(separator: ", ")
+            throw ToolError("No connected browser matches \"\(wanted)\". Connected: \(connected).")
+        }
+        return found
+    }
+
     private func tabs(_ args: Arguments) async throws -> ToolResult {
         var browsers = await connected()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
-        if let wanted = args.string("browser")?.lowercased(), !wanted.isEmpty {
-            browsers = browsers.filter { String($0.pid) == wanted || $0.name.lowercased().contains(wanted) && Int(wanted) == nil }
+        if let wanted = args.string("browser"), !wanted.isEmpty {
+            browsers = try Self.matching(wanted, in: browsers)
         }
         var lines: [String] = []
         for browser in browsers {

@@ -103,6 +103,7 @@ extension BrowserBridge {
         private var nextID = 1
         private var hello: [String: Any] = [:]
         private var socketPath = ""
+        private var socketInode: ino_t = 0
 
         func start() -> Never {
             let directory = BrowserBridge.socketDirectory
@@ -114,15 +115,23 @@ extension BrowserBridge {
                 Thread { self.acceptLoop(server) }.start()
             }
             readBrowser()
-            unlink(socketPath)
+            removeOwnSocket()
             exit(0)
+        }
+
+        /// When the extension reconnects, the next host for the same browser
+        /// can be listening at this path before this one exits; its socket
+        /// is not this host's to remove.
+        private func removeOwnSocket() {
+            var info = stat()
+            if socketInode != 0, stat(socketPath, &info) == 0, info.st_ino == socketInode { unlink(socketPath) }
         }
 
         /// Listens on a temporary name and renames it into place, so the
         /// socket never appears before it accepts: a client connecting
         /// between bind and listen would be refused and take it for stale.
         private func listenSocket() -> Int32 {
-            let staging = socketPath + ".new"
+            let staging = socketPath + ".\(getpid()).new"
             guard var address = socketAddress(staging) else { return -1 }
             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
             guard fd >= 0 else { return -1 }
@@ -133,6 +142,8 @@ extension BrowserBridge {
             guard bound == 0 else { close(fd); return -1 }
             chmod(staging, 0o600)
             guard listen(fd, 16) == 0, rename(staging, socketPath) == 0 else { unlink(staging); close(fd); return -1 }
+            var info = stat()
+            if stat(socketPath, &info) == 0 { socketInode = info.st_ino }
             return fd
         }
 

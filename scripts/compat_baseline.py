@@ -632,6 +632,17 @@ def chrome_pid():
     return int(out[0]) if out else None
 
 
+def ready_test_chrome(session):
+    """Chrome for Testing for a scenario session: started with the current
+    extension when it is not running, and its pid once skfiy sees the
+    extension; None when it never connects."""
+    TOOLS.update(build_tools())
+    ensure_server()
+    pid = launch_chrome(session.binary)
+    connected = wait_until(lambda: not session.call('browser_tabs', browser=str(pid))['is_error'], timeout=60, interval=1)
+    return pid if connected else None
+
+
 def launch_chrome(binary, url='about:blank', restart=False):
     """Chrome for Testing with its own profile, the current extension files,
     and downloads going to /tmp/skfiy-compat/downloads (never the user's

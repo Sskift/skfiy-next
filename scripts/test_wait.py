@@ -117,12 +117,11 @@ def chrome(s):
     """A real app: the compat page in Chrome for Testing's front tab; the page's
     own button starts a 3 s load (through the extension), and wait_for watches
     the browser window like any app."""
-    from compat_baseline import PORT, chrome_pid, ensure_server, page_state
-    pid = chrome_pid()
-    if not s.check('Chrome for Testing running', pid, 'start it with scripts/compat_baseline.py --case chrome'):
+    from compat_baseline import PORT, page_state, ready_test_chrome
+    pid = ready_test_chrome(s)
+    if not s.check('Chrome for Testing running with its extension', pid, 'it did not start or connect'):
         return
     browser = str(pid)
-    ensure_server()
     tabs = s.call('browser_tabs', browser=browser)
     front = re.search(r'tab (\d+) \[(?:front tab of its window|shown)\]', tabs['text'])
     if not s.check('front tab found', front, tabs['text'][:200]):

@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from compat_baseline import chrome_pid  # noqa: E402
+from compat_baseline import ready_test_chrome  # noqa: E402
 from scenario import Session, capabilities, main_binary, tool, wait_until  # noqa: E402
 
 CFT = 'Google Chrome for Testing'
@@ -127,9 +127,8 @@ def main():
 
 def check_browser(s):
     """Chrome for Testing's browser channel follows its extension connection."""
-    pid = chrome_pid()
-    if not pid:
-        s.check('browser: Chrome for Testing running', False, 'start it with scripts/compat_baseline.py --case chrome first')
+    pid = ready_test_chrome(s)
+    if not s.check('browser: Chrome for Testing running with its extension', pid, 'it did not start or connect'):
         return
     connected = capabilities(s.call('get_app_capabilities', app=CFT))
     s.check('browser channel available while connected', channel(connected, 'browser')['available'], channel(connected, 'browser')['detail'])

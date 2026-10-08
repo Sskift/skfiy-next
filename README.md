@@ -187,7 +187,7 @@ make test           # 单元测试（swift-testing）
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
 make smoke-fixture  # 自建的小应用（窗口放在所有窗口之后）：悬停提示、打开/存储面板、自绘视图的点击
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
-make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变
+make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变（先跑 scripts/test_bridge_host.py：插件重连时旧桥接进程不会删掉新进程的连接）
 python3 scripts/smoke_browser.py ~/.local/bin/skfiy --user-browser   # 同上，但跑在你自己的 Chrome 里：只用自己开的后台标签页，不用调试接口（需先起测试页服务，见 scripts/test_browser.sh）
 python3 scripts/smoke_chromium.py .build/debug/skfiy Safari   # 同一套网页测试跑在 Safari 上（先在后台打开测试页）
 python3 scripts/app_coverage.py     # 只读探测：对正在运行的应用各取一次状态，只报数量和耗时，不输出内容

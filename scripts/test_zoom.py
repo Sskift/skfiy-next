@@ -116,11 +116,10 @@ def main():
 
 def chrome(s):
     """A real app: 7 px text on the compat page in Chrome for Testing's front tab."""
-    from compat_baseline import PORT, chrome_pid, ensure_server
-    pid = chrome_pid()
-    if not s.check('Chrome for Testing running', pid, ''):
+    from compat_baseline import PORT, ready_test_chrome
+    pid = ready_test_chrome(s)
+    if not s.check('Chrome for Testing running with its extension', pid, 'it did not start or connect'):
         return
-    ensure_server()
     browser = str(pid)
     tabs = s.call('browser_tabs', browser=browser)
     front = re.search(r'tab (\d+) \[(?:front tab of its window|shown)\]', tabs['text'])

@@ -46,6 +46,19 @@ struct NativeMessageTests {
 }
 
 struct BrowserFormattingTests {
+    @Test func browserIsNamedByPidOrName() throws {
+        let browsers = [
+            ConnectedBrowser(socketPath: "/a.sock", name: "Google Chrome", pid: 501),
+            ConnectedBrowser(socketPath: "/b.sock", name: "Google Chrome for Testing", pid: 502)
+        ]
+        #expect(try BrowserTools.matching("502", in: browsers).map(\.pid) == [502])
+        #expect(try BrowserTools.matching("Chrome", in: browsers).map(\.pid) == [501, 502])
+        #expect(try BrowserTools.matching("testing", in: browsers).map(\.pid) == [502])
+        // A browser that is not connected (or no longer) is an error, not an empty tab list.
+        #expect(throws: ToolError.self) { try BrowserTools.matching("503", in: browsers) }
+        #expect(throws: ToolError.self) { try BrowserTools.matching("Safari", in: browsers) }
+    }
+
     @Test func tabsMarkWhatTheUserSees() {
         let lines = formatTabs(browser: "Google Chrome", windows: [[
             "windowId": 7, "focused": true,
