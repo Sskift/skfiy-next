@@ -245,7 +245,7 @@ def main():
         shown_name = index(shown_tree, r'text "Name"')
         on_shown("browser_type", index=shown_name, text="abc", clear=True)
         case("trusted key on a visible tab", lambda: on_shown("browser_press_key", index=shown_name, key="BackSpace", trusted=True), r"^input ab$")
-    case("reload", lambda: act("browser_navigate", action="reload"), r"^ready$")
+    case("reload", lambda: act("browser_open", action="reload"), r"^ready$")
 
     after = client.call("browser_tabs")
     shown_after = front_tabs(after)

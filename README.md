@@ -113,17 +113,17 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `locked_use_status` | direct 模式下查看当前 MCP 会话是否启用、系统是否锁定及锁态是否已知，不触发解锁 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
-浏览器插件连上后多出 15 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
+浏览器插件连上后多出 14 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
 | --- | --- |
 | `browser_tabs` | 列出窗口和标签页，`[shown]` 标出你正在看的那个 |
-| `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页 |
+| `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页；用 `action` 代替网址时让该标签页后退、前进或刷新 |
 | `browser_locate` | 按描述（名称、类型、视口区域、所在 fieldset/标题区块、邻近文字）在页面当下的元素和文字里查找，列出候选及刷新后的编号，不挑、不操作 |
 | `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页要截图（canvas、图表、图片）需传 `background_screenshot`，经 Chrome 调试接口截取，约 0.3 秒，之后可按截图坐标点击 |
 | `browser_click` | 按编号点击（或按截图坐标）；`target=_blank` 链接改为后台新标签页打开 |
 | `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` | 输入（可清空、可提交）、选下拉项、按键、滚动页面或元素 |
-| `browser_navigate` / `browser_close_tab` | 后退/前进/刷新、关闭标签页 |
+| `browser_close_tab` | 关闭标签页 |
 | `browser_upload` | 把本地文件填进网页的上传框（不弹文件选择器）；每次上传前都在 Claude Code 里征得你同意，最大 20 MB |
 | `browser_hover` | 在后台标签页里悬停到元素上：页面收到打开悬停菜单所需的指针事件，页面 CSS 的 `:hover` 样式也会生效（其他域名的样式表由插件取回）；之后可按编号点击出现的菜单项 |
 | `browser_downloads` | 只列出 skfiy 引起的下载（在它操作过的标签页里 15 秒内发起的，或由它直接下载的），不列用户自己的下载：状态、本地路径、失败原因（网络中断、服务器无此文件、已取消……）。`wait` 等下载结束，只有完成且文件存在时才给出路径；`start` 直接下载某个网址（同名时浏览器自动改名，结果给出真实文件名）；`cancel` 取消。完成的文件可交给 `open_file(path)` 或 `browser_upload(download_id)`。Chrome 只允许一个网站在没有真实手势时自动下载一次，之后合成点击触发的下载会被拦截，这时 `wait` 会说明并建议用 `start` |

@@ -97,7 +97,7 @@ struct MCPServerTests {
             "file_dialog", "read_clipboard", "wait_for", "locate", "flow_start", "flow_record", "flow_status", "hand_over",
             "locked_use_status", "locked_use_end",
             "browser_tabs", "browser_open", "browser_state", "browser_locate", "browser_click", "browser_type",
-            "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
+            "browser_select", "browser_press_key", "browser_scroll", "browser_close_tab",
             "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
         ])
         #expect(Set(ComputerUse.inputTools) == ["click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key",
@@ -117,7 +117,7 @@ struct MCPServerTests {
             "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text",
             "open_file", "save_document", "run_in_front", "file_dialog", "read_clipboard", "hand_over",
             "browser_open", "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll",
-            "browser_navigate", "browser_close_tab", "browser_upload", "browser_hover", "browser_downloads"
+            "browser_close_tab", "browser_upload", "browser_hover", "browser_downloads"
         ])
     }
 

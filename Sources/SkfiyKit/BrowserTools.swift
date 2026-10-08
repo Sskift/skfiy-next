@@ -25,7 +25,14 @@ final class BrowserTools {
         case "browser_tabs":
             return try await tabs(args)
         case "browser_open":
-            guard let url = args.string("url"), !url.isEmpty else { throw ToolError("Missing required argument \"url\".") }
+            if let action = args.string("action") {
+                guard args.string("url") == nil else { throw ToolError("Pass url or action, not both.") }
+                let tabID = try requiredTab(args)
+                let browser = try await browser(for: args, tabID: tabID)
+                _ = try await send(browser, "navigate", ["tab_id": tabID, "action": action], timeout: 30)
+                return try await state(browser, tabID: tabID, prefix: "Went \(action) in tab \(tabID).", screenshot: false)
+            }
+            guard let url = args.string("url"), !url.isEmpty else { throw ToolError("Missing required argument \"url\" (or action, with tab_id).") }
             let tabID = try args.int("tab_id")
             let browser = try await browser(for: args, tabID: tabID)
             var params: [String: Any] = ["url": url]
@@ -45,12 +52,6 @@ final class BrowserTools {
             let browser = try await browser(for: args, tabID: tabID)
             let found = try await locate(locator, browser: browser, tabID: tabID)
             return ToolResult(text: describe(found, locator: locator, tabID: tabID, acting: false), isError: found.matches.isEmpty)
-        case "browser_navigate":
-            let tabID = try requiredTab(args)
-            let action = try args.requiredString("action")
-            let browser = try await browser(for: args, tabID: tabID)
-            _ = try await send(browser, "navigate", ["tab_id": tabID, "action": action], timeout: 30)
-            return try await state(browser, tabID: tabID, prefix: "Went \(action) in tab \(tabID).", screenshot: false)
         case "browser_close_tab":
             let tabID = try requiredTab(args)
             let browser = try await browser(for: args, tabID: tabID)

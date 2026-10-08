@@ -432,9 +432,10 @@ enum ToolSchemas {
         ),
         tool(
             "browser_open",
-            "Open a URL in a new background tab (grouped under \"skfiy\"; the user's current tab stays in front), or navigate an existing tab with tab_id. Returns the page state.",
-            properties: ["url": ["type": "string", "description": "URL to open"], "tab_id": tab, "browser": browserName],
-            required: ["url"]
+            "Open a URL in a new background tab (grouped under \"skfiy\"; the user's current tab stays in front), or navigate an existing tab with tab_id; with action instead of url, go back, forward or reload tab_id. Returns the page state.",
+            properties: ["url": ["type": "string", "description": "URL to open"], "tab_id": tab, "browser": browserName,
+                         "action": ["type": "string", "enum": ["back", "forward", "reload"], "description": "Instead of url: go back, forward or reload tab_id"]],
+            required: []
         ),
         tool(
             "browser_state",
@@ -505,12 +506,6 @@ enum ToolSchemas {
             ],
             required: ["tab_id", "direction"],
             traits: [.target]
-        ),
-        tool(
-            "browser_navigate",
-            "Go back, forward, or reload a tab.",
-            properties: ["tab_id": tab, "browser": browserName, "action": ["type": "string", "enum": ["back", "forward", "reload"], "description": "Navigation"]],
-            required: ["tab_id", "action"]
         ),
         tool(
             "browser_close_tab",
