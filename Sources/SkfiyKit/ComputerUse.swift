@@ -2355,6 +2355,12 @@ public final class ComputerUse {
         // a dialog) is where the model works now: it is shown, and keys follow it.
         let followed = followNewKeyWindow(pid)
         let message = message + followed
+        // The action closed the window inspected by name, and no window it
+        // opened took over: the session keeps naming the closed window, so
+        // keyboardTarget refuses keys until the model looks at the app again.
+        if inspectedWindowClosed(pid) {
+            return ToolResult(text: message + "\nNo screenshot: the window you were working in is closed. Call get_app_state to see the app's windows.")
+        }
         // A background Electron app may report no focused window: then its main or first one.
         let appElement = AXUIElementCreateApplication(pid)
         let window = sessions[pid]?.window ?? appElement.element(kAXFocusedWindowAttribute) ?? appElement.element(kAXMainWindowAttribute)

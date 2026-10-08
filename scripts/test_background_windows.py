@@ -208,6 +208,13 @@ def fixture_case(s, minimize):
     s.check('x/y click on the second window\'s Done, under the main window\'s Apply: Done is pressed, Apply is not',
             not hit['is_error'] and closed and after.get('done', 0) == before.get('done', 0) + 1 and after.get('apply', 0) == before.get('apply', 0),
             (hit['text'].splitlines()[0][:160], before, after))
+    # skfiy's own click closed the window worked in; the main window, open before, has the keyboard.
+    keys_before, main_before = dict(fx.state()['keys']), fx.state()['input']
+    stray = w.call('type_text', main_id, app=app, text='stray')
+    state = fx.state()
+    s.check('after skfiy\'s own click closed the window worked in, typing is refused, not sent to the window open before',
+            stray['is_error'] and 'is closed' in stray['text'] and state['keys'] == keys_before and state['input'] == main_before,
+            (stray['text'][:240], state['input']))
 
     if minimize:
         fx.command('open_window', title=third, input=True)

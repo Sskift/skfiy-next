@@ -485,6 +485,14 @@ extension ComputerUse {
         return target
     }
 
+    /// Whether the window the model inspected by name or id is gone (closed
+    /// by an action or by the user).
+    func inspectedWindowClosed(_ pid: pid_t) -> Bool {
+        guard let session = sessions[pid], let window = session.window, window.string(kAXRoleAttribute) == nil else { return false }
+        guard let id = session.windowID else { return true }
+        return (CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []).isEmpty
+    }
+
     /// The app's windows, as accessibility lists them.
     func appWindowIDs(_ pid: pid_t) -> Set<CGWindowID> {
         Set(AXUIElementCreateApplication(pid).elements(kAXWindowsAttribute).compactMap(windowID(of:)))
