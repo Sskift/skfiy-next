@@ -32,6 +32,9 @@ struct AppSession {
     /// map to the screen only while it stays there.
     var windowID: CGWindowID?
     var windowFrame: CGRect?
+    /// The pixels of the latest screenshot the model was given: an action
+    /// that leaves them as they were sends no new one.
+    var shownFingerprint: PixelFingerprint?
     /// Which numbering the indices belong to: a full get_app_state starts a
     /// new one; get_app_state with since keeps it.
     var epoch: Int
@@ -1044,6 +1047,7 @@ public final class ComputerUse {
         sessions[pid]?.zoom = previousZoom
         sessions[pid]?.windowID = shownWindow.flatMap(windowID(of:))
         sessions[pid]?.windowFrame = shownWindow?.frame
+        sessions[pid]?.shownFingerprint = fingerprint
         let version = StateVersions.next()
         if args.string("find") == nil {
             stateHistory[pid] = StateRecord.appending(StateRecord(version: version, epoch: sessions[pid]!.epoch, window: windowKey, lines: snapshot.body,
@@ -2148,9 +2152,16 @@ public final class ComputerUse {
         }
         do {
             let screenshot = try await captureApp(pid: pid, rect: region)
+            let fingerprint = TextRecognition.decode(screenshot.data).flatMap { PixelFingerprint($0, region: nil) }
+            if let session = sessions[pid], session.geometry == screenshot.geometry,
+               let shown = session.shownFingerprint, let now = fingerprint, !now.changed(from: shown) {
+                // The model already has this picture; a second copy would only take up its context.
+                return ToolResult(text: message + "\nThe window looks the same as in the latest screenshot, so none is attached; its x/y still hold. Element indices are unchanged; call get_app_state for a fresh tree.")
+            }
             sessions[pid]?.geometry = screenshot.geometry
             sessions[pid]?.windowID = window.flatMap(windowID(of:))
             sessions[pid]?.windowFrame = window?.frame
+            sessions[pid]?.shownFingerprint = fingerprint
             return ToolResult(
                 text: message + "\n" + screenshotLine(screenshot.geometry) + " Element indices are unchanged; call get_app_state for a fresh tree.",
                 image: screenshot.data,

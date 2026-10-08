@@ -315,7 +315,10 @@ final class DirectLockedUse {
         var window = try choose(windows, query: query, selected: selected)
         let recognize = args.bool("ocr") ?? true
         let since = nonEmpty(args.string("since")?.trimmingCharacters(in: .whitespaces))
-        let base = since.flatMap { version in history[pid]?.last { $0.record.version == version } }
+        // After an action, the window's latest look: if nothing changed, the
+        // model already has the picture and its text.
+        let latest = message != nil && since == nil ? history[pid]?.last : nil
+        let base = since.flatMap { version in history[pid]?.last { $0.record.version == version } } ?? latest
         let reusing = fresh.flatMap { $0.geometry.rect == window.frame ? $0 : nil }
         let captured: Capture
         if let reusing {
@@ -388,7 +391,13 @@ final class DirectLockedUse {
             if recognized != nil { lines += ["Text recognized in the screenshot (use x/y):"] + textLines }
             return ToolResult(text: lines.joined(separator: "\n"), image: shot.data, imageMimeType: shot.mimeType)
         }
-        guard let since else { return full(nil) }
+        guard let since else {
+            if let latest, comparable, pixelsSame, latest.record.windows == windowTitles {
+                let lines = header + ["The window looks the same as in its latest screenshot (\(latest.record.version)), so none is attached and its text is not repeated; x/y of that screenshot still hold."]
+                return ToolResult(text: lines.joined(separator: "\n"))
+            }
+            return full(nil)
+        }
         guard let base else {
             return full("\(since) is not known for this window (only the last \(StateRecord.kept) looks are kept, and a lock change forgets them); the full state follows.")
         }
