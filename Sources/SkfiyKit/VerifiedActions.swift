@@ -8,9 +8,7 @@ import Foundation
 /// an identical one right after an unverified one is refused until the state
 /// has been looked at again.
 extension ComputerUse {
-    nonisolated static let verifiableTools: Set<String> = [
-        "click", "type_text", "press_key", "set_value", "scroll", "drag", "perform_secondary_action", "select_text"
-    ]
+    nonisolated static let verifiableTools = ToolSchemas.names(.verifiable)
 
     struct ActionTarget {
         let pid: pid_t

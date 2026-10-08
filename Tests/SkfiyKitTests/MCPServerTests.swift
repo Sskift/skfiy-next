@@ -75,7 +75,7 @@ struct MCPServerTests {
     }
 
     @Test func listsEveryToolWithAnObjectSchema() async throws {
-        let server = MCPServer(executor: FakeExecutor(), write: { _ in })
+        let server = MCPServer(executor: FakeExecutor(), write: { _ in }, browserTools: true)
         let response = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": "a", "method": "tools/list"]))
         let tools = try #require((response["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         let names = tools.compactMap { $0["name"] as? String }
@@ -88,15 +88,86 @@ struct MCPServerTests {
         }
     }
 
+    /// The lists the dispatch, the action log and the capability report use
+    /// come from the tool definitions' traits; they must not drift.
+    @Test func toolListsDerivedFromTraits() {
+        #expect(ComputerUse.toolNames == [
+            "list_apps", "get_desktop_status", "get_app_state", "get_app_capabilities", "click", "perform_secondary_action", "set_value",
+            "select_text", "scroll", "drag", "press_key", "type_text", "open_file", "save_document", "zoom", "run_in_front",
+            "file_dialog", "read_clipboard", "wait_for", "locate", "flow_start", "flow_record", "flow_status", "hand_over",
+            "locked_use_end",
+            "browser_tabs", "browser_open", "browser_state", "browser_locate", "browser_click", "browser_type",
+            "browser_select", "browser_press_key", "browser_scroll", "browser_close_tab",
+            "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
+        ])
+        #expect(Set(ComputerUse.inputTools) == ["click", "perform_secondary_action", "set_value", "select_text", "drag", "press_key",
+                                                "type_text", "open_file", "save_document", "run_in_front", "file_dialog"])
+        #expect(Set(ComputerUse.verifiableTools) == ["click", "type_text", "press_key", "set_value", "scroll", "drag",
+                                                     "perform_secondary_action", "select_text"])
+        #expect(Set(ComputerUse.targetTools) == ["click", "scroll", "set_value", "perform_secondary_action", "select_text"])
+        #expect(Set(ToolSchemas.names(.target, in: ToolSchemas.browser)) == ["browser_click", "browser_type", "browser_select",
+                                                                             "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"])
+        #expect(Set(DirectLockedUse.lockedTools) == ["get_app_state", "click", "scroll", "drag", "press_key", "type_text", "wait_for", "zoom", "locate"])
+        #expect(Set(ToolSchemas.names([.whileLocked, .refusedWhileLocked])) == [
+            "get_app_state", "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text",
+            "open_file", "save_document", "zoom", "run_in_front", "file_dialog", "wait_for", "locate", "read_clipboard"
+        ])
+        #expect(Set(ToolSchemas.names(.whileStopped)) == ["list_apps", "get_desktop_status", "get_app_capabilities"])
+        #expect(ActionLog.recordedTools == [
+            "click", "perform_secondary_action", "set_value", "select_text", "scroll", "drag", "press_key", "type_text",
+            "open_file", "save_document", "run_in_front", "file_dialog", "read_clipboard", "hand_over",
+            "browser_open", "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll",
+            "browser_close_tab", "browser_upload", "browser_hover", "browser_downloads"
+        ])
+    }
+
+    /// `skfiy tools`: arguments (required first, optional marked ?) and the
+    /// first sentence of each description.
+    @Test func toolSummaryShowsArgumentsAndPurpose() {
+        #expect(ToolSchemas.firstSentence("Close a tab. Only close tabs you opened.") == "Close a tab.")
+        #expect(ToolSchemas.firstSentence("Invoke an action (e.g. Increment). Works.") == "Invoke an action (e.g. Increment).")
+        #expect(ToolSchemas.firstSentence("Press a key\n  - Avoid keys. Really.") == "Press a key.")
+        let lines = ToolSchemas.summary().split(separator: "\n")
+        #expect(lines.count == 2 * ComputerUse.toolNames.count)
+        #expect(lines.contains("browser_close_tab(tab_id, browser?)"))
+        #expect(lines.contains("zoom(app, x, y, width, height, ocr?, scale?)"))
+        #expect(lines.contains("    Record a step of a flow."))
+    }
+
     @Test func instructionsAndToolsStayWithinWhatClientsCarry() throws {
         // Claude Code shows the first 2048 characters of a server's
         // instructions; the rest would be dropped without a word.
         #expect(ToolSchemas.instructions.count <= 2048)
         // Each tool's definition enters the model's context when it is used.
         for tool in ToolSchemas.all {
-            let size = try JSONSerialization.data(withJSONObject: tool).count
-            #expect(size <= 4096, "\(tool["name"] ?? "?") is \(size) bytes")
+            let size = try JSONSerialization.data(withJSONObject: tool.definition).count
+            #expect(size <= 4096, "\(tool.name) is \(size) bytes")
         }
+    }
+
+    /// Without a browser bridge registered anywhere no browser can connect:
+    /// the browser tools stay out of tools/list, and tools/call does not know them.
+    @Test func browserToolsOnlyWhenABrowserCanConnect() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-registered-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let support = folder.appendingPathComponent("Application Support"), sockets = folder.appendingPathComponent("browsers")
+        try FileManager.default.createDirectory(at: support.appendingPathComponent("Google/Chrome"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sockets, withIntermediateDirectories: true)
+        #expect(!BrowserBridge.registered(support: support, sockets: sockets))
+        _ = try BrowserBridge.install(executable: "/bin/skfiy", support: support)
+        #expect(BrowserBridge.registered(support: support, sockets: sockets))
+        // A profile registered with --user-data-dir shows as its bridge's socket.
+        try FileManager.default.removeItem(at: support)
+        #expect(!BrowserBridge.registered(support: support, sockets: sockets))
+        FileManager.default.createFile(atPath: sockets.appendingPathComponent("4242.sock").path, contents: nil)
+        #expect(BrowserBridge.registered(support: support, sockets: sockets))
+
+        let server = MCPServer(executor: FakeExecutor(), write: { _ in }, browserTools: false)
+        let response = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"]))
+        let tools = try #require((response["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        #expect(tools.compactMap { $0["name"] as? String } == ToolSchemas.all.map(\.name))
+        let call = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "browser_tabs"]]))
+        #expect(call["error"] != nil)
     }
 
     @Test func toolCallReturnsTextAndImageContent() async throws {

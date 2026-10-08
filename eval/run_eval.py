@@ -32,7 +32,7 @@ CFT = "Google Chrome for Testing"
 APP_TOOLS = ["list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
              "select_text", "scroll", "drag", "press_key", "type_text"]
 BROWSER_TOOLS = ["browser_tabs", "browser_open", "browser_state", "browser_click", "browser_type",
-                 "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab"]
+                 "browser_select", "browser_press_key", "browser_scroll", "browser_close_tab"]
 
 
 # ---------------------------------------------------------------- helpers
@@ -97,7 +97,7 @@ def fixture_status():
 
 
 def reload_fixture():
-    skfiy("browser_navigate", tab_id=shown_fixture_tab(), action="reload")
+    skfiy("browser_open", tab_id=shown_fixture_tab(), action="reload")
     for _ in range(20):
         if fixture_status() == "ready":
             return

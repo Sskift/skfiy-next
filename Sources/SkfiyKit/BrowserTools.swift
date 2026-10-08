@@ -9,15 +9,6 @@ final class BrowserTools {
     /// Viewport CSS pixels per screenshot pixel, per tab, from its last screenshot.
     private var screenshotScale: [Int: Double] = [:]
 
-    nonisolated static let toolNames = [
-        "browser_tabs", "browser_open", "browser_state", "browser_locate", "browser_click", "browser_type",
-        "browser_select", "browser_press_key", "browser_scroll", "browser_navigate", "browser_close_tab",
-        "browser_upload", "browser_hover", "browser_downloads", "browser_wait"
-    ]
-    /// Tools that accept `target` instead of index or x/y.
-    nonisolated static let targetTools: Set<String> = [
-        "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"
-    ]
     /// Asks the user a yes/no question through the client; nil when it cannot.
     var askUser: ((String) async -> Bool?)?
     /// The last typing went into a password field (for the action log).
@@ -34,7 +25,14 @@ final class BrowserTools {
         case "browser_tabs":
             return try await tabs(args)
         case "browser_open":
-            guard let url = args.string("url"), !url.isEmpty else { throw ToolError("Missing required argument \"url\".") }
+            if let action = args.string("action") {
+                guard args.string("url") == nil else { throw ToolError("Pass url or action, not both.") }
+                let tabID = try requiredTab(args)
+                let browser = try await browser(for: args, tabID: tabID)
+                _ = try await send(browser, "navigate", ["tab_id": tabID, "action": action], timeout: 30)
+                return try await state(browser, tabID: tabID, prefix: "Went \(action) in tab \(tabID).", screenshot: false)
+            }
+            guard let url = args.string("url"), !url.isEmpty else { throw ToolError("Missing required argument \"url\" (or action, with tab_id).") }
             let tabID = try args.int("tab_id")
             let browser = try await browser(for: args, tabID: tabID)
             var params: [String: Any] = ["url": url]
@@ -54,12 +52,6 @@ final class BrowserTools {
             let browser = try await browser(for: args, tabID: tabID)
             let found = try await locate(locator, browser: browser, tabID: tabID)
             return ToolResult(text: describe(found, locator: locator, tabID: tabID, acting: false), isError: found.matches.isEmpty)
-        case "browser_navigate":
-            let tabID = try requiredTab(args)
-            let action = try args.requiredString("action")
-            let browser = try await browser(for: args, tabID: tabID)
-            _ = try await send(browser, "navigate", ["tab_id": tabID, "action": action], timeout: 30)
-            return try await state(browser, tabID: tabID, prefix: "Went \(action) in tab \(tabID).", screenshot: false)
         case "browser_close_tab":
             let tabID = try requiredTab(args)
             let browser = try await browser(for: args, tabID: tabID)
@@ -214,47 +206,30 @@ final class BrowserTools {
     /// shows up (or goes away), or without a text until it is loaded and quiet.
     private func wait(_ args: Arguments) async throws -> ToolResult {
         let tabID = try requiredTab(args)
-        let timeout = try args.double("timeout") ?? 10
-        guard (0.5...60).contains(timeout) else {
-            throw ToolError("timeout must be between 0.5 and 60 seconds.")
-        }
-        let text = args.string("text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let gone = args.bool("gone") ?? false
-        if gone, text.isEmpty {
-            throw ToolError("gone needs a text to wait for the disappearance of.")
-        }
+        var engine = try WaitEngine(args)
+        // The page compares lowercased text.
+        engine.text = engine.text?.lowercased()
+        engine.interval = 0.25
+        let text = engine.text ?? ""
         let browser = try await browser(for: args, tabID: tabID)
         let started = Date()
-        var met = false
-        while !met {
-            if EmergencyStop.isStopped { throw ToolError(EmergencyStop.refusal) }
-            // A cancelled request stops here; otherwise the sleep below would
-            // return at once and the page be probed back to back until timeout.
-            try Task.checkCancellation()
-            let probe = (try? await send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
-            let loading = probe["loading"] as? Bool ?? true
-            if text.isEmpty {
-                met = !loading && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
-            } else if let found = probe["found"] as? Bool {
-                met = found != gone
-            }
-            if !met {
-                if Date().timeIntervalSince(started) >= timeout { break }
-                try await Task.sleep(nanoseconds: 250_000_000)
-            }
-        }
-        let waited = formatNumber((Date().timeIntervalSince(started) * 10).rounded() / 10)
+        let result = await engine.run(
+            now: { Date().timeIntervalSince(started) },
+            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+            check: { if EmergencyStop.isStopped { throw WaitStopped(EmergencyStop.refusal) } },
+            observe: {
+                let probe = (try? await self.send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
+                let quiet = probe["loading"] as? Bool == false && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
+                return WaitObservation(found: probe["found"] as? Bool, settled: quiet)
+            })
+        if case .cancelled = result { throw CancellationError() }
+        if case .stopped(_, let reason) = result { throw ToolError(reason) }
         var state = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
-        let subject = quote(text, limit: 60)
-        let outcome = switch (text.isEmpty, gone, met) {
-        case (true, _, true): "The page finished loading and stopped changing after \(waited) s."
-        case (true, _, false): "The page was still loading or changing after \(waited) s."
-        case (false, false, true): "\(subject) appeared after \(waited) s."
-        case (false, false, false): "\(subject) did not appear within \(waited) s."
-        case (false, true, true): "\(subject) was gone after \(waited) s."
-        case (false, true, false): "\(subject) was still there after \(waited) s."
-        }
-        state.text = outcome + "\n" + state.text
+        let met = if case .met = result { true } else { false }
+        let waited = formatNumber((result.seconds * 10).rounded() / 10)
+        state.text = (!text.isEmpty ? engine.describe(result)
+            : met ? "The page finished loading and stopped changing after \(waited) s." : "The page was still loading or changing after \(waited) s.")
+            + "\n" + state.text
         state.isError = !met
         return state
     }

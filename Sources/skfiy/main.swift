@@ -11,7 +11,7 @@ Usage:
   skfiy doctor [--check]         Check the setup; without --check, macOS asks for missing permissions
   skfiy uninstall [--keep-binary]  Undo setup and remove skfiy's files (and this binary)
   skfiy mcp                      Run the MCP server (your MCP client starts it)
-  skfiy tools                    List the tools
+  skfiy tools                    List the tools: arguments (? optional) and what each is for
   skfiy stop | resume | status   Emergency stop for every running skfiy (also ⌃⌥⌘. anywhere)
   skfiy log [N]                  The last N actions skfiy took (~/Library/Logs/skfiy/actions.jsonl)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
@@ -149,7 +149,7 @@ case "stop":
     noArguments(arguments)
     let playing = EmergencyStop.set(stopped: true)
     Thread.sleep(forTimeInterval: playing + 0.1)
-    print("skfiy is stopped; every action and read is refused until `skfiy resume` or \(EmergencyStop.shortcut) (only list_apps, get_desktop_status, get_app_capabilities and the locked-use status tools still answer).")
+    print("skfiy is stopped; every action and read is refused until `skfiy resume` or \(EmergencyStop.shortcut) (only list_apps, get_desktop_status, get_app_capabilities and locked_use_end still answer).")
 
 case "resume":
     noArguments(arguments)
@@ -174,9 +174,7 @@ case "status":
 
 case "tools":
     noArguments(arguments)
-    for name in ComputerUse.toolNames {
-        print(name)
-    }
+    print(ToolSchemas.summary())
 
 case "call":
     guard arguments.count >= 2 else { fail("Usage: skfiy call <tool> [json-args]; `skfiy tools` lists the tools.") }

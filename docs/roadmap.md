@@ -494,8 +494,24 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 
 验证（只跑了不碰界面的测试；真实应用的套件等用户合并后运行）：`make test` 175/175；`make test-install` 72/72；所有脚本的 `py_compile` 和导入检查；共用客户端对着一个假的 MCP server 检查了同意、拒绝、不能询问三种回答，以及通知记录、截图存盘、报错；对真实的 `skfiy mcp` 只调用了 `tools/list` 和 `list_apps`。
 
-### 合并后的复测（2026-10-09 00:30–00:50，解锁，你在用 Ghostty）
+### 合并后的复测（2026-10-09 00:30–00:50，解锁，用户在用 Ghostty）
 
 - 冒烟测试 `make smoke` / `make smoke-fixture` 不在例行套件里，三处期望早已过时，与这次整理无关：zoom 的回复格式、`wait_for` 回复里保留原文大小写（“Cancel”、“Ready now”）、操作日志对密码写作“(7 characters, redacted)”。已按现在的输出改正。
 - 测试本身抢了前台：TextEdit 一启动就到了前台并盖在最上层，持续 16 秒；测试应用也闪到前台一次（0.2 秒，随即被 skfiy 的前台保护送回）。原因是测试用 `open -g` 启动应用，而测试是从 Ghostty 里跑的；Ghostty 在前台时，macOS 允许从它的进程里启动的应用自己激活（之前几轮前台是飞书，所以没出现）。skfiy 自己启动应用（`NSWorkspace`，不激活）不受影响。修正：`scripts/fixtures/Launch` 能打开文档和网址，`scenario.open_in_background` 和 compat 基线改用它启动 TextEdit、预览、Finder 窗口和 Chrome 页面，测试里不再有 `open -g`。
 - 复测时每 0.2 秒采样一次前台，从头到尾都是 Ghostty。结果：smoke_textedit 通过；smoke_fixture 17/17；后台窗口 26/26、TextEdit 8/8；窗口 9/9、TextEdit 4/4；验证 13/13、TextEdit 6/6；定位 13/13、TextEdit 3/3；文字输入、光标、前台确认（只测拒绝）通过；compat 的 TextEdit 5/5，预览的弹出菜单照旧被拒绝（后台时“前往页面…”不可用，与之前相同）。
+
+## 精简代码与工具面（2026-10-09）
+
+按审查意见做的整理，九个提交，一项一个。工具面有变化：**删除 `browser_navigate` 和 `locked_use_status`**，工具从 41 个减到 39 个。
+
+- **工具列表只有一个来源。** `ToolSchemas` 里每个工具带特性：发送输入、可带 `expect`、可带 `target`、锁屏时可用、锁屏时拒绝、急停时仍回答、记入操作日志（默认是非只读工具）。原先手写的工具名列表、`inputTools`、`verifiableTools`、两份 `targetTools`、锁屏路径的两份列表、急停白名单、`ActionLog.recordedTools`、`BrowserTools.toolNames` 都由特性得出；单元测试把每个集合钉在原来的内容上。唯一看得到的差别：锁屏时能力报告的工具列表里 `zoom` 排到了 `wait_for` 前面（按定义顺序）。新增工具只改一处。
+- **`browser_navigate` 并入 `browser_open`。** `browser_open` 本来就能用 `tab_id` 导航已有标签页；现在不给 `url` 而给 `action: back|forward|reload`（连同 `tab_id`）就后退、前进或刷新，走插件原有的 navigate 消息。`scripts/smoke_browser.py`、`eval/run_eval.py` 和 README 改用新写法。
+- **`locked_use_status` 删除。** direct 模式下它和 `get_desktop_status` 返回同一份状态，其他时候 `get_desktop_status` 本来就写明锁屏模式没开。`locked_use_end` 保留；能力报告在 direct 模式下改列 `get_desktop_status`。
+- **没装插件就不列网页工具。** 所有 Chromium 浏览器目录里都没有 skfiy 的 native messaging 宿主清单（也没有 `--user-data-dir` 配置留下的桥接 socket）时，`tools/list` 不列 14 个 `browser_*` 工具：工具定义从 53.9 KB 降到 36.7 KB。有清单就照常列出，因为插件随时可能连上。
+- **`skfiy tools`** 每个工具两行：名字和参数（可选参数带 `?`），以及描述的第一句。
+- **去重。** 锁态只有一个读取函数 `sessionLockState()`：`isScreenLocked()` 与 direct 模式共用，现在未完成登录、或不属于当前用户的会话也算锁定。截图编码只走 `encodeScreenshot`。没有任何测试或脚本用过的 `SKFIY_SIMULATE_CAPTURE_STALL` 删除（连同已知设置和 README 里的一行）。`browser_wait` 改用 `WaitEngine`：页面自己报告文字是否出现（found）、不给文字时是否已加载完并安静 500 毫秒（settled），参数、回复和取消都不变；`WaitEngine(args)` 统一检查 `text`、`gone`、`timeout`、`stable_for`，`wait_for`（解锁和锁屏）与 `browser_wait` 共用。
+- **`run_in_front`** 先把参数解析成 `FrontRequest`（按键、元素菜单项、点击，一条错误信息，有单元测试）；把应用提到前台之后的步骤放进一个 do/catch，出错时统一放回借出的剪贴板、交还前台再抛出，取代原来分散的五处。检查、提示和顺序都没变。
+- **拆分大文件（只移动代码）。** `ComputerUse.swift` 2,887 → 678 行，只留分发、会话、前台守护、操作后的截图和共用检查；新文件 `AppState.swift`（list_apps、get_app_state、树里的菜单）、`Actions.swift`（click、perform_secondary_action、set_value、scroll、drag）、`Typing.swift`（select_text、press_key、type_text）、`Foreground.swift`（run_in_front、skfiy 的剪贴板、read_clipboard、hand_over）、`Documents.swift`（open_file、save_document、file_dialog）；`wait_for` 移进 `Waiting.swift`，`zoom` 移进 `Zoom.swift`，文本元素的光标与选区辅助移进 `AXElement.swift`。`Input.swift` 660 → 447 行，窗口查找和前台守护移到 `Windows.swift`。17 个成员因为跨文件使用去掉了 `private`，此外没有改动：按行比对前后两边，只差 import、文件说明和 `extension` 包装。现在最大的手写文件是 `DirectLockedUse.swift`（804 行，不在这次拆分范围）。README 的源码目录列出了全部文件。
+- 行数（`git diff --stat 1ebfbdf`，不含本节）：Sources +2,721/−2,615，净 +106，其中拆分新增的文件头约 50 行、工具特性标注约 40 行、新功能（不列网页工具、`skfiy tools`）约 30 行，删掉的重复代码约 30 行；Tests 净 +146。
+
+验证（只跑了不碰界面的测试，没有运行真实应用的套件）：`make test` 182 个单元测试全部通过（新增 7 个：各工具列表等于原来的内容、`browser_open` 的参数、`run_in_front` 的参数解析、`browser_wait` 的 found/settled、等待参数检查、是否列出网页工具、`skfiy tools` 的输出）；`make test-install` 72/72；`swift build -c release`；`.build/debug/skfiy call get_desktop_status` 读到“unlocked”。

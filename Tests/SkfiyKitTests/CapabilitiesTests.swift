@@ -36,6 +36,7 @@ struct CapabilitiesTests {
         #expect(available(one) == ["ax": false, "screenshot": true, "ocr": true, "pointer": true, "keyboard": true,
                                    "browser": false, "foreground": false, "file_dialog": false, "clipboard": false])
         #expect(!one.tools.contains("set_value") && one.tools.contains("type_text"))
+        #expect(one.tools.contains("get_desktop_status") && one.tools.contains("locked_use_end"))
         #expect(one["pointer"]?.limits.contains { $0.contains("No valid screenshot") } == true)
 
         let two = CapabilityReport.evaluate(facts(.locked, mode: .direct, windows: 2))

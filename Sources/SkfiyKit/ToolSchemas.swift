@@ -1,6 +1,34 @@
+/// A tool's MCP definition, and what skfiy's dispatch needs to know about it.
+/// The tool lists of the dispatch, the action log and the capability report
+/// are derived from these traits (ToolSchemas.names).
+struct Tool {
+    struct Traits: OptionSet {
+        let rawValue: Int
+        /// Sends input to an app: terminals and the app hosting the agent are refused.
+        static let input = Traits(rawValue: 1 << 0)
+        /// Takes expect, idempotent, confirm_repeat and window_id.
+        static let verifiable = Traits(rawValue: 1 << 1)
+        /// Takes a target instead of an index or x/y.
+        static let target = Traits(rawValue: 1 << 2)
+        /// Served while macOS is locked (direct mode), by the locked path.
+        static let whileLocked = Traits(rawValue: 1 << 3)
+        /// Works on an app's window but needs what locked use lacks
+        /// (accessibility, the front, the clipboard): the locked path refuses it.
+        static let refusedWhileLocked = Traits(rawValue: 1 << 4)
+        /// Still answers while the emergency stop is on.
+        static let whileStopped = Traits(rawValue: 1 << 5)
+        /// Recorded in the action log: by default the tools that are not read only.
+        static let recorded = Traits(rawValue: 1 << 6)
+    }
+
+    let name: String
+    let traits: Traits
+    let definition: [String: Any]
+}
+
 /// MCP tool definitions. Names and core parameters follow Codex's macOS
 /// Computer Use server, so prompts and habits transfer between the two.
-enum ToolSchemas {
+public enum ToolSchemas {
     private static let app: [String: Any] = [
         "type": "string",
         "description": "App name, full app path, unambiguous bundle identifier, or pid:N"
@@ -18,9 +46,6 @@ enum ToolSchemas {
         "type": "boolean",
         "description": "Send real input events through Chrome's debugger, for pages that ignore synthetic events or need a user gesture (popups, clipboard). Chrome shows its debugging bar while this runs. Defaults to false"
     ]
-
-    /// Tools that take a target instead of an index or x/y.
-    private static let targetTools = ComputerUse.targetTools.union(BrowserTools.targetTools)
 
     /// A control described by what it is, resolved when the tool runs: in
     /// full on locate and browser_locate, which explain the description.
@@ -55,16 +80,20 @@ enum ToolSchemas {
         _ description: String,
         properties: [String: Any],
         required: [String],
-        readOnly: Bool = false
-    ) -> [String: Any] {
-        [
+        readOnly: Bool = false,
+        traits: Tool.Traits = [],
+        recorded: Bool? = nil
+    ) -> Tool {
+        var traits = traits
+        if recorded ?? !readOnly { traits.insert(.recorded) }
+        return Tool(name: name, traits: traits, definition: [
             "name": name,
             "description": description,
             "inputSchema": [
                 "type": "object",
-                "properties": (ComputerUse.verifiableTools.contains(name)
+                "properties": (traits.contains(.verifiable)
                     ? properties.merging(verification) { current, _ in current } : properties)
-                    .merging(targetTools.contains(name) ? ["target": target] : [:]) { current, _ in current },
+                    .merging(traits.contains(.target) ? ["target": target] : [:]) { current, _ in current },
                 "required": required,
                 "additionalProperties": false
             ] as [String: Any],
@@ -73,21 +102,50 @@ enum ToolSchemas {
                 "destructiveHint": !readOnly,
                 "openWorldHint": true
             ]
-        ]
+        ])
     }
 
-    static let all: [[String: Any]] = [
+    /// The names of the tools with any of `traits`, in the order they are listed.
+    static func names(_ traits: Tool.Traits, in tools: [Tool] = all + browser) -> [String] {
+        tools.filter { !$0.traits.isDisjoint(with: traits) }.map(\.name)
+    }
+
+    /// `skfiy tools`: each tool with its arguments (optional ones marked ?)
+    /// and what it is for, the first sentence of its description.
+    public static func summary() -> String {
+        (all + browser).map { tool in
+            let schema = tool.definition["inputSchema"] as? [String: Any] ?? [:]
+            let required = schema["required"] as? [String] ?? []
+            let optional = ((schema["properties"] as? [String: Any])?.keys.filter { !required.contains($0) } ?? []).sorted()
+            let arguments = (required + optional.map { $0 + "?" }).joined(separator: ", ")
+            return "\(tool.name)(\(arguments))\n    " + firstSentence(tool.definition["description"] as? String ?? "")
+        }.joined(separator: "\n")
+    }
+
+    /// Up to the first full stop, not counting the one in "e.g.".
+    static func firstSentence(_ text: String) -> String {
+        var sentence = ""
+        for part in text.prefix(while: { $0 != "\n" }).components(separatedBy: ". ") {
+            sentence += sentence.isEmpty ? part : ". " + part
+            if !sentence.hasSuffix("e.g"), !sentence.hasSuffix("i.e") { break }
+        }
+        return sentence.hasSuffix(".") ? sentence : sentence + "."
+    }
+
+    static let all: [Tool] = [
         tool(
             "list_apps",
             "List the apps on this Mac: the running apps, plus apps used in the last 14 days with their last-used date and use count.",
             properties: [:],
             required: [],
-            readOnly: true
+            readOnly: true,
+            traits: [.whileStopped]
         ),
         tool(
             "get_desktop_status",
             "Read whether the desktop is locked/unavailable, whether locked use is on, and whether emergency stop is active. Does not unlock the Mac or request authorization. Locked use is set up by the user only: direct mode (SKFIY_LOCKED_USE=direct) keeps macOS locked. Never enable it yourself, operate loginwindow or type an unlock password; when an action was cut short, look at the state before retrying.",
-            properties: [:], required: [], readOnly: true
+            properties: [:], required: [], readOnly: true,
+            traits: [.whileStopped]
         ),
         tool(
             "get_app_state",
@@ -100,7 +158,8 @@ enum ToolSchemas {
                 "since": ["type": "string", "description": "The State version of an earlier get_app_state or wait_for of this app (e.g. \"v12\"): return only what changed since — lines changed, added or removed, windows opened or closed — keeping that look's element indices; \"unchanged\" without a screenshot when nothing changed. Falls back to the full state when the version is unknown or most of the window changed"]
             ],
             required: ["app"],
-            readOnly: true
+            readOnly: true,
+            traits: [.whileLocked]
         ),
         tool(
             "get_app_capabilities",
@@ -110,7 +169,8 @@ enum ToolSchemas {
                 "window": ["type": "string", "description": "Optional window title (or part of it) or window id to ask about instead of the focused window"]
             ],
             required: ["app"],
-            readOnly: true
+            readOnly: true,
+            traits: [.whileStopped]
         ),
         tool(
             "click",
@@ -126,7 +186,8 @@ enum ToolSchemas {
                 "modifiers": ["type": "string", "description": "Modifier keys held during the click, e.g. \"cmd\" or \"shift+alt\""],
                 "focus": ["type": "boolean", "description": "For views that ignore background clicks (web content, some custom-drawn views): give the app keyboard focus for about 0.1 s during the click, without bringing it forward and only while the user is not typing. Asks the user once per app. Use it after a background click showed no change"]
             ],
-            required: ["app"]
+            required: ["app"],
+            traits: [.input, .verifiable, .target, .whileLocked]
         ),
         tool(
             "perform_secondary_action",
@@ -136,7 +197,8 @@ enum ToolSchemas {
                 "element_index": elementIndex,
                 "action": ["type": "string", "description": "Secondary accessibility action name, with or without the AX prefix"]
             ],
-            required: ["app", "action"]
+            required: ["app", "action"],
+            traits: [.input, .verifiable, .target, .refusedWhileLocked]
         ),
         tool(
             "set_value",
@@ -146,7 +208,8 @@ enum ToolSchemas {
                 "element_index": elementIndex,
                 "value": ["type": "string", "description": "Value to assign"]
             ],
-            required: ["app", "value"]
+            required: ["app", "value"],
+            traits: [.input, .verifiable, .target, .refusedWhileLocked]
         ),
         tool(
             "select_text",
@@ -159,7 +222,8 @@ enum ToolSchemas {
                 "suffix": ["type": "string", "description": "Optional text immediately after the target, to disambiguate repeated matches"],
                 "selection": ["type": "string", "enum": ["text", "cursor_before", "cursor_after"], "description": "Select the text, or place the cursor before or after it. Defaults to text."]
             ],
-            required: ["app", "text"]
+            required: ["app", "text"],
+            traits: [.input, .verifiable, .target, .refusedWhileLocked]
         ),
         tool(
             "scroll",
@@ -173,7 +237,8 @@ enum ToolSchemas {
                 "direction": ["type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"],
                 "pages": ["type": "number", "description": "Number of pages to scroll. Fractional values are supported. Defaults to 1"]
             ],
-            required: ["app", "direction"]
+            required: ["app", "direction"],
+            traits: [.verifiable, .target, .whileLocked]
         ),
         tool(
             "drag",
@@ -187,7 +252,8 @@ enum ToolSchemas {
                 "to_y": ["type": "number", "description": "End Y coordinate"],
                 "focus": ["type": "boolean", "description": "Give the app keyboard focus for about 0.1 s during the drag, as for click (asks the user once per app)"]
             ],
-            required: ["app", "from_x", "from_y", "to_x", "to_y"]
+            required: ["app", "from_x", "from_y", "to_x", "to_y"],
+            traits: [.input, .verifiable, .whileLocked]
         ),
         tool(
             "press_key",
@@ -206,7 +272,8 @@ enum ToolSchemas {
                 "repeat": ["type": "integer", "description": "Times to press it (1-100). Defaults to 1"],
                 "hold_seconds": ["type": "number", "description": "Hold the key down this long (0.05-10 s) before releasing it, for games and press-and-hold controls"]
             ],
-            required: ["app", "key"]
+            required: ["app", "key"],
+            traits: [.input, .verifiable, .whileLocked]
         ),
         tool(
             "type_text",
@@ -215,7 +282,8 @@ enum ToolSchemas {
                 "app": app,
                 "text": ["type": "string", "description": "Literal text to type"]
             ],
-            required: ["app", "text"]
+            required: ["app", "text"],
+            traits: [.input, .verifiable, .whileLocked]
         ),
         tool(
             "open_file",
@@ -224,7 +292,8 @@ enum ToolSchemas {
                 "path": ["type": "string", "description": "Absolute path of the file or folder (~ is expanded)"],
                 "app": ["type": "string", "description": "App to open it with; defaults to the file's default app"]
             ],
-            required: ["path"]
+            required: ["path"],
+            traits: [.input, .refusedWhileLocked]
         ),
         tool(
             "save_document",
@@ -235,7 +304,8 @@ enum ToolSchemas {
                 "document": ["type": "string", "description": "Document name (window title) to save; defaults to the app's front document"],
                 "overwrite": ["type": "boolean", "description": "Replace an existing file at path (default false)"]
             ],
-            required: ["app", "path"]
+            required: ["app", "path"],
+            traits: [.input, .refusedWhileLocked]
         ),
         tool(
             "zoom",
@@ -250,7 +320,8 @@ enum ToolSchemas {
                 "ocr": ["type": "boolean", "description": "List the text recognized in the zoom with zoom and screenshot x/y. Defaults to true while locked, false otherwise"]
             ],
             required: ["app", "x", "y", "width", "height"],
-            readOnly: true
+            readOnly: true,
+            traits: [.whileLocked]
         ),
         tool(
             "run_in_front",
@@ -264,7 +335,8 @@ enum ToolSchemas {
                 "y": ["type": "number", "description": "Y in the latest screenshot of the app, to click there"],
                 "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"make the title bold\""]
             ],
-            required: ["app", "reason"]
+            required: ["app", "reason"],
+            traits: [.input, .refusedWhileLocked]
         ),
         tool(
             "file_dialog",
@@ -274,7 +346,8 @@ enum ToolSchemas {
                 "path": ["type": "string", "description": "Absolute path of the file to choose, or to save as (~ is expanded)"],
                 "overwrite": ["type": "boolean", "description": "When saving, replace an existing file at path (default false)"]
             ],
-            required: ["app", "path"]
+            required: ["app", "path"],
+            traits: [.input, .refusedWhileLocked]
         ),
         tool(
             "read_clipboard",
@@ -283,7 +356,9 @@ enum ToolSchemas {
                 "reason": ["type": "string", "description": "Short reason shown to the user, e.g. \"paste the address you copied into the form\""]
             ],
             required: ["reason"],
-            readOnly: true
+            readOnly: true,
+            traits: [.refusedWhileLocked],
+            recorded: true
         ),
         tool(
             "wait_for",
@@ -300,7 +375,8 @@ enum ToolSchemas {
                 "since": ["type": "string", "description": "Return the state at the end as changes since this State version (as get_app_state since)"]
             ],
             required: ["app"],
-            readOnly: true
+            readOnly: true,
+            traits: [.whileLocked]
         ),
         tool(
             "locate",
@@ -312,7 +388,8 @@ enum ToolSchemas {
                 "window_id": ["type": "string", "description": "While locked: the window to look in, by id; defaults to the window of the latest screenshot"]
             ],
             required: ["app", "target"],
-            readOnly: true
+            readOnly: true,
+            traits: [.whileLocked]
         ),
         tool(
             "flow_start",
@@ -323,7 +400,8 @@ enum ToolSchemas {
                 "steps": ["type": "array", "description": "Step titles, or {\"id\": \"download\", \"title\": \"Download the report\"}", "items": ["type": ["string", "object"]]],
                 "restart": ["type": "boolean", "description": "Start over even if the flow exists. Defaults to false"]
             ],
-            required: ["name", "steps"]
+            required: ["name", "steps"],
+            recorded: false
         ),
         tool(
             "flow_record",
@@ -337,7 +415,8 @@ enum ToolSchemas {
                                          "text": ["type": "string"], "tab_id": ["type": "integer"], "browser": ["type": "string"], "download_id": ["type": "integer"]]],
                 "note": ["type": "string", "description": "Optional note for later (what was chosen, where things are)"]
             ],
-            required: ["name", "step", "status"]
+            required: ["name", "step", "status"],
+            recorded: false
         ),
         tool(
             "flow_status",
@@ -357,15 +436,14 @@ enum ToolSchemas {
             required: ["message"]
         )
     ] + [
-        tool("locked_use_status", "Inspect this MCP session's locked-use mode and actual OS lock state. Does not unlock the Mac.", properties: [:], required: [], readOnly: true),
-        tool("locked_use_end", "End locked use for this MCP session; macOS stays locked. Call when the task is finished.", properties: [:], required: [])
+        tool("locked_use_end", "End locked use for this MCP session; macOS stays locked. Call when the task is finished.", properties: [:], required: [], recorded: false)
     ]
 
     private static let tab: [String: Any] = ["type": "integer", "description": "Tab id from browser_tabs or browser_open"]
     private static let browserName: [String: Any] = ["type": "string", "description": "Browser name (or its process id, as browser_tabs shows it), only needed when several are connected"]
     private static let pageIndex: [String: Any] = ["type": "integer", "description": "Element index from the latest browser_state of the tab"]
 
-    static let browser: [[String: Any]] = [
+    static let browser: [Tool] = [
         tool(
             "browser_tabs",
             "List the windows and tabs of the browsers connected through the skfiy browser bridge extension. [shown] marks the tab the user is looking at.",
@@ -375,9 +453,10 @@ enum ToolSchemas {
         ),
         tool(
             "browser_open",
-            "Open a URL in a new background tab (grouped under \"skfiy\"; the user's current tab stays in front), or navigate an existing tab with tab_id. Returns the page state.",
-            properties: ["url": ["type": "string", "description": "URL to open"], "tab_id": tab, "browser": browserName],
-            required: ["url"]
+            "Open a URL in a new background tab (grouped under \"skfiy\"; the user's current tab stays in front), or navigate an existing tab with tab_id; with action instead of url, go back, forward or reload tab_id. Returns the page state.",
+            properties: ["url": ["type": "string", "description": "URL to open"], "tab_id": tab, "browser": browserName,
+                         "action": ["type": "string", "enum": ["back", "forward", "reload"], "description": "Instead of url: go back, forward or reload tab_id"]],
+            required: []
         ),
         tool(
             "browser_state",
@@ -408,7 +487,8 @@ enum ToolSchemas {
                 "dialog": ["type": "string", "enum": ["accept", "dismiss"], "description": "How to answer a confirm() or prompt() the click opens, in tabs you opened (default accept); alerts are dismissed. browser_state lists the dialogs that appeared"],
                 "prompt_text": ["type": "string", "description": "Text to answer a prompt() with (default: the prompt's own default)"]
             ],
-            required: ["tab_id"]
+            required: ["tab_id"],
+            traits: [.target]
         ),
         tool(
             "browser_type",
@@ -420,19 +500,22 @@ enum ToolSchemas {
                 "submit": ["type": "boolean", "description": "Press Enter after typing (submits forms). Defaults to false"],
                 "trusted": trusted
             ],
-            required: ["tab_id", "text"]
+            required: ["tab_id", "text"],
+            traits: [.target]
         ),
         tool(
             "browser_select",
             "Choose an option of a <select> element by its visible text or value.",
             properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "option": ["type": "string", "description": "Option text or value"]],
-            required: ["tab_id", "option"]
+            required: ["tab_id", "option"],
+            traits: [.target]
         ),
         tool(
             "browser_press_key",
             "Press a key in a tab, on an element by index or the focused element: Enter, Escape, Tab, Backspace, Delete, arrows, PageDown/PageUp, Home/End, single characters, or combos like cmd+a. Enter submits forms.",
             properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "key": ["type": "string", "description": "Key or combination"], "trusted": trusted],
-            required: ["tab_id", "key"]
+            required: ["tab_id", "key"],
+            traits: [.target]
         ),
         tool(
             "browser_scroll",
@@ -442,13 +525,8 @@ enum ToolSchemas {
                 "direction": ["type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"],
                 "pages": ["type": "number", "description": "Pages to scroll. Defaults to 1"]
             ],
-            required: ["tab_id", "direction"]
-        ),
-        tool(
-            "browser_navigate",
-            "Go back, forward, or reload a tab.",
-            properties: ["tab_id": tab, "browser": browserName, "action": ["type": "string", "enum": ["back", "forward", "reload"], "description": "Navigation"]],
-            required: ["tab_id", "action"]
+            required: ["tab_id", "direction"],
+            traits: [.target]
         ),
         tool(
             "browser_close_tab",
@@ -464,7 +542,8 @@ enum ToolSchemas {
                 "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"],
                 "download_id": ["type": "integer", "description": "Instead of path: a finished download from browser_downloads"]
             ],
-            required: ["tab_id"]
+            required: ["tab_id"],
+            traits: [.target]
         ),
         tool(
             "browser_hover",
@@ -474,7 +553,8 @@ enum ToolSchemas {
                 "x": ["type": "number", "description": "X in the tab's latest screenshot, when not using index"],
                 "y": ["type": "number", "description": "Y in the tab's latest screenshot, when not using index"]
             ],
-            required: ["tab_id"]
+            required: ["tab_id"],
+            traits: [.target]
         ),
         tool(
             "browser_downloads",

@@ -236,3 +236,17 @@ private func chordForCharacter(_ character: Character) -> KeyChord? {
     }
     return nil
 }
+
+func parseModifierList(_ raw: String?) throws -> Modifiers {
+    guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+    // Reuse the chord parser: "cmd+shift" parses as a modifier tap plus modifiers.
+    let chord = try parseKeyChord(raw)
+    var modifiers = chord.modifiers
+    if case .code(let code) = chord.key,
+       let modifier = Modifiers.physical.first(where: { $0.1 == code })?.0 {
+        modifiers.insert(modifier)
+    } else {
+        throw KeyParseError(description: "modifiers must only name modifier keys, e.g. \"cmd\" or \"shift+alt\".")
+    }
+    return modifiers
+}

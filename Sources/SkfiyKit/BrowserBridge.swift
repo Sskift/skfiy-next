@@ -340,6 +340,16 @@ extension BrowserBridge {
         }
     }
 
+    /// Whether a browser can connect at all: a host manifest in a Chromium
+    /// browser's folder, or a bridge socket (a profile registered with
+    /// --user-data-dir). Without either, the browser tools are not listed.
+    public static var isRegistered: Bool { registered(support: SkfiyPaths.applicationSupport, sockets: socketDirectory) }
+
+    static func registered(support: URL, sockets: URL) -> Bool {
+        !installedHosts(support: support).isEmpty
+            || ((try? FileManager.default.contentsOfDirectory(atPath: sockets.path)) ?? []).contains { $0.hasSuffix(".sock") }
+    }
+
     /// Removes the skfiy host manifests except those whose binary `keep`
     /// accepts; returns the files removed.
     public static func uninstall(support: URL = SkfiyPaths.applicationSupport,

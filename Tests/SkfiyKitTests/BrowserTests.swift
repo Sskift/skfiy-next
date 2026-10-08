@@ -113,4 +113,19 @@ struct BrowserFormattingTests {
         #expect(DownloadInfo.reason("USER_CANCELED") == "cancelled")
         #expect(DownloadInfo(["state": "complete"]) == nil)
     }
+
+    /// browser_open takes a url, or an action (back, forward, reload) on tab_id.
+    @Test @MainActor func openTakesAURLOrAnAction() async {
+        let tools = BrowserTools()
+        for (arguments, refusal) in [(["url": "https://example.com", "action": "reload", "tab_id": 3], "Pass url or action, not both."),
+                                     (["action": "back"], "Missing required argument \"tab_id\""),
+                                     ([:], "Missing required argument \"url\" (or action, with tab_id).")] as [([String: Any], String)] {
+            await #expect(throws: ToolError.self) {
+                do { _ = try await tools.call("browser_open", Arguments(arguments)) } catch let error as ToolError {
+                    #expect(error.description.hasPrefix(refusal))
+                    throw error
+                }
+            }
+        }
+    }
 }

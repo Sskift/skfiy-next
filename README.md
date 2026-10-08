@@ -58,6 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 | --- | --- |
 | 工具说缺少辅助功能或屏幕录制权限 | 授予运行 Claude Code 的应用（`skfiy doctor` 会写出它的名字），然后重启它和 Claude Code |
 | 浏览器工具说没有连接 | 运行 `skfiy setup`，再在 `chrome://extensions` 加载插件；Chrome 没有打开任何窗口时插件不运行 |
+| 工具列表里根本没有 `browser_*` | 还没有注册浏览器桥接：运行 `skfiy setup`，再重启 Claude Code 会话 |
 | 每个调用都被拒绝 | 急停开着：`skfiy resume` 或按 ⌃⌥⌘. |
 | 更新后行为没变 | 重启 Claude Code 会话；插件文件更新过时在 `chrome://extensions` 点刷新 |
 | `skfiy: command not found` | 见上文 PATH 一段，或用完整路径 |
@@ -109,21 +110,20 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `hand_over` | 把一步交给你：登录、验证码、付款确认、系统权限弹窗、输密码。Claude Code 里显示要你做什么，你做完点确认（最多等 30 分钟）再继续；给了 `app` 和 `expect` 时，还会在 10 秒内核对应用里是否真的出现了预期的文字。你拒绝时，agent 被告知不要自己去做 |
 | `wait_for` | 不发送任何输入，等某段文字在窗口里出现（或 `gone` 时消失；不公开辅助功能的窗口也匹配截图里识别出的文字），不给文字则等窗口停止变化（`stable_for` 秒）；满足后返回新状态，超时报错并附当前状态。锁屏 direct 模式下按窗口截图的识别文字和像素判断，可用 `region` 只看截图的一部分；锁态变化、窗口关闭、应用退出时立即停下并说明原因；客户端可取消。解锁时由应用的辅助功能通知唤醒（每秒兜底看一次），锁屏时比对小截图、画面不变时放慢、像素变了才识别文字；可带 `since` 只返回变化。用来代替反复调 `get_app_state` |
 | `flow_start` / `flow_record` / `flow_status` | 长任务的检查点（存在磁盘上，断线、重启、你接手后都在）：每步完成时附上能复核的证据（文件及其内容指纹、应用窗口或文字、标签页文字、已完成的下载），当场核对成立才记下；只能做一次的动作（提交、发送）先记为待确认。`flow_status` 每次都对照现实重新核对：哪些仍成立、哪些已失效及原因（文件没了、窗口关了、应用重启过）、待确认的动作是否已生效，给出下一步或“需要重新规划” |
-| `get_desktop_status` | 查看桌面锁定、锁屏模式和急停状态，不触发解锁 |
-| `locked_use_status` | direct 模式下查看当前 MCP 会话是否启用、系统是否锁定及锁态是否已知，不触发解锁 |
+| `get_desktop_status` | 查看桌面锁定、锁屏模式和急停状态，不触发解锁；direct 模式下给出当前 MCP 会话是否启用、系统是否锁定及锁态是否已知 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
-浏览器插件连上后多出 15 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
+浏览器插件连上后多出 14 个网页工具（只在注册过浏览器桥接、也就是 `skfiy setup` 写过 native messaging 宿主时列出：没装插件的人不必在每次请求里带上它们的定义），按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
 | --- | --- |
 | `browser_tabs` | 列出窗口和标签页，`[shown]` 标出你正在看的那个 |
-| `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页 |
+| `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页；用 `action` 代替网址时让该标签页后退、前进或刷新 |
 | `browser_locate` | 按描述（名称、类型、视口区域、所在 fieldset/标题区块、邻近文字）在页面当下的元素和文字里查找，列出候选及刷新后的编号，不挑、不操作 |
 | `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页要截图（canvas、图表、图片）需传 `background_screenshot`，经 Chrome 调试接口截取，约 0.3 秒，之后可按截图坐标点击 |
 | `browser_click` | 按编号点击（或按截图坐标）；`target=_blank` 链接改为后台新标签页打开 |
 | `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` | 输入（可清空、可提交）、选下拉项、按键、滚动页面或元素 |
-| `browser_navigate` / `browser_close_tab` | 后退/前进/刷新、关闭标签页 |
+| `browser_close_tab` | 关闭标签页 |
 | `browser_upload` | 把本地文件填进网页的上传框（不弹文件选择器）；每次上传前都在 Claude Code 里征得你同意，最大 20 MB |
 | `browser_hover` | 在后台标签页里悬停到元素上：页面收到打开悬停菜单所需的指针事件，页面 CSS 的 `:hover` 样式也会生效（其他域名的样式表由插件取回）；之后可按编号点击出现的菜单项 |
 | `browser_downloads` | 只列出 skfiy 引起的下载（在它操作过的标签页里 15 秒内发起的，或由它直接下载的），不列用户自己的下载：状态、本地路径、失败原因（网络中断、服务器无此文件、已取消……）。`wait` 等下载结束，只有完成且文件存在时才给出路径；`start` 直接下载某个网址（同名时浏览器自动改名，结果给出真实文件名）；`cancel` 取消。完成的文件可交给 `open_file(path)` 或 `browser_upload(download_id)`。Chrome 只允许一个网站在没有真实手势时自动下载一次，之后合成点击触发的下载会被拦截，这时 `wait` 会说明并建议用 `start` |
@@ -251,7 +251,6 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | `SKFIY_WAIT_EVENTS` | `0`：等待改回固定间隔轮询（`scripts/bench_reads.py` 用来对比） |
 | `SKFIY_FRONT_GRANT_FILE` | `run_in_front` 批准文件的位置（默认 `~/Library/Caches/skfiy/front-grant`） |
 | `SKFIY_OCR_DUMP` | 一个文件夹：把每次文字识别的图片和结果存进去 |
-| `SKFIY_SIMULATE_CAPTURE_STALL` | `1`：一开始就当作截图卡住，测试改用独立进程截图的路径 |
 | `SKFIY_SCREENSHOT_OUT` | `skfiy call` 保存截图的位置 |
 
 skfiy 自己的文件（插件、急停标记、流程、操作日志、实例链接）都放在 `$HOME/Library` 下并跟随 `HOME` 变量，所以 `HOME=$(mktemp -d) skfiy setup` 这样的试装不会碰到真实的配置。例外：`run_in_front` 的批准文件目前仍按真实用户目录定位（要隔离就设 `SKFIY_FRONT_GRANT_FILE`），待后台窗口那部分改动合并后再改。
@@ -294,16 +293,37 @@ swift scripts/make_extension_icons.swift browser-extension   # 重新画插件�
 ```
 Sources/SkfiyKit/
   MCPServer.swift     stdio JSON-RPC（MCP）
-  ToolSchemas.swift   工具定义与给模型的使用说明
-  ComputerUse.swift   工具实现：状态快照、动作分发、会话（元素编号 ↔ AX 元素，像素 ↔ 屏幕点）
+  ToolSchemas.swift   工具定义、给模型的使用说明；各工具的特性（是否输入、可验证、锁屏可用、急停时仍可用、记入日志），分发用的各个工具列表由此得出
+  ComputerUse.swift   工具分发与会话（元素编号 ↔ AX 元素，像素 ↔ 屏幕点）、前台守护、操作后的截图、共用的检查
+  AppState.swift      list_apps、get_app_state（截图、带编号的树、since 变化）、树里的菜单
+  Actions.swift       click、perform_secondary_action、set_value、scroll、drag
+  Typing.swift        select_text、press_key、type_text
+  Foreground.swift    run_in_front、skfiy 自己的剪贴板（cmd+c/x/v）、read_clipboard、hand_over、快捷键对应的菜单项
+  Documents.swift     open_file、save_document、file_dialog
+  Waiting.swift       等待引擎（wait_for、browser_wait 共用）与解锁时的 wait_for
+  Zoom.swift          zoom
+  Locate.swift / Locator.swift   locate 与 target：按描述查找控件
+  Verification.swift / VerifiedActions.swift   expect：操作结果验证、防重复提交
+  Capabilities.swift  get_app_capabilities
+  FlowTools.swift / Flow.swift   flow_start / flow_record / flow_status
+  DirectLockedUse.swift / DirectLockedCapture.swift   锁屏 direct 模式：单窗口截图、按进程投递的输入
   AXTree.swift        辅助功能树的遍历、裁剪与文本渲染
-  AXElement.swift     AXUIElement 薄封装
+  AXElement.swift     AXUIElement 薄封装、文本元素的光标与选区
+  StateChanges.swift / ChangeEvents.swift   状态版本与变化摘要、辅助功能通知
+  TextRecognition.swift   Vision 文字识别
   Input.swift         投递到进程的键盘/鼠标/滚轮事件，SkyLight 入口
+  Windows.swift       窗口查找、最上层窗口、前台守护（FrontGuard）与 run_in_front 的批准文件
+  WindowTargeting.swift   指针与键盘落在哪个窗口、窗口是否被挡住
   Capture.swift       ScreenCaptureKit 截图与坐标映射
-  Apps.swift          应用列表、名称/路径/bundle id 解析、后台启动
+  VirtualCursor.swift skfiy 自己的光标
+  Apps.swift          应用列表、名称/路径/bundle id 解析、后台启动、锁屏状态
   Keys.swift          xdotool 按键语法解析
+  Clipboard.swift     剪贴板内容与系统剪贴板的借用
+  FilePanel.swift     打开/存储面板
   BrowserBridge.swift native messaging 宿主 ⇄ Unix socket ⇄ MCP 的桥接、安装
   BrowserTools.swift  browser_* 工具
+  EmergencyStop.swift / ActionLog.swift / Instance.swift   急停、操作日志、每个 MCP 服务独立的可执行文件链接
+  Arguments.swift     工具参数的类型化读取
   Setup.swift         skfiy setup / doctor / uninstall：插件文件、native host、Claude Code / Codex 注册、检查清单
   Paths.swift         skfiy 自己的文件位置（跟随 $HOME）
   EmbeddedExtension.swift  二进制里携带的插件副本（scripts/embed_extension.sh 生成）

@@ -217,21 +217,14 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
         }
     }
     guard let image = captured else { throw ToolError("Screenshot failed.") }
-    let format = ProcessInfo.processInfo.environment["SKFIY_SCREENSHOT_FORMAT"]?.lowercased() == "png" ? "png" : "jpeg"
-    let data = try encode(image, format: format)
-    return Screenshot(
-        geometry: CaptureGeometry(rect: region, pixelWidth: image.width, pixelHeight: image.height),
-        data: data,
-        mimeType: format == "png" ? "image/png" : "image/jpeg"
-    )
+    return try encodeScreenshot(image, geometry: CaptureGeometry(rect: region, pixelWidth: image.width, pixelHeight: image.height))
 }
 
 /// Screen capture can stop answering inside one process for good, while a
 /// fresh process captures fine. After the first stall, screenshots are taken
 /// by a short-lived helper process (`skfiy capture-window`) instead.
 struct CaptureStall: Error {
-    /// SKFIY_SIMULATE_CAPTURE_STALL=1 starts out stalled, for tests.
-    @MainActor private static var stalled = ProcessInfo.processInfo.environment["SKFIY_SIMULATE_CAPTURE_STALL"] == "1"
+    @MainActor private static var stalled = false
     /// This process is a helper itself; it never hands off to another one.
     @MainActor static var isHelper = false
 
@@ -254,7 +247,6 @@ private func captureInHelper(pid: pid_t, rect: CGRect, maxScale: Double) async t
     // A link of its own: screen capture serves one process per executable path.
     var environment = ProcessInfo.processInfo.environment
     environment[Instance.variable] = nil
-    environment["SKFIY_SIMULATE_CAPTURE_STALL"] = nil
     process.environment = environment
     let pipe = Pipe()
     process.standardOutput = pipe
@@ -314,6 +306,12 @@ public func captureWindowCommand(_ arguments: [String]) async -> (output: String
     } catch {
         return ("error \(error.localizedDescription)", false)
     }
+}
+
+/// A screenshot for the model: JPEG, or PNG with SKFIY_SCREENSHOT_FORMAT=png.
+func encodeScreenshot(_ image: CGImage, geometry: CaptureGeometry) throws -> Screenshot {
+    let format = ProcessInfo.processInfo.environment["SKFIY_SCREENSHOT_FORMAT"]?.lowercased() == "png" ? "png" : "jpeg"
+    return Screenshot(geometry: geometry, data: try encode(image, format: format), mimeType: format == "png" ? "image/png" : "image/jpeg")
 }
 
 func encode(_ image: CGImage, format: String) throws -> Data {

@@ -9,7 +9,7 @@ import Foundation
 /// things fit equally, they are listed and nothing is chosen.
 extension ComputerUse {
     /// Tools that accept `target` instead of element_index or x/y.
-    nonisolated static let targetTools: Set<String> = ["click", "scroll", "set_value", "perform_secondary_action", "select_text"]
+    nonisolated static let targetTools = ToolSchemas.names(.target, in: ToolSchemas.all)
 
     /// One thing on screen a locator may mean, and how to act on it.
     struct Located {
