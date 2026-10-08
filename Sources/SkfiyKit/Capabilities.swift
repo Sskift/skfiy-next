@@ -246,7 +246,7 @@ struct CapabilityReport {
         } else if facts.hidden {
             channels.append(Capability(name: "pointer", available: false, detail: "The app is hidden; use element actions or the keyboard."))
         } else if facts.remoteSession {
-            channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
+            channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks, drags and the wheel there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
                                        limits: ["Screenshots and text recognition of it work."]))
         } else {
             var limits: [String] = []

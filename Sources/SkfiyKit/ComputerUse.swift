@@ -35,6 +35,10 @@ struct AppSession {
     /// The screenshot showed that window on its own (it was inspected by
     /// name or id), not the app's windows as they overlap in its region.
     var independent = false
+    /// The app's windows when skfiy last looked at it (get_app_state, or
+    /// the screenshot after an action): a window not among them that took
+    /// the keyboard was opened since (see keyWindowMoved).
+    var knownWindows: Set<CGWindowID> = []
     /// The pixels of the latest screenshot the model was given: an action
     /// that leaves them as they were sends no new one.
     var shownFingerprint: PixelFingerprint?
@@ -1033,7 +1037,7 @@ public final class ComputerUse {
             captureNote = "No screenshot: the window is on another desktop (Space) or in a full-screen space, and skfiy does not switch desktops. Accessibility actions by element_index still work."
         } else if let inspected {
             do {
-                screenshot = try await captureDirectLockedWindow(inspected, maxScale: 1)
+                screenshot = try await captureDirectLockedWindow(inspected, maxScale: 1, children: true)
             } catch let error as ToolError {
                 captureNote = error.description
             }
@@ -1065,7 +1069,7 @@ public final class ComputerUse {
                 do {
                     let lines: [RecognizedText]
                     if let inspected {
-                        let (hires, _) = try await captureDirectLockedImage(inspected, maxScale: backingScale(for: inspected.frame))
+                        let (hires, _) = try await captureDirectLockedImage(inspected, maxScale: backingScale(for: inspected.frame), children: true)
                         lines = TextRecognition.sorted(try await TextRecognition.recognizeBoth(hires, showing: screenshot.geometry.rect))
                     } else {
                         lines = try await recognizeText(pid: pid, region: screenshot.geometry.rect)
@@ -1093,6 +1097,7 @@ public final class ComputerUse {
         sessions[pid]?.windowFrame = shownWindow?.frame
         sessions[pid]?.shownFingerprint = fingerprint
         sessions[pid]?.independent = inspected != nil && screenshot != nil
+        sessions[pid]?.knownWindows = appWindowIDs(pid)
         if screenshot != nil, chromiumWindowFrozen(app, window: sessions[pid]?.windowID) {
             snapshot.header.append(frozenNote(app))
         }
@@ -1531,6 +1536,10 @@ public final class ComputerUse {
         if let element, element.string(kAXRoleAttribute) == "AXMenuItem", element.bool(kAXEnabledAttribute) == false {
             throw ToolError("That menu item is disabled. A background app keeps its menus as they were when it was last in front, so items that act on the current document or selection stay disabled; use the equivalent control in the window or a keyboard shortcut instead.")
         }
+        // x/y in a remote session: not even an accessibility press on what a hit test finds there.
+        if let point, let remote = remoteSessionTitle(app, receiver: pointerWindow(pid: pid, at: point), point: point, aimed: true) {
+            throw ToolError(RemoteSurface.refusal(remote, what: "a click"))
+        }
         // The agent cursor goes there first, so the user sees where it acts.
         if let shown = point ?? element?.frame.map({ CGPoint(x: $0.midX, y: $0.midY) }) {
             await VirtualCursor.move(to: shown, pid: pid, window: pointerWindow(pid: pid, at: shown, element: point == nil ? element : nil))
@@ -1652,7 +1661,7 @@ public final class ComputerUse {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
         }
         let windowElement = element.flatMap(containingWindow(of:)) ?? axWindow(window, pid: pid)
-        try checkPointerTarget(app, window: windowElement)
+        try checkPointerTarget(app, window: windowElement, receiver: window, point: point, aimed: element == nil)
         let chromium = isChromium(app)
         let flutter = isFlutter(app)
         var note = ""
@@ -1883,10 +1892,12 @@ public final class ComputerUse {
         // Wheel events, a page being about 85% of what shows of the element
         // (or of the window), at least 40 pt. Not AXScroll*ByPage: TextEdit
         // reports failure for it yet scrolls, the wrong way.
-        try checkPointerTarget(app, window: element.flatMap(containingWindow(of:)), allowRemote: true)
         guard let window = pointerWindow(pid: pid, at: point, element: element) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
         }
+        // Not into a remote session either: the wheel would scroll the remote computer.
+        try checkPointerTarget(app, window: element.flatMap(containingWindow(of:)), what: "wheel input", receiver: window, point: point,
+                               aimed: args.values["x"] != nil || args.values["y"] != nil)
         // Chromium drops wheel input to a fully covered window once it stops
         // drawing it (it does so a little while after the window is covered).
         let frozen = chromiumWindowFrozen(app, window: window)
@@ -1916,7 +1927,7 @@ public final class ComputerUse {
         guard let window = pointerWindow(pid: pid, at: start) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at the start point.")
         }
-        try checkPointerTarget(app, window: axWindow(window, pid: pid))
+        try checkPointerTarget(app, window: axWindow(window, pid: pid), receiver: window, point: start, aimed: true)
         var how = "background mouse events"
         let focus = args.bool("focus") ?? false
         await VirtualCursor.move(to: start, pid: pid, window: window)
@@ -1945,17 +1956,19 @@ public final class ComputerUse {
         // Key events go to the app's key window, which may not be the window
         // the model works in: it is made the key window, or no key is sent.
         let keyboard = try await keyboardTarget(app, args)
-        await VirtualCursor.typing(VirtualCursor.keycaps(key), pid: pid)
         if !keyboard.reachesIntended {
             // Shortcuts done through accessibility work on any window.
             if let how = try emulateShortcut(chord, pid: pid, window: keyboard.intendedWindow, text: keyboard.text) {
+                await VirtualCursor.typing(VirtualCursor.keycaps(key), pid: pid)
                 return try await afterAction(app, "Pressed \(key) in \(quote(keyboard.intendedTitle, limit: 60)): \(how) (accessibility; the app's key window \(quote(keyboard.keyTitle, limit: 60)) was left alone).")
             }
             if let text = keyboard.text, let how = try await clipboardShortcut(chord, pid: pid, text: text, menu: false) {
+                await VirtualCursor.typing(VirtualCursor.keycaps(key), pid: pid)
                 return try await afterAction(app, "Pressed \(key): \(how).")
             }
             throw ToolError(keyboard.refusal(app: app.localizedName ?? "the app"))
         }
+        await VirtualCursor.typing(VirtualCursor.keycaps(key), pid: pid)
         if let seconds = try args.double("hold_seconds") {
             guard (0.05...10).contains(seconds), count == 1 else {
                 throw ToolError("hold_seconds must be between 0.05 and 10, without repeat.")
@@ -2025,11 +2038,11 @@ public final class ComputerUse {
         // Flutter takes text set through accessibility only in an invisible
         // stand-in field, so for it keys are the only way.
         let flutter = isFlutter(app)
-        await VirtualCursor.typing("⌨︎", pid: pid)
         if !keyboard.reachesIntended {
             guard !flutter, let field = keyboard.text, field.isSettable(kAXSelectedTextAttribute) else {
                 throw ToolError(keyboard.refusal(app: app.localizedName ?? "the app"))
             }
+            await VirtualCursor.typing("⌨︎", pid: pid)
             lastInputWasSecret = field.string(kAXSubroleAttribute) == "AXSecureTextField"
             let before = field.string(kAXValueAttribute)
             try field.set(kAXSelectedTextAttribute, text as CFString)
@@ -2038,6 +2051,7 @@ public final class ComputerUse {
             }
             return try await afterAction(app, "Entered \(text.count) character(s) into \(describe(field)) of \(quote(keyboard.intendedTitle, limit: 60)) through accessibility: key events would have gone to the app's key window \(quote(keyboard.keyTitle, limit: 60)) instead\(keyboard.why). The app may not count text entered this way as a change; save explicitly before closing the document.")
         }
+        await VirtualCursor.typing("⌨︎", pid: pid)
         // Background Chromium (Electron) reports no focused element even
         // right after a click focused a field: that field is meant.
         let focused = focusedElement(pid) ?? keyboard.text ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
@@ -2337,6 +2351,10 @@ public final class ComputerUse {
             sessions[pid] = nil
             return ToolResult(text: message + "\nThe app quit.")
         }
+        // A window the action opened that took the keyboard (a new document,
+        // a dialog) is where the model works now: it is shown, and keys follow it.
+        let followed = followNewKeyWindow(pid)
+        let message = message + followed
         // A background Electron app may report no focused window: then its main or first one.
         let appElement = AXUIElementCreateApplication(pid)
         let window = sessions[pid]?.window ?? appElement.element(kAXFocusedWindowAttribute) ?? appElement.element(kAXMainWindowAttribute)
@@ -2355,15 +2373,16 @@ public final class ComputerUse {
             // A window inspected by name is captured on its own, as get_app_state
             // did: as a region, another window of the app above it (RustDesk's
             // remote session over its main window) would show instead.
+            // Sheets and panels attached to it are drawn on it, as the user sees them.
             let independent = sessions[pid]?.window.flatMap { independentWindow($0, pid: pid) }
             let screenshot: Screenshot
             if let independent {
-                screenshot = try await captureDirectLockedWindow(independent, maxScale: 1)
+                screenshot = try await captureDirectLockedWindow(independent, maxScale: 1, children: true)
             } else {
                 screenshot = try await captureApp(pid: pid, rect: region)
             }
             let fingerprint = TextRecognition.decode(screenshot.data).flatMap { PixelFingerprint($0, region: nil) }
-            if let session = sessions[pid], session.geometry == screenshot.geometry,
+            if followed.isEmpty, let session = sessions[pid], session.geometry == screenshot.geometry,
                let shown = session.shownFingerprint, let now = fingerprint, !now.changed(from: shown) {
                 if frozen {
                     return ToolResult(text: message + "\nThe screenshot is unchanged, but that proves nothing: " + frozenNote(app) + " Its x/y still hold.")

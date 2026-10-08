@@ -9,7 +9,14 @@ key window. skfiy inspects the second window by id and must act on it, not on
 the main window lying over it: x/y clicks and wheel events, a click on its
 text field (which makes it the key window, as a real click would, without
 raising it), typing and keys, expect verification, cmd+w, zoom. A third window
-without a text field gets keys refused, not sent to the key window. Then the
+without a text field gets keys refused, not sent to the key window. The main
+window, inspected by id, opens a window that takes the keyboard (as cmd+n
+does): the reply shows that window and typing goes there, not back into the
+main window; a window that opens on its own after the last look and takes
+the keyboard gets typing refused, and so does a window worked in that has
+closed (keys are not handed to a window that was open before); a sheet the main window opens shows in the
+after-action screenshot and in get_app_state, and an x/y click on its button
+as seen there answers it. Then the
 app hides itself (an accessory app, which NSRunningApplication does not report
 as hidden): x/y and wheel input is refused as hidden, not as a closed window.
 
@@ -205,6 +212,7 @@ def fixture_case(s, minimize):
     if minimize:
         fx.command('open_window', title=third, input=True)
         fx.wait(lambda st: window(st, third) is not None)
+        time.sleep(0.6)  # a window just opened can still be settling: capture refuses a frame that changes under it
         third_id = window(fx.state(), third)['number']
         look = w.call('get_app_state', third_id, app=app, window=str(third_id), ocr=True)
         g = geometry(look['text'])
@@ -214,6 +222,8 @@ def fixture_case(s, minimize):
         s.check('x/y on a minimized window is refused as minimized, not as closed', refused['is_error'] and 'minimized' in refused['text']
                 and 'closed' not in refused['text'], refused['text'][:200])
         fx.command('close_window', title=third)
+
+    new_window_and_sheet(s, w, main_id, key_window)
 
     main_look = w.call('get_app_state', main_id, app=app, ocr=True)
     g = geometry(main_look['text'])
@@ -232,6 +242,82 @@ def fixture_case(s, minimize):
     s.check('scroll by element_index in the hidden app: refused, not reported as done', wheel['is_error'] and 'hidden' in wheel['text'], wheel['text'][:200])
     s.check('nothing reached the hidden app', fx.state()['counters'] == counters, fx.state()['counters'])
     w.finish()
+
+
+def shot_words(result):
+    return ' '.join(probe('ocr', result['images'][0])['lines']) if result['images'] else ''
+
+
+def new_window_and_sheet(s, w, main_id, key_window):
+    """The window inspected by id opens a window that takes the keyboard (as
+    cmd+n does), or a sheet: the reply shows them, and keys follow the new
+    window instead of being pulled back to the inspected one."""
+    app, fx = s.app, s.fixture
+    main_title, new_title, late = f'Scenario {s.nonce}', f'Scenario new {s.nonce}', f'Scenario late {s.nonce}'
+    fx.command('key', title='main')
+    time.sleep(0.3)
+    look = w.call('get_app_state', main_id, app=app, window=str(main_id))
+    main_input = fx.state()['input']
+    opened = w.call('click', main_id, app=app, element_index=tree_index(look['text'], r'Button[^\n]*"New window"'))
+    fx.wait(lambda st: window(st, new_title) is not None)
+    new_id = window(fx.state(), new_title)['number']
+    words = shot_words(opened)
+    s.check('an action opens a window that takes the keyboard: the reply names it and its screenshot shows it',
+            not opened['is_error'] and f'id {new_id}' in opened['text'] and 'new' in words and 'Extra input' in words
+            and 'Apply' not in words, (opened['text'][:300], words[:200]))
+    typed = w.call('type_text', new_id, app=app, text='wfnew')
+    state = fx.state()
+    s.check('typing after it goes into the new window; the inspected window is not made key again',
+            not typed['is_error'] and window(state, new_title)['input'] == 'wfnew' and state['input'] == main_input
+            and key_window() == new_id, (window(state, new_title)['input'], state['input'], key_window(), typed['text'][:200]))
+
+    # A window opens on its own after the last look and takes the keyboard.
+    fx.command('open_window', title=late, input=True)
+    fx.wait(lambda st: window(st, late) is not None)
+    fx.command('key', title=late)
+    time.sleep(0.4)
+    late_id = window(fx.state(), late)['number']
+    keys_before = dict(fx.state()['keys'])
+    refused = w.call('type_text', new_id, app=app, text='zz')
+    state = fx.state()
+    s.check('a window opened after the last look has the keyboard: typing is refused, not pulled back with a click',
+            refused['is_error'] and 'opened after the latest screenshot' in refused['text'] and key_window() == late_id
+            and state['keys'] == keys_before and window(state, new_title)['input'] == 'wfnew' and window(state, late)['input'] == '',
+            (refused['text'][:240], key_window(), window(state, late)['input']))
+    fx.command('close_window', title=late)
+    fx.command('close_window', title=new_title)
+    fx.wait(lambda st: window(st, new_title) is None and window(st, late) is None)
+    # The window worked in closed; the main window, open before, has the keyboard again.
+    fx.command('key', title='main')
+    time.sleep(0.3)
+    keys_before, main_before = dict(fx.state()['keys']), fx.state()['input']
+    gone = w.call('type_text', new_id, app=app, text='yy')
+    state = fx.state()
+    s.check('the window worked in closed: typing is refused, not sent to the window that was open before',
+            gone['is_error'] and 'is closed' in gone['text'] and state['keys'] == keys_before and state['input'] == main_before,
+            (gone['text'][:240], state['input']))
+
+    look = w.call('get_app_state', main_id, app=app, window=str(main_id))
+    asked = w.call('click', main_id, app=app, element_index=tree_index(look['text'], r'Button[^\n]*"Ask"'))
+    fx.wait(lambda st: st['sheet'], timeout=4)
+    words = shot_words(asked)
+    s.check('an action opens a sheet on the inspected window: the after-action screenshot shows it',
+            not asked['is_error'] and fx.state()['sheet'] and 'SHEET QUESTION' in words and 'Discard' in words, (asked['text'][:200], words[:240]))
+    look = w.call('get_app_state', main_id, app=app, window=str(main_id), ocr=True)
+    s.check('get_app_state of that window shows the sheet in its screenshot too', 'SHEET QUESTION' in shot_words(look), shot_words(look)[:200])
+    discard = [hit for hit in ocr_lines(look['text']) if hit[0] == 'Discard']
+    counters = dict(fx.state()['counters'])
+    if discard:
+        hit = w.call('click', main_id, app=app, x=discard[0][1], y=discard[0][2])
+        closed = fx.wait(lambda st: not st['sheet'], timeout=4)
+        after = fx.state()['counters']
+        s.check('an x/y click on the sheet\'s Discard, as the screenshot shows it, answers the sheet',
+                not hit['is_error'] and closed and after.get('sheet-discard', 0) == counters.get('sheet-discard', 0) + 1, (hit['text'][:160], after))
+    else:
+        s.check('the sheet\'s Discard button is in the recognized text', False, look['text'][-400:])
+    if fx.state()['sheet']:
+        index = tree_index(w.call('get_app_state', main_id, app=app, window=str(main_id))['text'], r'Button[^\n]*"Keep"')
+        w.call('click', main_id, app=app, element_index=index)
 
 
 def textedit_case(s):

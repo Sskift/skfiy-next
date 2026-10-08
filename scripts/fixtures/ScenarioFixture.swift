@@ -15,7 +15,9 @@
 // deminimize(title), quit. open_window with input: true gives the window a text
 // field of its own ("Extra input", its first responder); state.json then has
 // each window's field value, the mouse and wheel events it received, and
-// whether it is the key and main window.
+// whether it is the key and main window. Buttons of the main window: "Ask"
+// opens a sheet (Keep / Discard; state.json "sheet"), "New window" opens
+// "Scenario new <nonce>" with a field and makes it the key window.
 import AppKit
 import CoreGraphics
 import Darwin
@@ -127,7 +129,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     private func makeWindow(_ title: String, size: NSSize) -> RecordingWindow {
-        let window = RecordingWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = RecordingWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = title
         window.isReleasedWhenClosed = false
         window.keyReceived = { [weak self] window, event in
@@ -185,6 +187,8 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             buttons["edit-\(group.lowercased())"] = edit
         }
         button("Open dialog", "open-dialog", NSRect(x: 480, y: 340, width: 140, height: 30), in: content)
+        button("Ask", "ask", NSRect(x: 480, y: 295, width: 140, height: 30), in: content)
+        button("New window", "new-window", NSRect(x: 480, y: 255, width: 140, height: 30), in: content)
         canvas.frame = NSRect(x: 20, y: 120, width: 400, height: 160)
         canvas.tiny = "tiny \(options.nonce.prefix(6))"
         canvas.clicked = { [weak self] point, hit in
@@ -215,6 +219,25 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             submitted.append(input.stringValue)
             status.stringValue = "status: submitted \(submitted.count): \(input.stringValue)"
         case "open-dialog": openWindow("Scenario dialog \(options.nonce)")
+        case "ask":
+            // A sheet on the main window, as a save or discard question is.
+            let alert = NSAlert()
+            alert.messageText = "Discard the draft?"
+            alert.informativeText = "SHEET QUESTION \(options.nonce.prefix(6))"
+            alert.addButton(withTitle: "Keep")
+            alert.addButton(withTitle: "Discard")
+            alert.beginSheetModal(for: main) { [weak self] response in
+                self?.counters[response == .alertFirstButtonReturn ? "sheet-keep" : "sheet-discard", default: 0] += 1
+                // The sheet is still attached while this runs.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.record("sheet_closed") }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.record("sheet_opened") }
+        case "new-window":
+            // A new document: it takes the keyboard (without coming forward,
+            // the app being in the background), as cmd+n does.
+            let title = "Scenario new \(options.nonce)"
+            openWindow(title, input: true)
+            extra[title]?.makeKey()
         case "done": sender.window?.close()
         default: status.stringValue = "status: \(name) \(count)"
         }
@@ -377,7 +400,8 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             "counters": counters, "submitted": submitted, "keys": keys, "canvasClicks": canvasClicks,
             "windows": windows, "hidden": NSApp.isHidden, "active": NSApp.isActive,
             "keyWindow": NSApp.keyWindow?.title ?? "", "mainWindow": NSApp.mainWindow?.title ?? "",
-            "lastCommand": lastCommand, "animating": canvas.phase != nil, "tiny": canvas.tiny, "swapped": swapped
+            "lastCommand": lastCommand, "animating": canvas.phase != nil, "tiny": canvas.tiny, "swapped": swapped,
+            "sheet": main.attachedSheet != nil
         ]
         state["buttons"] = buttons.mapValues { button -> [String: Double] in
             guard let window = button.window else { return [:] }

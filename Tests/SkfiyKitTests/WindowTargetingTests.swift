@@ -141,6 +141,32 @@ struct WindowTargetingTests {
         #expect(target.reachesIntended)
     }
 
+    @Test func keysFollowANewWindowButNotAnOldOne() {
+        let known: Set<CGWindowID> = [10, 11]
+        // cmd+n (or a dialog) opened window 12 and it took the keyboard: keys belong to it.
+        #expect(keyWindowMoved(now: 12, inspected: 10, known: known))
+        // A window that was already open became key again: the inspected one is made key again.
+        #expect(!keyWindowMoved(now: 11, inspected: 10, known: known))
+        // The inspected window itself, or no key window, or nothing known yet.
+        #expect(!keyWindowMoved(now: 10, inspected: 10, known: known))
+        #expect(!keyWindowMoved(now: nil, inspected: 10, known: known))
+        #expect(!keyWindowMoved(now: 12, inspected: 10, known: []))
+    }
+
+    @Test func refusalsDoNotSuggestWhatCannotWork() {
+        var target = KeyboardTarget()
+        target.intended = 20
+        target.intendedTitle = "Notes"
+        target.keyWindow = 21
+        target.keyTitle = "Untitled"
+        #expect(target.refusal(app: "TextEdit").contains("Click a text field of that window first"))
+        // Hidden app or minimized window: a click cannot make it the key window.
+        target.clickCanMakeKey = false
+        #expect(!target.refusal(app: "TextEdit").contains("Click a text field"))
+        let moved = target.movedRefusal(app: "TextEdit")
+        #expect(moved.contains("\"Untitled\" (id 21)") && moved.contains("window: \"21\"") && moved.contains("window: \"20\"") && moved.contains("Nothing was sent"))
+    }
+
     // MARK: Verification and capabilities
 
     @Test func unobservableWindowIsNeverNoEffect() async {

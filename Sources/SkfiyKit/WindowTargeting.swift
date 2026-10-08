@@ -56,6 +56,19 @@ func routePointerWindow(shown: CGWindowID?, shownBounds: CGRect?, independent: B
     return topIsSiblingWindow ? shown : top
 }
 
+/// Whether a window opened since skfiy last looked at the app has taken
+/// the keyboard: a new document after cmd+n, a dialog, a window an action
+/// opened. Keys then belong to it; they are never pulled back from it to the
+/// window inspected before (text would land in the other document). A window
+/// that was already open and became key again (the app or the user
+/// switched back to it) is not new: the inspected window is made key again.
+/// `now` is the key window, `inspected` the window the model works in,
+/// `known` the app's windows at the last look (none known: nothing assumed).
+func keyWindowMoved(now: CGWindowID?, inspected: CGWindowID?, known: Set<CGWindowID>) -> Bool {
+    guard let now, !known.isEmpty else { return false }
+    return now != inspected && !known.contains(now)
+}
+
 /// The parts of `rect` not under any of `covers` (rectangle subtraction).
 func uncoveredParts(of rect: CGRect, under covers: [CGRect]) -> [CGRect] {
     var parts = [rect]
@@ -149,6 +162,9 @@ struct KeyboardTarget {
     var text: AXUIElement?
     /// Why the intended window could not be made the key window.
     var why = ""
+    /// A click on one of its text fields could make it the key window
+    /// (not while the app is hidden or the window minimized).
+    var clickCanMakeKey = true
     var note = ""
 
     /// Also when the app reports no key window at all (a background Electron app):
@@ -158,7 +174,17 @@ struct KeyboardTarget {
     func refusal(app: String) -> String {
         "Keyboard input would go to \(app)'s key window \(quote(keyTitle, limit: 60))" + (keyWindow.map { " (id \($0))" } ?? "")
             + ", not to \(quote(intendedTitle, limit: 60))" + (intended.map { " (id \($0))" } ?? "") + ", the window you are working in\(why)."
-            + " Nothing was sent. Click a text field of that window first (element_index: skfiy then makes it the app's key window, without raising it), or use element actions (set_value, click by element_index), which work in any window."
+            + " Nothing was sent. "
+            + (clickCanMakeKey
+                ? "Click a text field of that window first (element_index: skfiy then makes it the app's key window, without raising it), or use element actions (set_value, click by element_index), which work in any window."
+                : "Use element actions (set_value, click by element_index), which work in any window; keys there need the window shown (ask the user, or run_in_front, which asks them).")
+    }
+
+    /// The app made another window key after the latest screenshot.
+    func movedRefusal(app: String) -> String {
+        "A window \(app) opened after the latest screenshot, \(quote(keyTitle, limit: 60))" + (keyWindow.map { " (id \($0))" } ?? "")
+            + ", is now its key window, where keys go, not \(quote(intendedTitle, limit: 60))" + (intended.map { " (id \($0))" } ?? "") + ", the window you are working in. skfiy does not take the keyboard back from a new window with a click: the keys may be meant for it, and text would land in the other window. Nothing was sent."
+            + " Call get_app_state" + (keyWindow.map { " with window: \"\($0)\"" } ?? "") + " to see it" + (intended.map { ", or with window: \"\($0)\" to keep working in that window (skfiy then makes it the key window)" } ?? "") + "."
     }
 }
 
@@ -201,14 +227,22 @@ extension ComputerUse {
 
     /// Refuses pointer and wheel input that cannot reach the window it is
     /// meant for: hidden app, minimized window, another desktop, or a remote
-    /// session (allowed with `allowRemote`: wheel input, run_in_front).
-    func checkPointerTarget(_ app: NSRunningApplication, window: AXUIElement? = nil, allowRemote: Bool = false) throws {
+    /// session (allowed with `allowRemote`: run_in_front; `what` names the
+    /// input in the refusal).
+    /// `receiver` (the window the events will be stamped with) and `point`
+    /// are checked too: an element's window can differ from the window that
+    /// receives the events, and a remote session must get none either way.
+    func checkPointerTarget(_ app: NSRunningApplication, window: AXUIElement? = nil, allowRemote: Bool = false,
+                            what: String = "a click or drag", receiver: CGWindowID? = nil, point: CGPoint? = nil, aimed: Bool = false) throws {
         try checkInputTarget(app)
         let name = app.localizedName ?? "The app"
         if appIsHidden(app) {
             throw ToolError(WindowPresence.appHidden.refusal(window: "", id: nil, app: name)!)
         }
         let pid = app.processIdentifier
+        if !allowRemote, let remote = remoteSessionTitle(app, receiver: receiver, point: point, aimed: aimed) {
+            throw ToolError(RemoteSurface.refusal(remote, what: what))
+        }
         guard let window = window ?? sessions[pid]?.windowID.flatMap({ axWindow($0, pid: pid) }) else { return }
         let title = window.string(kAXTitleAttribute) ?? ""
         let id = windowID(of: window)
@@ -219,8 +253,29 @@ extension ComputerUse {
             throw ToolError(refusal)
         }
         if !allowRemote, RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: title) {
-            throw ToolError(RemoteSurface.refusal(title, what: "a click or drag"))
+            throw ToolError(RemoteSurface.refusal(title, what: what))
         }
+    }
+
+    /// The title of a remote session that input at `point`, stamped with
+    /// window `receiver`, would reach: the receiving window itself or, when
+    /// the model aimed at the point (x/y) or no receiver is known, the window
+    /// of the latest screenshot if the point lies in it (it aimed at what
+    /// that screenshot showed, whatever element a hit test finds there).
+    func remoteSessionTitle(_ app: NSRunningApplication, receiver: CGWindowID?, point: CGPoint?, aimed: Bool = false) -> String? {
+        guard RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: "Remote Desktop - ") else { return nil }
+        let pid = app.processIdentifier
+        var titles: [String] = []
+        if let receiver {
+            if let title = axWindow(receiver, pid: pid)?.string(kAXTitleAttribute) { titles.append(title) }
+            let row = (CGWindowListCopyWindowInfo([.optionIncludingWindow], receiver) as? [[String: Any]])?.first
+            if let title = row?[kCGWindowName as String] as? String { titles.append(title) }
+        }
+        if receiver == nil || aimed, let point, let shown = sessions[pid]?.windowID.flatMap({ axWindow($0, pid: pid) }), shown.frame?.contains(point) == true,
+           let title = shown.string(kAXTitleAttribute) {
+            titles.append(title)
+        }
+        return titles.first { RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: $0) }
     }
 
     /// The window pointer input at `point` is stamped with: the element's own
@@ -304,7 +359,7 @@ extension ComputerUse {
         guard let window, let independent = independentWindow(window, pid: pid) else {
             return try await captureApp(pid: pid, rect: rect, maxScale: maxScale)
         }
-        let (image, geometry) = try await captureDirectLockedImage(independent, maxScale: maxScale, modelLimits: maxScale <= 1)
+        let (image, geometry) = try await captureDirectLockedImage(independent, maxScale: maxScale, modelLimits: maxScale <= 1, children: true)
         let visible = rect.intersection(geometry.rect)
         guard !visible.isNull, visible.width >= 1, visible.height >= 1 else {
             throw ToolError("That part of the window is outside it.")
@@ -397,8 +452,22 @@ extension ComputerUse {
             }
             return target
         }
+        if let intended = target.intended, target.intendedWindow?.string(kAXRoleAttribute) == nil,
+           (CGWindowListCopyWindowInfo([.optionIncludingWindow], intended) as? [[String: Any]] ?? []).isEmpty {
+            // Closed (cmd+w, a dialog that was answered): keys would reach whatever window has the keyboard now.
+            throw ToolError("The window you were working in" + (target.intendedTitle.isEmpty ? "" : ", \(quote(target.intendedTitle, limit: 60)),")
+                + " (id \(intended)) is closed. Keys would go to the app's key window \(quote(target.keyTitle, limit: 60))" + (target.keyWindow.map { " (id \($0))" } ?? "")
+                + ". Nothing was sent. Call get_app_state" + (target.keyWindow.map { " with window: \"\($0)\"" } ?? "") + " to look at it before typing there.")
+        }
+        if keyWindowMoved(now: target.keyWindow, inspected: target.intended, known: session?.knownWindows ?? []) {
+            throw ToolError(target.movedRefusal(app: app.localizedName ?? "The app"))
+        }
         if frontmostProcessID() == pid {
             target.why = "; \(app.localizedName ?? "the app") is the front app, so its key window is the user's and skfiy does not change it"
+        } else if appIsHidden(app) || target.intendedWindow?.bool(kAXMinimizedAttribute) == true {
+            // A background click there would reach no window on screen.
+            target.why = "; " + (appIsHidden(app) ? "the app is hidden" : "the window is minimized") + ", so skfiy cannot make it the key window"
+            target.clickCanMakeKey = false
         } else if let text = target.text, let intended = target.intended {
             if await makeKeyWindow(pid: pid, window: intended, field: text) {
                 target.keyWindow = intended
@@ -414,6 +483,66 @@ extension ComputerUse {
             target.why += " (and the key window is a RustDesk remote session: keys there go to the remote computer)"
         }
         return target
+    }
+
+    /// The app's windows, as accessibility lists them.
+    func appWindowIDs(_ pid: pid_t) -> Set<CGWindowID> {
+        Set(AXUIElementCreateApplication(pid).elements(kAXWindowsAttribute).compactMap(windowID(of:)))
+    }
+
+    /// After an action, when the model works in a window it inspected by
+    /// name or id: if a window the app opened since the last look took the
+    /// keyboard (a new document after cmd+n, a dialog), or the inspected
+    /// window closed and another one has the keyboard, that window becomes
+    /// the session's window, so the screenshot shows it and keys go to it,
+    /// as the user would see and type. Returns the note for the reply
+    /// (empty when nothing changed), and takes note of the app's windows.
+    func followNewKeyWindow(_ pid: pid_t) -> String {
+        guard let session = sessions[pid] else { return "" }
+        let windows = appWindowIDs(pid)
+        sessions[pid]?.knownWindows = windows
+        let key = AXUIElementCreateApplication(pid).element(kAXFocusedWindowAttribute)
+        let keyID = key.flatMap(windowID(of:))
+        let old = session.windowID
+        let closed = !windows.isEmpty && old.map { !windows.contains($0) } ?? false
+        let oldTitle = session.window?.string(kAXTitleAttribute) ?? ""
+        let was = (oldTitle.isEmpty ? "the window" : quote(oldTitle, limit: 60)) + (old.map { " (id \($0))" } ?? "")
+        let opened = keyWindowMoved(now: keyID, inspected: old, known: session.knownWindows)
+        guard session.window != nil, let key, let keyID, keyID != old, opened || closed,
+              key.string(kAXRoleAttribute) == kAXWindowRole, key.bool(kAXMinimizedAttribute) != true else {
+            return session.knownWindows.isEmpty ? "" : openedNote(pid, windows.subtracting(session.knownWindows))
+        }
+        let title = quote(key.string(kAXTitleAttribute) ?? "", limit: 60)
+        if !opened {
+            // The inspected window closed and a window that was already open
+            // (maybe one of the user's documents) has the keyboard: keys are
+            // not moved there unasked; keyboardTarget refuses until the model looks.
+            return " \(was.prefix(1).uppercased() + was.dropFirst()) closed. The app's key window is now \(title) (id \(keyID)), which was already open; skfiy sends it no keys until you call get_app_state for it (window: \"\(keyID)\")."
+        }
+        sessions[pid]?.window = key
+        sessions[pid]?.windowID = keyID
+        sessions[pid]?.windowFrame = key.frame
+        // The latest screenshot was of the other window: its pixels map nothing here.
+        sessions[pid]?.geometry = nil
+        sessions[pid]?.shownFingerprint = nil
+        sessions[pid]?.zoom = nil
+        if closed {
+            return " \(was.prefix(1).uppercased() + was.dropFirst()) closed; the app's key window is now \(title) (id \(keyID)), so the screenshot shows it and keys go to it. Its element indices are not known yet: call get_app_state for its tree."
+        }
+        return " \(title) (id \(keyID)) opened and became the app's key window, so the screenshot shows it and keys go to it now."
+            + " Element indices are still those of \(was), which is still open (get_app_state with window: \"\(old.map(String.init) ?? "")\" goes back to it); call get_app_state for this window's tree."
+    }
+
+    /// Windows that opened with the action without taking the keyboard (a
+    /// window ordered behind, a panel): named, since the screenshot of the
+    /// inspected window does not show them.
+    func openedNote(_ pid: pid_t, _ opened: Set<CGWindowID>) -> String {
+        guard !opened.isEmpty else { return "" }
+        let titled = opened.sorted().map { id in
+            "\(quote(axWindow(id, pid: pid)?.string(kAXTitleAttribute) ?? "", limit: 60)) (id \(id))"
+        }
+        return " The app opened " + (opened.count == 1 ? "a window" : "\(opened.count) windows") + ", " + titled.joined(separator: ", ")
+            + " that did not take the keyboard; get_app_state with window: \"\(opened.sorted()[0])\" shows it."
     }
 
     /// After a click focused a text field: a real click would also have made

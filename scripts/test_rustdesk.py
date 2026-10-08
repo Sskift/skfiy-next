@@ -14,8 +14,8 @@ input to another computer, and the main window's fields are the user's):
   back to what it was when the session ends.
 - The main window inspected by id is captured on its own, even where a
   remote-session window lies over it.
-- A remote-session window is captured and labelled as such; keys, typing and
-  drags aimed at it are refused, and get_app_capabilities says so.
+- A remote-session window is captured and labelled as such; keys, typing,
+  drags and the wheel aimed at it are refused, and get_app_capabilities says so.
 - set_value on a Flutter text field is refused (it would only change an
   invisible stand-in field), and the field keeps its value.
 
@@ -96,7 +96,8 @@ def main():
                     shot['text'].splitlines()[1][:200])
             g = geometry(shot['text'])
             for name, arguments in (('type_text', {'text': 'x'}), ('press_key', {'key': 'a'}),
-                                    ('drag', {'from_x': g['width'] * 0.5, 'from_y': g['height'] * 0.7, 'to_x': g['width'] * 0.55, 'to_y': g['height'] * 0.7})):
+                                    ('drag', {'from_x': g['width'] * 0.5, 'from_y': g['height'] * 0.7, 'to_x': g['width'] * 0.55, 'to_y': g['height'] * 0.7}),
+                                    ('scroll', {'x': g['width'] * 0.5, 'y': g['height'] * 0.6, 'direction': 'down'})):
                 background()
                 refused = w.call(name, remote['id'], app='RustDesk', **arguments)
                 s.check(f'{name} aimed at the remote session is refused before anything is sent', refused['is_error'] and 'remote' in refused['text']
