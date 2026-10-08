@@ -421,6 +421,8 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 - 一键安装分支合并进 main。合并后补了两处审查意见：`skfiy doctor` 会检查 Claude Code 注册里的设置（例如写错的 `SKFIY_LOCKED_USE=1`），注册里有 `SKFIY_LOCKED_USE=direct` 时显示 “Locked use: direct”；`skfiy setup` 检查用 `-e` 传入的设置，给出的手动注册命令也带上这些设置。`make test-install` 72/72。
 - release 编译改为每个架构单独编译再用 `lipo` 合并：同时传两个 `--arch` 时，SwiftPM 会改用 Xcode 的构建系统，GitHub 的 macos-15 上直接失败（`SWIFT_VERSION '' is unsupported`、`Unexpected duplicate tasks`）。改后在本机和 GitHub 上手动触发的 Release 流程（只编译和测试，不发布）都通过，包括用打出的压缩包跑安装测试。
 - 移除实验性的 guardian 锁屏方案（`skfiy mcp --locked-use`）：它从未完成真机验收，却让每次编译多出一个可执行文件和一个 C 目标，并在每个工具调用的路径上留有分支。删掉了 `skfiy-guardian`、`LockedUseCore`、授权插件、`LockedUseClient`、`Input.lockedUseIsValid`、能力查询里的 guardian 模式、三个 Makefile 目标和 CI 里的五个步骤，约 2,000 行。`--locked-use` 现在报错并提示改用 `SKFIY_LOCKED_USE=direct`；没有开 direct 时，`locked_use_status` / `locked_use_end` 只说明锁屏模式没开。direct 模式不受影响。最后一版代码保留在标签 `guardian-experimental-2026-10`。本机没有装过 guardian（`/Library/Application Support/skfiy` 不存在），不需要卸载。
+- `art/luoxiaohei` 里的罗小黑贴图注明“仅本地使用、不随发布物对外分发”，而仓库是公开的，代码也早已不用它。经用户同意，从全部历史中删掉了它（`git filter-branch`，89 个提交、main、`codex/locked-computer-use-direct` 和存档标签全部改写并强制推送；改写前后每个分支只差这两个文件），本地副本留在 `art/`，已加入 `.gitignore`。所有提交号因此都变了；别处的旧克隆需要重新克隆或 `git fetch` 后 `git reset --hard origin/main`。GitHub 上按旧提交号仍可能访问到缓存，要彻底清除需联系 GitHub 支持。
+- 发布第一个 release [v0.6.0](https://github.com/Sskift/skfiy-next/releases/tag/v0.6.0)：通用二进制压缩包 2.6 MB 和 sha256。推送标签后 Release 流程编译、跑单元测试、用压缩包跑安装测试，再发布。在临时 HOME、只有系统 PATH 的环境里实际运行 `curl … | bash`：从 release 下载，12 秒装好，没有编译。
 
 ## 不在最上层的窗口与 RustDesk（2026-10-08）
 

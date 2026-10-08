@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 
 This:
 
-1. Downloads the prebuilt universal binary (Apple silicon and Intel) from the latest GitHub release and checks its sha256. When there is no release yet, it builds from source instead, which needs Apple's Command Line Tools (`xcode-select --install`, about 1.3 GB; full Xcode is not needed; the build takes about a minute).
+1. Downloads the prebuilt universal binary (Apple silicon and Intel, about 2.6 MB) from the latest GitHub release and checks its sha256. No developer tools are needed; it takes a few seconds. With `--from-source` it builds from source instead, which needs Apple's Command Line Tools (`xcode-select --install`, about 1.3 GB; full Xcode is not needed; the build takes about a minute).
 2. Installs it as `~/.local/bin/skfiy`. No `sudo`.
 3. Runs `skfiy setup`: writes the browser extension files and registers its native messaging host, registers skfiy with Claude Code (user scope) when the `claude` CLI is installed, checks permissions without prompting, and lists what is left for you. `skfiy setup` can run any number of times; it only fixes what is missing or out of date.
 

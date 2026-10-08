@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 
 这条命令会：
 
-1. 有 GitHub release 时下载预编译的通用二进制（Apple 芯片和 Intel 都能用，校验 sha256）；还没有 release 时自动改为从源码编译，这需要 Xcode Command Line Tools（`xcode-select --install`，约 1.3 GB，不需要完整的 Xcode；编译约 1 分钟）。
+1. 从最新的 GitHub release 下载预编译的通用二进制（Apple 芯片和 Intel 都能用，约 2.6 MB，校验 sha256），不需要任何开发工具，十几秒装好。加 `--from-source` 则从源码编译，这需要 Xcode Command Line Tools（`xcode-select --install`，约 1.3 GB，不需要完整的 Xcode；编译约 1 分钟）。
 2. 装到 `~/.local/bin/skfiy`，不需要 `sudo`。
 3. 运行 `skfiy setup`：写入浏览器插件文件、注册 native messaging；装了 `claude` 命令行时把 skfiy 注册到 Claude Code（用户级）；检查权限（只检查，不弹窗）；最后列出还剩哪几步要你手动做。`skfiy setup` 可以反复运行，只补缺的、改过时的，不会重复注册。
 
@@ -61,7 +61,6 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 | 每个调用都被拒绝 | 急停开着：`skfiy resume` 或按 ⌃⌥⌘. |
 | 更新后行为没变 | 重启 Claude Code 会话；插件文件更新过时在 `chrome://extensions` 点刷新 |
 | `skfiy: command not found` | 见上文 PATH 一段，或用完整路径 |
-| 不想装 Command Line Tools | 等有 release 后用上面的一键命令下载预编译版本 |
 
 ### 锁屏后继续操作（direct 模式）
 
