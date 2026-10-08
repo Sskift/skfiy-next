@@ -93,7 +93,7 @@ extension ComputerUse {
         guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return nil }
         let pid = app.processIdentifier
         let session = sessions[pid]
-        let window = session?.window.flatMap { windowID(of: $0) } ?? focusedWindowID(of: pid)
+        let window = session?.window.flatMap { windowID(of: $0) } ?? focusedWindowID(of: pid) ?? session?.windowID
         var signature = name
         var label: String?
         let index = (try? args.elementIndex()) ?? nil
@@ -133,16 +133,30 @@ extension ComputerUse {
             observation.windows[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
         if let id = target.window { observation.targetPresent = observation.windows[String(id)] != nil }
-        if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: nil) {
+        // The window the action was aimed at (an inspected one is not the
+        // app's focused window), read on its own.
+        let inspected = sessions[target.pid]?.window != nil
+        let query = inspected ? target.window.map(String.init) : nil
+        if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: query) {
             observation.text = snapshot.text
             observation.treeText = snapshot.body.joined(separator: "\n")
-            if wantText, snapshot.opaque, let region = appRegion(pid: target.pid, focusedWindow: snapshot.focusedWindowFrame),
-               let lines = try? await recognizeText(pid: target.pid, region: region) {
+            if wantText, snapshot.opaque, let region = snapshot.chosenWindow?.frame ?? appRegion(pid: target.pid, focusedWindow: snapshot.focusedWindowFrame),
+               let lines = try? await recognizeView(pid: target.pid, window: snapshot.chosenWindow, rect: region) {
                 observation.text += "\n" + lines.map(\.text).joined(separator: "\n")
             }
         }
-        let element = target.elementIndex.flatMap { sessions[target.pid]?.elements[safe: $0] } ?? appElement.element(kAXFocusedUIElementAttribute)
+        // The value of the element acted on, or else of the field typing went
+        // to; not of a field in another window that happens to have focus.
+        let inTarget = { (element: AXUIElement) -> Bool in
+            target.window == nil || self.containingWindow(of: element).flatMap(windowID(of:)) == target.window
+        }
+        let element = target.elementIndex.flatMap { sessions[target.pid]?.elements[safe: $0] }
+            ?? appElement.element(kAXFocusedUIElementAttribute).flatMap { inTarget($0) ? $0 : nil }
+            ?? typingTargets[target.pid].flatMap { inTarget($0) ? $0 : nil }
         observation.value = element?.string(kAXValueAttribute)
+        if chromiumWindowFrozen(app, window: target.window) {
+            observation.unobservable = "the window is completely covered by other windows, and Chromium does not update a covered window"
+        }
         return observation
     }
 

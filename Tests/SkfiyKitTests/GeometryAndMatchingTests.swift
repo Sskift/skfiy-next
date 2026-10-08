@@ -81,6 +81,19 @@ struct AppMatchingTests {
         #expect(matchApp("WeChat", in: [helper, wechat, other]) == .ambiguous([helper, wechat, other]))
     }
 
+    /// RustDesk runs `RustDesk --server` (accessory, no windows) next to its UI
+    /// process under the same bundle id; the UI process must win.
+    @Test func prefersTheRegularInstanceOfTheSameBundle() {
+        let server = AppRecord(name: "RustDesk", bundleID: "com.carriez.rustdesk", path: "/Applications/RustDesk.app", pid: 1199, isRegular: false)
+        let ui = AppRecord(name: "RustDesk", bundleID: "com.carriez.rustdesk", path: "/Applications/RustDesk.app", pid: 96984)
+        #expect(matchApp("RustDesk", in: [server, ui]) == .one(ui))
+        #expect(matchApp("com.carriez.rustdesk", in: [server, ui]) == .one(ui))
+        #expect(matchApp("/Applications/RustDesk.app", in: [server, ui]) == .one(ui))
+        // A frontmost instance still wins.
+        let frontServer = AppRecord(name: "RustDesk", bundleID: "com.carriez.rustdesk", pid: 1199, isFrontmost: true, isRegular: false)
+        #expect(matchApp("RustDesk", in: [ui, frontServer]) == .one(frontServer))
+    }
+
     @Test func recognizesTerminals() {
         #expect(isTerminal(bundleID: "com.mitchellh.ghostty"))
         #expect(isTerminal(bundleID: "com.apple.Terminal"))

@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>skfiy covered</title>
+<style>body { font: 20px -apple-system, sans-serif; margin: 16px; } #tall { height: 4000px; }</style>
+<!-- The page of scripts/test_covered_chromium.py. It reports its own state
+     (clicks, field value, scroll position, visibility, animation frames) to
+     scripts/compat_server.py, and shows a text the harness asks for later
+     (it polls /state?run=<run>-command), so the harness never needs skfiy to
+     know what the page did. -->
+<h1 id="clicks">Clicks: 0</h1>
+<button id="increment">Increment</button>
+<input id="input" aria-label="Covered input" placeholder="Covered input">
+<p id="later">Later: waiting</p>
+<div id="tall">Scroll space</div>
+<script>
+  const run = new URLSearchParams(location.search).get('run') || 'none';
+  const state = { run, clicks: 0, value: '', scrollY: 0, visibility: document.visibilityState, frames: 0, later: 'waiting' };
+  const report = (event) => {
+    state.scrollY = Math.round(window.scrollY);
+    state.visibility = document.visibilityState;
+    fetch('/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, state, time: Date.now() }) }).catch(() => {});
+  };
+  document.getElementById('increment').addEventListener('click', () => {
+    state.clicks += 1;
+    document.getElementById('clicks').textContent = 'Clicks: ' + state.clicks;
+    report('click');
+  });
+  document.getElementById('input').addEventListener('input', (event) => { state.value = event.target.value; report('input'); });
+  window.addEventListener('scroll', () => report('scroll'));
+  document.addEventListener('visibilitychange', () => report('visibility'));
+  const frame = () => { state.frames += 1; requestAnimationFrame(frame); };
+  requestAnimationFrame(frame);
+  setInterval(async () => {
+    try {
+      const command = await (await fetch('/state?run=' + run + '-command', { cache: 'no-store' })).json();
+      const later = command.state && command.state.later;
+      if (later && later !== state.later) {
+        state.later = later;
+        document.getElementById('later').textContent = 'Later: ' + later;
+      }
+    } catch (error) {}
+    report('tick');
+  }, 500);
+  report('load');
+</script>

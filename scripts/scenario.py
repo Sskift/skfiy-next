@@ -13,6 +13,7 @@ Nothing here locks or unlocks the Mac, activates an app, or touches the
 user's own windows; evidence goes to eval/results/<name>-<time>-<nonce>/.
 """
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -25,7 +26,8 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from smoke_locked import Client, Evidence, ROOT, require  # noqa: E402,F401
 
-BIN = Path('/tmp/skfiy-compat/bin')
+# SKFIY_TEST_BIN keeps a run's helper binaries apart from another run's.
+BIN = Path(os.environ.get('SKFIY_TEST_BIN', '/tmp/skfiy-compat/bin'))
 # Every helper binary the scripts build, by name: its source, or (source, Objective-C header).
 SOURCES = {'AXProbe': 'scripts/fixtures/AXProbe.swift', 'Launch': 'scripts/fixtures/Launch.swift',
            'Front': 'scripts/fixtures/Front.swift', 'WindowGuard': 'scripts/fixtures/WindowGuard.swift',
@@ -161,7 +163,7 @@ class Fixture:
 class Session:
     """One test run: evidence, the fixture, an MCP client in the mode matching the lock state."""
 
-    def __init__(self, name, direct=None, fixture=True, environment=None):
+    def __init__(self, name, direct=None, fixture=True, environment=None, window_guard=True):
         self.nonce = uuid.uuid4().hex[:10]
         self.session_at_start = probe('session')
         self.locked = self.session_at_start['locked']
@@ -172,6 +174,10 @@ class Session:
         self.direct = self.locked if direct is None else direct
         self.environment = {**({'SKFIY_LOCKED_USE': 'direct'} if self.direct else {}), 'SKFIY_SETTLE_SECONDS': '0.4', **(environment or {})}
         self.want_fixture = fixture
+        # The guard raises the front app's own top window (whatever app that is)
+        # when a test window gets on top; tests that check the order themselves go without
+        # (as does every test with SKFIY_TEST_WINDOW_GUARD=0).
+        self.window_guard = window_guard
         self.checks = []
         self.samples = []
         self.summary = {'name': name, 'nonce': self.nonce, 'mode': self.mode, 'direct': self.direct,
@@ -182,7 +188,7 @@ class Session:
         self.sampler = threading.Thread(target=self._sample, daemon=True)
         self.sampler.start()
         self.guard = None
-        if not self.locked:
+        if not self.locked and self.window_guard and os.environ.get('SKFIY_TEST_WINDOW_GUARD') != '0':
             self.guard_log = (self.directory / 'window-guard.jsonl').open('w')
             self.guard = subprocess.Popen([str(tool('WindowGuard')), f'SkfiyScenario-{self.nonce}', 'TextEdit', 'Preview',
                                            'Google Chrome for Testing', 'Electron'], stdout=self.guard_log, stderr=subprocess.DEVNULL)

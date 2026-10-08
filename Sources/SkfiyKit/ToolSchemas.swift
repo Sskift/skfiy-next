@@ -3,7 +3,7 @@
 enum ToolSchemas {
     private static let app: [String: Any] = [
         "type": "string",
-        "description": "App name, full app path, or unambiguous bundle identifier"
+        "description": "App name, full app path, unambiguous bundle identifier, or pid:N"
     ]
     private static let elementIndex: [String: Any] = [
         "type": "string",
@@ -94,7 +94,7 @@ enum ToolSchemas {
             "Get the state of an app's focused window: a screenshot plus its accessibility tree, where every element has an index. Launches the app in the background if it is not running. Call it before interacting with an app, and again whenever you need fresh element indices (after navigation, a dialog, or any larger UI change). Also shows the menu bar, open menus with their keyboard shortcuts, and the app's other windows. Never brings the app to the front: a hidden or minimized app gives no screenshot, but its elements still work.",
             properties: [
                 "app": app,
-                "window": ["type": "string", "description": "Optional window id (as shown in the state) or title (or part of it) to inspect instead of the focused window; it is not raised. Windows sharing a title need the id"],
+                "window": ["type": "string", "description": "Optional window id (as shown in the state) or title (or part of it) to inspect instead of the focused window; it is not raised, and actions then go to it. Windows sharing a title need the id"],
                 "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"],
                 "ocr": ["type": "boolean", "description": "Also list the text recognized in the screenshot, with x/y to click it. On by default for windows that publish no accessibility (custom-drawn apps such as WeChat); pass true for text drawn in a canvas or image elsewhere"],
                 "since": ["type": "string", "description": "The State version of an earlier get_app_state or wait_for of this app (e.g. \"v12\"): return only what changed since — lines changed, added or removed, windows opened or closed — keeping that look's element indices; \"unchanged\" without a screenshot when nothing changed. Falls back to the full state when the version is unknown or most of the window changed"]

@@ -476,6 +476,25 @@ func userMayHaveSwitched(since date: Date) -> Bool {
     return idle < Date().timeIntervalSince(date)
 }
 
+/// A mouse click since `date` with the pointer now on a window of `pid`:
+/// the user clicked into that app themselves.
+func userClicked(into pid: pid_t, since date: Date) -> Bool {
+    let kinds: [CGEventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+    let idle = kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? .infinity
+    guard idle < Date().timeIntervalSince(date), let mouse = CGEvent(source: nil)?.location else { return false }
+    let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+    for window in windows {
+        guard ((window[kCGWindowAlpha as String] as? Double) ?? 1) > 0.01,
+              let dictionary = window[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: dictionary), bounds.contains(mouse),
+              let owner = (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) else { continue }
+        if owner == pid { return true }
+        // Overlays (the Dock's full-display canvas, menus) are looked through.
+        if (window[kCGWindowLayer as String] as? Int ?? 0) == 0 { return false }
+    }
+    return false
+}
+
 /// Menus and panels of `pid` floating above normal windows.
 func overlayWindows(of pid: pid_t) -> [CGWindowID] {
     let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
@@ -535,11 +554,16 @@ final class FrontGuard: @unchecked Sendable {
     private let target: pid_t?
     private let started = Date()
 
+    private let onlyTarget: Bool
+
     /// `target` is the app being operated: it never gets to keep the front,
-    /// since the user is not working in it.
-    init(userApp: pid_t, target: pid_t?) {
+    /// since the user is not working in it. With `onlyTarget` (a tool that
+    /// sends no input, so nothing it does activates another app) any other
+    /// app coming forward is the user's doing, and is left there.
+    init(userApp: pid_t, target: pid_t?, onlyTarget: Bool = false) {
         self.userApp = userApp
         self.target = target
+        self.onlyTarget = onlyTarget
         Thread.detachNewThread { [self] in
             while isActive {
                 poll()
@@ -568,8 +592,12 @@ final class FrontGuard: @unchecked Sendable {
         guard !isScreenLocked(), !EmergencyStop.isStopped else { return }
         guard let front = SkyLight.frontProcessID() ?? frontmostProcessID(), front != userApp,
               front != FrontGrant.granted() else { return }
-        // Another app may be the user's own choice; the target app never is.
-        guard front == target || !userMayHaveSwitched(since: started),
+        // Another app may be the user's own choice. The target app is not,
+        // since skfiy acts on it, unless the user clicked into it during a
+        // tool that sends no input (they were working in it: RustDesk).
+        let restore = front == target ? !(onlyTarget && userClicked(into: front, since: started))
+                                      : !onlyTarget && !userMayHaveSwitched(since: started)
+        guard restore,
               let app = NSRunningApplication(processIdentifier: userApp), !app.isTerminated else { return }
         lock.lock()
         let allowed = handBacks < 3  // never fight an app that keeps activating

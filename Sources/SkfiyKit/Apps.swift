@@ -82,10 +82,13 @@ public func matchApp(_ query: String, in records: [AppRecord]) -> AppMatch {
             distinct.append(hit)
         }
         if distinct.count == 1 {
-            // Several instances of one app: prefer a running, frontmost one.
+            // Several instances of one app: prefer a running, frontmost one,
+            // then the regular (Dock) instance over a helper of the same
+            // bundle (RustDesk's `--server` process is an accessory copy).
             let best = hits.sorted { lhs, rhs in
                 if (lhs.pid != nil) != (rhs.pid != nil) { return lhs.pid != nil }
-                return lhs.isFrontmost && !rhs.isFrontmost
+                if lhs.isFrontmost != rhs.isFrontmost { return lhs.isFrontmost }
+                return lhs.isRegular && !rhs.isRegular
             }[0]
             return .one(best)
         }
@@ -96,6 +99,15 @@ public func matchApp(_ query: String, in records: [AppRecord]) -> AppMatch {
         return .ambiguous(distinct)
     }
     return .none
+}
+
+/// The process id in an app query of the form "pid:1234" (or "pid 1234").
+func parsePIDQuery(_ query: String) -> pid_t? {
+    let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
+    guard trimmed.hasPrefix("pid") else { return nil }
+    let rest = trimmed.dropFirst(3).drop { $0 == ":" || $0 == " " || $0 == "=" }
+    guard !rest.isEmpty, rest.allSatisfy(\.isNumber), let pid = pid_t(rest), pid > 0 else { return nil }
+    return pid
 }
 
 private func sameApp(_ lhs: AppRecord, _ rhs: AppRecord) -> Bool {
@@ -198,6 +210,13 @@ final class AppDirectory {
     }
 
     func resolve(_ query: String) throws -> Resolution {
+        // "pid:1234" names one process when an app runs as several (list_apps shows pids).
+        if let pid = parsePIDQuery(query) {
+            guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated, app.activationPolicy != .prohibited else {
+                throw ToolError("No app runs as pid \(pid). Call list_apps to see the running apps and their pids.")
+            }
+            return .running(app)
+        }
         let running = runningApps()
         switch matchApp(query, in: running) {
         case .one(let record):

@@ -104,8 +104,10 @@ extension ComputerUse {
         let chrome: Set<String> = ["AXButton", "AXStaticText"]
         let content = items.filter { !($0.candidate.frame.minY < bounds.minY + 30 && chrome.contains($0.candidate.role) && $0.candidate.label.count < 3) }
         var recognized = false
+        // A window the latest screenshot showed on its own is read on its own:
+        // a region would also show other windows of the app lying over it.
         if withText || content.count < 2, let region = appRegion(pid: pid, focusedWindow: bounds),
-           let lines = try? await recognizeText(pid: pid, region: region.intersection(bounds)) {
+           let lines = try? await recognizeView(pid: pid, window: session?.independent == true ? window : nil, rect: region.intersection(bounds)) {
             let ax = items.map(\.candidate)
             for line in lines {
                 let center = CGPoint(x: line.frame.midX, y: line.frame.midY)

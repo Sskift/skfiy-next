@@ -54,10 +54,11 @@ func directLockedActiveWindowIDs(pid: pid_t) async throws -> Set<CGWindowID> {
     return ids
 }
 
-/// Captures exactly the selected window, encoded for the model.
+/// Captures exactly the selected window, encoded for the model; with
+/// `children`, also what is attached to it (see captureDirectLockedImage).
 @MainActor
-func captureDirectLockedWindow(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> Screenshot {
-    let (image, geometry) = try await captureDirectLockedImage(window, maxScale: maxScale)
+func captureDirectLockedWindow(_ window: DirectLockedWindow, maxScale: Double = 1, children: Bool = false) async throws -> Screenshot {
+    let (image, geometry) = try await captureDirectLockedImage(window, maxScale: maxScale, children: children)
     return try encodeScreenshot(image, geometry: geometry)
 }
 
@@ -121,8 +122,14 @@ func resized(_ image: CGImage, width: Int, height: Int) -> CGImage? {
 /// Captures exactly the selected window, without switching desktops,
 /// unlocking the session, or falling back to a display capture. Fresh SCK
 /// objects and matching ownership are required for each screenshot.
+/// `modelLimits` keeps the image within what the model takes; without it
+/// (for zooming and text recognition) the window comes at `maxScale`.
+/// `children` draws the windows attached to it as well, within its frame:
+/// a sheet (a save or discard question, an alert) and child panels, as the
+/// user sees them on it. Without them a sheet an action opened is missing
+/// from the picture, while clicks there already go to the sheet.
 @MainActor
-func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1) async throws -> (CGImage, CaptureGeometry) {
+func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1, modelLimits: Bool = true, children: Bool = false) async throws -> (CGImage, CaptureGeometry) {
     try Task.checkCancellation()
     try directLockedCapturePermission()
     try await DisplayWake.require(for: window.frame)
@@ -140,7 +147,7 @@ func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1
         }
 
         let filter = SCContentFilter(desktopIndependentWindow: target)
-        let scale = captureScale(for: current.frame.size, maxScale: maxScale)
+        let scale = modelLimits ? captureScale(for: current.frame.size, maxScale: maxScale) : maxScale
         guard scale.isFinite, scale > 0 else {
             throw ToolError("The selected window has invalid screenshot dimensions.")
         }
@@ -155,7 +162,7 @@ func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1
         // No letterboxing: the returned image covers precisely the window
         // frame, with only the unavoidable subpixel rounding of output size.
         configuration.preservesAspectRatio = false
-        if #available(macOS 14.2, *) { configuration.includeChildWindows = false }
+        if #available(macOS 14.2, *) { configuration.includeChildWindows = children }
 
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         try Task.checkCancellation()
