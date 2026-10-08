@@ -58,6 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 | --- | --- |
 | 工具说缺少辅助功能或屏幕录制权限 | 授予运行 Claude Code 的应用（`skfiy doctor` 会写出它的名字），然后重启它和 Claude Code |
 | 浏览器工具说没有连接 | 运行 `skfiy setup`，再在 `chrome://extensions` 加载插件；Chrome 没有打开任何窗口时插件不运行 |
+| 工具列表里根本没有 `browser_*` | 还没有注册浏览器桥接：运行 `skfiy setup`，再重启 Claude Code 会话 |
 | 每个调用都被拒绝 | 急停开着：`skfiy resume` 或按 ⌃⌥⌘. |
 | 更新后行为没变 | 重启 Claude Code 会话；插件文件更新过时在 `chrome://extensions` 点刷新 |
 | `skfiy: command not found` | 见上文 PATH 一段，或用完整路径 |
@@ -112,7 +113,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `get_desktop_status` | 查看桌面锁定、锁屏模式和急停状态，不触发解锁；direct 模式下给出当前 MCP 会话是否启用、系统是否锁定及锁态是否已知 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
-浏览器插件连上后多出 14 个网页工具，按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
+浏览器插件连上后多出 14 个网页工具（只在注册过浏览器桥接、也就是 `skfiy setup` 写过 native messaging 宿主时列出：没装插件的人不必在每次请求里带上它们的定义），按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
 | --- | --- |

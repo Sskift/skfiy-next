@@ -32,9 +32,12 @@ public final class MCPServer {
     private var running: [String: Task<ToolResult, Never>] = [:]
     private var cancelled: Set<String> = []
 
-    public init(executor: ToolExecutor, write: @escaping (Data) -> Void = MCPServer.writeToStdout) {
+    /// The browser tools are left out when no browser can connect: users
+    /// without the extension do not carry their definitions in every request.
+    public init(executor: ToolExecutor, write: @escaping (Data) -> Void = MCPServer.writeToStdout,
+                browserTools: Bool = BrowserBridge.isRegistered) {
         self.executor = executor
-        self.tools = (ToolSchemas.all + ToolSchemas.browser).map(\.definition)
+        self.tools = (ToolSchemas.all + (browserTools ? ToolSchemas.browser : [])).map(\.definition)
         self.write = write
     }
 

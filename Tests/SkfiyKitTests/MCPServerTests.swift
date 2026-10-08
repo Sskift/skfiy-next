@@ -75,7 +75,7 @@ struct MCPServerTests {
     }
 
     @Test func listsEveryToolWithAnObjectSchema() async throws {
-        let server = MCPServer(executor: FakeExecutor(), write: { _ in })
+        let server = MCPServer(executor: FakeExecutor(), write: { _ in }, browserTools: true)
         let response = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": "a", "method": "tools/list"]))
         let tools = try #require((response["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         let names = tools.compactMap { $0["name"] as? String }
@@ -130,6 +130,31 @@ struct MCPServerTests {
             let size = try JSONSerialization.data(withJSONObject: tool.definition).count
             #expect(size <= 4096, "\(tool.name) is \(size) bytes")
         }
+    }
+
+    /// Without a browser bridge registered anywhere no browser can connect:
+    /// the browser tools stay out of tools/list, and tools/call does not know them.
+    @Test func browserToolsOnlyWhenABrowserCanConnect() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-registered-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let support = folder.appendingPathComponent("Application Support"), sockets = folder.appendingPathComponent("browsers")
+        try FileManager.default.createDirectory(at: support.appendingPathComponent("Google/Chrome"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sockets, withIntermediateDirectories: true)
+        #expect(!BrowserBridge.registered(support: support, sockets: sockets))
+        _ = try BrowserBridge.install(executable: "/bin/skfiy", support: support)
+        #expect(BrowserBridge.registered(support: support, sockets: sockets))
+        // A profile registered with --user-data-dir shows as its bridge's socket.
+        try FileManager.default.removeItem(at: support)
+        #expect(!BrowserBridge.registered(support: support, sockets: sockets))
+        FileManager.default.createFile(atPath: sockets.appendingPathComponent("4242.sock").path, contents: nil)
+        #expect(BrowserBridge.registered(support: support, sockets: sockets))
+
+        let server = MCPServer(executor: FakeExecutor(), write: { _ in }, browserTools: false)
+        let response = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": 1, "method": "tools/list"]))
+        let tools = try #require((response["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        #expect(tools.compactMap { $0["name"] as? String } == ToolSchemas.all.map(\.name))
+        let call = try #require(await server.respond(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "browser_tabs"]]))
+        #expect(call["error"] != nil)
     }
 
     @Test func toolCallReturnsTextAndImageContent() async throws {

@@ -58,6 +58,7 @@ Other MCP clients: command `~/.local/bin/skfiy` (full path), argument `mcp`.
 | --- | --- |
 | A tool says Accessibility or Screen Recording is missing | Grant it to the app that runs Claude Code (`skfiy doctor` names it), then restart that app and Claude Code |
 | Browser tools say no browser is connected | Run `skfiy setup`, then load the extension in `chrome://extensions`; Chrome with no window open has its extensions unloaded |
+| No `browser_*` tools at all | The browser bridge is not registered (they are only listed then): run `skfiy setup`, then restart the Claude Code session |
 | Every call is refused | The emergency stop is on: `skfiy resume` or press ⌃⌥⌘. |
 | Nothing changed after an update | Restart the Claude Code session; reload the extension if its files changed |
 | `skfiy: command not found` | See PATH above, or use the full path |
