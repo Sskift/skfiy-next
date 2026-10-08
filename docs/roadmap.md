@@ -515,3 +515,9 @@ Mac 解锁后，`scripts/unlocked_suites.txt` 里的 11 套测试全部在后台
 - 行数（`git diff --stat 1ebfbdf`，不含本节）：Sources +2,721/−2,615，净 +106，其中拆分新增的文件头约 50 行、工具特性标注约 40 行、新功能（不列网页工具、`skfiy tools`）约 30 行，删掉的重复代码约 30 行；Tests 净 +146。
 
 验证（只跑了不碰界面的测试，没有运行真实应用的套件）：`make test` 182 个单元测试全部通过（新增 7 个：各工具列表等于原来的内容、`browser_open` 的参数、`run_in_front` 的参数解析、`browser_wait` 的 found/settled、等待参数检查、是否列出网页工具、`skfiy tools` 的输出）；`make test-install` 72/72；`swift build -c release`；`.build/debug/skfiy call get_desktop_status` 读到“unlocked”。
+
+### 精简后的复测（2026-10-09 00:52–01:42，解锁）
+
+- 不开新窗口的套件（00:52–01:01，前台采样一直是用户的应用，只有 TextEdit 在 00:55:42 闪过一次不到 0.2 秒，被 `Launch` 送回）：smoke_textedit、smoke_fixture 17/17、前台确认（只测拒绝）通过；后台窗口 26/26、TextEdit 8/8；验证 13/13、TextEdit 6/6；窗口 9/9、TextEdit 4/4；定位 13/13、TextEdit 3/3；等待 15/15；放大 26/26；文字输入、光标 13/13 和 1/1；能力查询 21/21；compat 的 TextEdit 5/5、预览照旧弹出菜单被拒绝。单元测试 182 个，`make test-install` 72/72。
+- 用到 Chrome 的套件（01:31–01:42，用户空闲 90 秒后才开始）：能力查询（含浏览器）、等待 Chrome、放大 Chrome 9/9、定位 Chrome 10/10、下载 14/14、流程与恢复全部通过；被完全挡住的 Chromium 11/11；smoke_chromium、smoke_browser、bridge host 通过。`compat_baseline --mode background` 全部 30 项里：Electron 的点击、输入、滚动、弹出菜单失败，与 10-08 11:13 的基线相同（窗口被完全挡住时 Chromium 停止更新，见上文）；预览、Finder 的弹出菜单照旧被拒绝；TextEdit 的点击这次因 OCR 没认出“line 010”而失败，单独重跑 5/5 通过。
+- 没跑：锁屏套件（用户说先不做）；`smoke_foreground --accept`、`smoke_fixture --front`（要把应用调到前台，验证 `run_in_front` 的重构，需用户同意并离开时跑）；`test_rustdesk.py`（用户的 RustDesk 开着远程会话）。
