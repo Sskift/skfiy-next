@@ -11,7 +11,6 @@ progress at timeout and then cancelled, and only complete downloads ever
 handing out a path. The user's own downloads are not listed.
 """
 import hashlib
-import json
 from pathlib import Path
 import re
 import subprocess

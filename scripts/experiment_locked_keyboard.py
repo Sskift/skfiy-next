@@ -3,7 +3,7 @@
 macOS is locked. Which window receives a key posted to the process, and can
 anything available to skfiy tell that window in advance?
 
-    python3 scripts/experiment_locked_keyboard.py [--trials 12]
+    python3 scripts/experiment_locked_keyboard.py [--trials 12] [--allow-unlocked]
 
 Uses only the scenario app (two windows of one process). For each delivery
 variant (plain: posted to the process, as skfiy does; routed: with the
@@ -26,14 +26,6 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scenario import Fixture, ROOT, probe, tool, wait_until  # noqa: E402
 
-SOURCES = {'KeyboardProbe': 'scripts/fixtures/KeyboardProbe.swift'}
-
-
-def keyboard_probe():
-    import scenario
-    scenario.SOURCES.update(SOURCES)
-    return tool('KeyboardProbe')
-
 
 def run(binary, *args):
     return json.loads(subprocess.run([str(binary), *map(str, args)], capture_output=True, text=True, timeout=20, check=True).stdout)
@@ -47,7 +39,7 @@ def main():
     session = probe('session')
     if not session['locked'] and not args.allow_unlocked:
         raise SystemExit('The Mac is not locked; this experiment is about the locked state (or pass --allow-unlocked).')
-    kp = keyboard_probe()
+    kp = tool('KeyboardProbe')
     nonce = uuid.uuid4().hex[:10]
     mode = 'locked' if session['locked'] else 'unlocked'
     directory = ROOT / 'eval/results' / f'locked-keyboard-{mode}-{time.strftime("%Y%m%d-%H%M%S")}-{nonce}'
@@ -63,7 +55,6 @@ def main():
         windows = {w['title']: w['number'] for w in fixture.state()['windows']}
         main_title = f'Scenario {nonce}'
         titles = [main_title, extra]
-        counter = 0
         for variant in ('plain', 'routed', 'focus', 'focus-routed'):
             for trial in range(args.trials):
                 target = titles[trial % 2]
@@ -75,7 +66,6 @@ def main():
                 truth_key = [w['title'] for w in state['windows'] if w['key']]
                 signals = run(kp, 'signals', fixture.pid)
                 before = dict(state['keys'])
-                counter += 1
                 sent = run(kp, 'send', fixture.pid, variant, windows[target], 'k')
                 time.sleep(0.3)
                 after = fixture.state()

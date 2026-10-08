@@ -13,10 +13,14 @@ choosing from a context menu.
 """
 import json
 import os
+from pathlib import Path
 import plistlib
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scenario import probe  # noqa: E402
 
 FRONT = "--front" in sys.argv
 ARGS = [arg for arg in sys.argv[1:] if arg != "--front"]
@@ -66,11 +70,9 @@ class Client:
 
 
 def idle_seconds():
-    output = subprocess.run(["ioreg", "-c", "IOHIDSystem", "-d", "4"], capture_output=True, text=True).stdout
-    for line in output.splitlines():
-        if "HIDIdleTime" in line:
-            return int(line.split("=")[-1]) / 1e9
-    return 0
+    # The user's own keys, clicks, moves and scrolls: IOHIDSystem's HIDIdleTime
+    # is reset by skfiy's mouse events too.
+    return probe("session")["idleSeconds"]
 
 
 def frontmost():
@@ -232,7 +234,7 @@ def main():
         # confirmation is checked against the app.
         def hand_over():
             answers = []
-            for asker, label in ((client, "cannot ask"), (Client(can_ask=True), "declined"), (Client(can_ask=True, approve=True), "done")):
+            for asker in (client, Client(can_ask=True), Client(can_ask=True, approve=True)):
                 try:
                     out = asker.call("hand_over", message="Sign in (smoke test)", app=APP, expect="skfiy fixture")
                     answers.append("done, checked" if out.startswith('The user says it is done. "skfiy fixture" appeared') else out[:60])

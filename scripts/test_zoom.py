@@ -1,38 +1,26 @@
 #!/usr/bin/env python3
 """zoom against the scenario app, in whatever state the Mac is in:
 
-    python3 scripts/test_zoom.py .build/debug/skfiy
+    python3 scripts/test_zoom.py .build/debug/skfiy [--chrome]
 
 Tiny text becomes readable (zoom's own OCR, and an independent OCR of the
 zoom image); at scales 1–4 a 10×10 pt target found in the zoom image is hit
 by clicking with zoom_id, and the printed formula agrees; a moved or resized
 window, a newer screenshot, or (while locked) a screenshot older than 30 s
-make zoom and zoom coordinates refuse, without sending anything.
+make zoom and zoom coordinates refuse, without sending anything. With
+--chrome, also fine print on a page in Chrome for Testing (running already).
 """
-import json
 import random
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, main_binary, probe, tool  # noqa: E402
+from scenario import Session, canvas_target, geometry, main_binary, ocr_lines, probe, to_pixels  # noqa: E402
 
-SHOT = re.compile(r'Screenshot: (\d+)×(\d+) px showing screen region x=(-?[\d.]+) y=(-?[\d.]+) w=([\d.]+) h=([\d.]+)')
 NUMBER = r'(-?\d+(?:\.\d+)?)'
 FORMULA = re.compile(rf'screenshot x = {NUMBER} \+ zoom_x / {NUMBER}, y = {NUMBER} \+ zoom_y / {NUMBER}')
-
-
-def geometry(text):
-    m = SHOT.search(text)
-    width, height, x, y, w, h = (float(v) for v in m.groups())
-    return {'x': x, 'y': y, 'sx': width / w, 'sy': height / h, 'width': width, 'height': height}
-
-
-def to_pixels(g, point):
-    return ((point[0] - g['x']) * g['sx'], (point[1] - g['y']) * g['sy'])
 
 
 def readable_code(length):
@@ -52,7 +40,6 @@ def main():
         g = geometry(state['text'])
         fixture = s.fixture.state()
         canvas = fixture['canvas']
-        before_clicks = fixture['counters'].get('canvas', 0)
         tiny_lines = [line for line in state['text'].splitlines() if 'tiny' in line.lower()]
         s.check('tiny text in the whole-window OCR (informational)', True, f"lines with 'tiny': {tiny_lines[:2]}; code read: {any(code in l for l in tiny_lines)}")
 
@@ -70,8 +57,7 @@ def main():
         s.check('7 pt text read exactly in the zoom', read[7] == (True, True), read)
 
         # 2. Coordinates at several scales: find the red target in the zoom, click it there.
-        target_center = (canvas['x'] + 235, canvas['y'] + 25)   # canvas is flipped: target at (230, 20, 10, 10)
-        target_pixel = to_pixels(g, target_center)
+        target_center = canvas_target(canvas)
         for scale in (1, 2, 3, 4):
             state = s.call('get_app_state', app=app, ocr=False)
             g = geometry(state['text'])
@@ -130,22 +116,19 @@ def main():
 
 def chrome(s):
     """A real app: 7 px text on the compat page in Chrome for Testing's front tab."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from compat_baseline import ensure_server, PORT
-    pids = subprocess.run(['pgrep', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'],
-                          capture_output=True, text=True).stdout.split()
-    if not s.check('Chrome for Testing running', pids, ''):
+    from compat_baseline import PORT, chrome_pid, ensure_server
+    pid = chrome_pid()
+    if not s.check('Chrome for Testing running', pid, ''):
         return
     ensure_server()
-    browser = pids[0]
+    browser = str(pid)
     tabs = s.call('browser_tabs', browser=browser)
     front = re.search(r'tab (\d+) \[(?:front tab of its window|shown)\]', tabs['text'])
     run = readable_code(8)
     s.call('browser_open', browser=browser, tab_id=int(front[1]), url=f'http://127.0.0.1:{PORT}/compat.html?run={run}')
     app = 'Google Chrome for Testing'
     state = s.call('get_app_state', app=app, ocr=True)
-    heading = next(((label, x, y) for label, x, y in __import__('scenario').ocr_lines(state['text']) if 'COMPAT PAGE' in label), None)
-    fine_in_state = any(run in line and 'Fine' in line for line in state['text'].splitlines())
+    heading = next(((label, x, y) for label, x, y in ocr_lines(state['text']) if 'COMPAT PAGE' in label), None)
     s.check('Chrome: heading located in the whole screenshot', heading, state['text'][:200])
     g = geometry(state['text'])
     width = min(g['width'] - 1, 520)

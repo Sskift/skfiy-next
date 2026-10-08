@@ -2,13 +2,15 @@
 """Action outcome verification (expect) against the scenario app, in whatever
 state the Mac is in:
 
-    python3 scripts/test_verify.py .build/debug/skfiy
+    python3 scripts/test_verify.py .build/debug/skfiy [--textedit]
 
 A real success is verified; a click that does nothing is no_effect; another
 change is timeout; the window closing or another opening is target_changed;
 window_opened / window_closed are verified; failures bring the current state;
 an unverified Submit is not repeated blindly (refused until the state is
 looked at, and then allowed), with the app's own submission count as proof.
+With --textedit, also typing, a key without effect, scrolling and closing in
+a TextEdit document.
 """
 import re
 import sys

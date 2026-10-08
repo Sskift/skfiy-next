@@ -16,13 +16,11 @@ import threading
 import time
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else ".build/debug/skfiy"
-FRONT = None
 # This test's own emergency-stop flag, so stopping it never stops the user's skfiy.
 STOP_ENV = {**os.environ, "SKFIY_STOP_FILE": f"/tmp/skfiy-smoke-stop-{os.getpid()}"}
 # And its own action log, never the user's.
 ACTION_LOG = f"/tmp/skfiy-smoke-actions-{os.getpid()}.jsonl"
 STOP_ENV["SKFIY_ACTION_LOG"] = ACTION_LOG
-BEFORE_CALL = ""
 APP = "TextEdit"
 
 
@@ -54,8 +52,7 @@ class Client:
         self.proc.stdin.flush()
 
     def call(self, tool, expect_error=False, **arguments):
-        global BEFORE_CALL
-        BEFORE_CALL = frontmost()
+        before = frontmost()
         started = time.time()
         result = self.request("tools/call", {"name": tool, "arguments": {"app": APP, **arguments}})
         text = result["content"][0]["text"]
@@ -63,7 +60,7 @@ class Client:
         elapsed = time.time() - started
         status = "error" if result["isError"] else "ok"
         print(f"  {tool}({', '.join(f'{k}={v!r}' for k, v in arguments.items())}) -> {status} in {elapsed:.2f}s, {len(images)} image(s)")
-        if "TextEdit" not in BEFORE_CALL and "TextEdit" in frontmost():
+        if "TextEdit" not in before and "TextEdit" in frontmost():
             raise AssertionError(f"{tool} brought TextEdit to the front")
         if result["isError"] != expect_error:
             raise AssertionError(f"{tool} returned isError={result['isError']}: {text}")
@@ -90,10 +87,6 @@ def text_value(tree):
             match = re.search(r'value="((?:[^"\\]|\\.)*)"', line)
             return json.loads('"' + match.group(1) + '"') if match else ""
     raise AssertionError("no TextArea in tree")
-
-
-def scroll_area_text(tree):
-    return find(tree, r"\] TextArea")
 
 
 def vscroll(tree):
@@ -126,9 +119,7 @@ def main():
     if running:
         sys.exit("TextEdit is running; quit it first so no real document is touched.")
 
-    global FRONT
-    FRONT = frontmost()
-    print(f"frontmost app at start: {FRONT}")
+    print(f"frontmost app at start: {frontmost()}")
     client = Client(BINARY)
     try:
         info = client.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}})
@@ -243,7 +234,7 @@ def main():
         # A pixel click in the text area moves the caret (hit-tested through
         # accessibility): park the caret at the start, click below the text,
         # and the typed character must land at the end.
-        area = scroll_area_text(state)
+        area = find(state, r"\] TextArea")
         client.call("set_value", element_index=area, value="alpha\nbeta\ngamma")
         client.call("select_text", element_index=area, text="alpha", selection="cursor_before")
         # Screen capture occasionally stalls system-wide for up to a minute;

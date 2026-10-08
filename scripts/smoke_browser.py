@@ -186,7 +186,7 @@ def main():
     def attach():
         result = act("browser_upload", index=index(page, r'file "Attachment"'), path=upload)
         return result + f" | asked={len(client.asked) - asked_before}"
-    case("upload a file after approval", attach, rf"^file skfiy-upload-\d+\.txt 13 bytes: hello upload( untrusted)? \| asked=1$")
+    case("upload a file after approval", attach, r"^file skfiy-upload-\d+\.txt 13 bytes: hello upload( untrusted)? \| asked=1$")
     os.remove(upload)
 
     # Hover menus open in the background tab; their items can then be clicked.

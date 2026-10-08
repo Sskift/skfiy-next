@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, capabilities, main_binary, probe, wait_until  # noqa: E402
+from compat_baseline import chrome_pid  # noqa: E402
+from scenario import Session, capabilities, main_binary, tool, wait_until  # noqa: E402
 
 CFT = 'Google Chrome for Testing'
 
@@ -25,7 +26,7 @@ def channel(report, name):
 
 
 def main():
-    binary = main_binary()
+    main_binary()
     browser = '--browser' in sys.argv
     with Session('capabilities') as s:
         app = s.app
@@ -50,7 +51,7 @@ def main():
                     channel(aged, 'pointer')['limits'])
         else:
             s.check('ax available', channel(first, 'ax')['available'], channel(first, 'ax')['detail'])
-            s.check('unlocked tools include element actions', {'set_value', 'click', 'run_in_front'} & set(first['tools']) >= {'set_value', 'click'}, first['tools'])
+            s.check('unlocked tools include element actions', {'set_value', 'click'} <= set(first['tools']), first['tools'])
 
         s.fixture.command('open_window', title=f'Scenario extra {s.nonce}')
         time.sleep(0.5)
@@ -126,14 +127,14 @@ def main():
 
 def check_browser(s):
     """Chrome for Testing's browser channel follows its extension connection."""
-    pids = subprocess.run(['pgrep', '-f', f'{CFT}.app/Contents/MacOS/{CFT}'], capture_output=True, text=True).stdout.split()
-    if not pids:
+    pid = chrome_pid()
+    if not pid:
         s.check('browser: Chrome for Testing running', False, 'start it with scripts/compat_baseline.py --case chrome first')
         return
     connected = capabilities(s.call('get_app_capabilities', app=CFT))
     s.check('browser channel available while connected', channel(connected, 'browser')['available'], channel(connected, 'browser')['detail'])
-    command = subprocess.run(['ps', '-o', 'command=', '-p', pids[0]], capture_output=True, text=True).stdout.strip()
-    subprocess.run(['kill', '-TERM', pids[0]])
+    command = subprocess.run(['ps', '-o', 'command=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+    subprocess.run(['kill', '-TERM', str(pid)])
     def browser_available():
         result = s.call('get_app_capabilities', app=CFT)
         # Chrome for Testing is not in /Applications: once it quits it is no app at all.
@@ -144,7 +145,7 @@ def check_browser(s):
         return
     app = command.split('/Contents/MacOS/')[0]
     arguments = [part for part in command.split(' ') if part.startswith('--')]
-    subprocess.run([str(Path('/tmp/skfiy-compat/bin/Launch')), app, *arguments], capture_output=True, timeout=30)
+    subprocess.run([str(tool('Launch')), app, *arguments], capture_output=True, timeout=30)
     back = wait_until(browser_available, timeout=60, interval=1)
     s.check('browser channel back after reconnecting', back, '')
 

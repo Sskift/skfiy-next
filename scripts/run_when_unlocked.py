@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run_when_locked import ROOT, one_at_a_time, session  # noqa: E402
+from run_when_locked import ROOT, one_at_a_time, read_suites, session  # noqa: E402
 
 
 def main():
@@ -30,8 +30,7 @@ def main():
     log = ROOT / 'eval/results/unlocked-runs.jsonl'
     snapshot = Path('/tmp/skfiy-compat/bin/skfiy-unlocked-run')
     snapshot.parent.mkdir(parents=True, exist_ok=True)
-    suites = [line.strip() for line in args.suites.read_text().splitlines()
-              if line.strip() and not line.startswith('#')]
+    suites = read_suites(args.suites)
     print(f'{len(suites)} suite(s); waiting for an unlocked, idle Mac', flush=True)
     for command in suites:
         while True:

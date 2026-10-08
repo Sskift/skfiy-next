@@ -37,11 +37,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Session, main_binary, ocr_lines, probe, tool, wait_until  # noqa: E402
-
-SHOT = re.compile(r'Screenshot: (\d+)×(\d+) px showing screen region x=(-?[\d.]+) y=(-?[\d.]+) w=([\d.]+) h=([\d.]+)')
-NUMBER = r'(-?\d+(?:\.\d+)?)'
-FORMULA = re.compile(rf'screenshot x = {NUMBER} \+ zoom_x / {NUMBER}, y = {NUMBER} \+ zoom_y / {NUMBER}')
+from scenario import Session, canvas_target, geometry, main_binary, ocr_lines, probe, to_pixels, tool, wait_until  # noqa: E402
 
 
 class VirtualDisplay:
@@ -65,18 +61,6 @@ class VirtualDisplay:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
-
-
-def geometry(text):
-    m = SHOT.search(text)
-    if not m:
-        return None
-    width, height, x, y, w, h = (float(v) for v in m.groups())
-    return {'x': x, 'y': y, 'sx': width / w, 'sy': height / h}
-
-
-def to_pixels(g, point):
-    return round((point[0] - g['x']) * g['sx'], 1), round((point[1] - g['y']) * g['sy'], 1)
 
 
 def window_frame(s):
@@ -108,9 +92,10 @@ def click_counts(s, name, **arguments):
     return result, s.fixture.wait(lambda st: st['counters'].get(name, 0) > before, timeout=4)
 
 
-def target_center(s):
-    canvas = s.fixture.state()['canvas']
-    return canvas['x'] + 235, canvas['y'] + 25   # the canvas is flipped: target at (230, 20, 10, 10)
+def target_pixels(s, g):
+    """The red target's centre in pixels of screenshot g, to 0.1 px."""
+    x, y = to_pixels(g, canvas_target(s.fixture.state()['canvas']))
+    return round(x, 1), round(y, 1)
 
 
 def main():
@@ -118,7 +103,7 @@ def main():
     parser.add_argument('binary')
     parser.add_argument('--allow-unlocked', action='store_true')
     args = parser.parse_args()
-    main_binary()
+    main_binary(args.binary)
     state = probe('session')
     if not state['locked'] and not args.allow_unlocked:
         print('skipped: the Mac is not locked (a virtual display would change the user\'s screen space; see --allow-unlocked)')
@@ -151,7 +136,7 @@ def main():
                 result, pressed = click_counts(s, 'apply', x=apply[0][1], y=apply[0][2])
                 s.check('click at OCR coordinates presses Apply there', not result['is_error'] and pressed, result['text'][:160])
             if g:
-                x, y = to_pixels(g, target_center(s))
+                x, y = target_pixels(s, g)
                 result, hit = click_counts(s, 'target', x=x, y=y)
                 last = (s.fixture.state()['canvasClicks'] or [{}])[-1]
                 s.check('screenshot coordinates hit the 10×10 pt target on the left display', not result['is_error'] and hit,
@@ -181,7 +166,7 @@ def main():
             g = geometry(state['text'])
             s.check('screenshot on the right display', g and g['x'] >= b['x'] - 1, state['text'][:240])
             if g:
-                x, y = to_pixels(g, target_center(s))
+                x, y = target_pixels(s, g)
                 result, hit = click_counts(s, 'target', x=x, y=y)
                 s.check('screenshot coordinates hit the target on the right display', not result['is_error'] and hit, result['text'][:160])
                 zoomed = s.call('zoom', app=app, scale=2, ocr=False, x=round(x - 24, 1), y=round(y - 18, 1), width=48, height=36)

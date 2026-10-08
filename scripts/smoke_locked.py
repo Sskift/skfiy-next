@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Shared fixture, evidence and MCP helpers for direct locked-use acceptance.
+"""Shared fixture, evidence and MCP helpers for direct locked-use acceptance;
+its Client, Evidence and require are also the MCP client and evidence log of
+scenario.py and compat_baseline.py.
 
 This is a support module. Run smoke_locked_direct.py or
 smoke_locked_direct_multiwindow.py for direct-mode acceptance; the separate
@@ -175,9 +177,6 @@ class Client:
         if not allow_error:
             require(not result.get("isError"), f"{tool}: {text}")
         return {"text": text, "images": images, "is_error": bool(result.get("isError"))}
-
-    def status(self, timeout=25):
-        return json.loads(self.call("locked_use_status", rpc_timeout=timeout)["text"])
 
     def close(self):
         if self.proc.poll() is None:

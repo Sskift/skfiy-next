@@ -13,7 +13,6 @@ Any observed unlock/unknown state after the confirmed lock invalidates the run.
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import plistlib
 import re

@@ -1,5 +1,16 @@
-// Standalone diagnostic only. Every input/capture targets a dedicated fixture.
+// Standalone diagnostic only (scripts/diagnose_locked_direct.py). Every
+// input/capture targets a dedicated fixture (scripts/fixtures/LockedFixture.swift).
 // No unlock action, authorization request, authdb write or product-gate change.
+//
+//   LockedDirectProbe sample | watch    the OS lock state, once or every 50 ms
+//   LockedDirectProbe lock              asks macOS to lock now and waits until it is
+//   LockedDirectProbe <op> STATE EXECUTABLE NONCE [VALUE | OUT.png]
+//     ax-read          the fixture's nonce field, read through accessibility
+//     ax-write-press   VALUE set into that field and Commit pressed, through accessibility
+//     key | mouse      a letter, or a click on its canvas, posted to the fixture's pid
+//     capture          its window captured (ScreenCaptureKit) to OUT.png, and OCR
+//   STATE is the fixture's state file, EXECUTABLE its binary, NONCE the run's; any
+//   other target is refused. Prints one JSON object per line.
 import AppKit
 import ApplicationServices
 import Darwin

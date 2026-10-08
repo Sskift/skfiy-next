@@ -389,7 +389,7 @@ async function act(params) {
   if (params.trusted && frameId !== 0) throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
   const inFrame = { ...params, index: local };
   if (params.action === 'hover') inFrame.css = await foreignStyles(tab.id, frameId);
-  const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [inFrame], frameId);
+  const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
   if (result && result.openInBackground) {
     await openTab({ url: result.openInBackground });
     result.message += ' (opened in a new background tab in the "skfiy" group)';
@@ -440,6 +440,11 @@ async function withDebugger(tabId, body) {
   }
 }
 
+// Key names as skfiy takes them -> KeyboardEvent keys. pageAction gets them as an argument.
+const KEY_ALIASES = { return: 'Enter', enter: 'Enter', esc: 'Escape', escape: 'Escape', tab: 'Tab', backspace: 'Backspace',
+  delete: 'Delete', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', space: ' ',
+  page_up: 'PageUp', page_down: 'PageDown', home: 'Home', end: 'End' };
+
 const CDP_KEYS = {
   Enter: [13, '\r'], Tab: [9, ''], Backspace: [8, ''], Delete: [46, ''], Escape: [27, ''], ' ': [32, ' '],
   ArrowLeft: [37, ''], ArrowUp: [38, ''], ArrowRight: [39, ''], ArrowDown: [40, ''],
@@ -452,10 +457,7 @@ async function cdpKey(send, combo) {
   const mods = new Set(parts.map((p) => p.toLowerCase()));
   const modifiers = (mods.has('alt') || mods.has('option') ? 1 : 0) | (mods.has('ctrl') || mods.has('control') ? 2 : 0)
     | (mods.has('cmd') || mods.has('command') || mods.has('super') || mods.has('meta') ? 4 : 0) | (mods.has('shift') ? 8 : 0);
-  const aliases = { return: 'Enter', enter: 'Enter', esc: 'Escape', escape: 'Escape', tab: 'Tab', backspace: 'Backspace',
-    delete: 'Delete', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', space: ' ',
-    page_up: 'PageUp', page_down: 'PageDown', home: 'Home', end: 'End' };
-  const key = aliases[raw.toLowerCase()] || raw;
+  const key = KEY_ALIASES[raw.toLowerCase()] || raw;
   const [code, named] = CDP_KEYS[key] || [key.toUpperCase().charCodeAt(0), key];
   const text = modifiers & 6 ? '' : named;
   await send('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, windowsVirtualKeyCode: code, modifiers, text });
@@ -497,7 +499,8 @@ async function trustedAct(tabId, params) {
 }
 
 // ------------------------------------------------ injected page functions
-// Both run in the extension's isolated world of the page. They must be
+// pageSnapshot and pageAction run in the extension's isolated world of the
+// page, installDialogHooks (below) in the page's own. Each must be
 // self-contained: executeScript serializes only the function body.
 
 function pageSnapshot(maxChars, locate) {
@@ -620,9 +623,7 @@ function pageSnapshot(maxChars, locate) {
   };
   const describe = (el, index) => {
     const tag = el.tagName.toLowerCase();
-    const role = el.getAttribute('role');
-    let kind = role || (tag === 'input' ? (el.type || 'text') : tag === 'a' ? 'link' : tag);
-    if (el.isContentEditable && tag !== 'input' && tag !== 'textarea') kind = 'editable';
+    const kind = kindOf(el);
     const parts = [`[${index}] ${kind}`];
     const label = clip(labelOf(el), 100);
     if (label) parts.push(JSON.stringify(label));
@@ -725,7 +726,7 @@ function pageSnapshot(maxChars, locate) {
   };
 }
 
-function pageAction(params) {
+function pageAction(params, keyAliases = {}) {
   const state = globalThis.__skfiy || { elements: [] };
   const { action } = params;
   // How the page's next confirm() or prompt() is answered (see installDialogHooks).
@@ -842,8 +843,7 @@ function pageAction(params) {
         for (let n = node; n; n = n.parentElement || (n.parentNode && n.parentNode.host) || null) list.push(n);
         return list;
       };
-      const fire = (target, type, bubbles) => target.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type,
-        { bubbles, cancelable: true, composed: true, view: window, pointerId: 1, pointerType: 'mouse', isPrimary: true, ...at }));
+      const fire = (target, type, bubbles) => pointer(target, type, { ...at, bubbles });
       const before = state.hovered && state.hovered.isConnected ? state.hovered : null;
       const left = before ? chain(before) : [];
       const entered = chain(el);
@@ -864,9 +864,10 @@ function pageAction(params) {
     }
     case 'locate': {
       const el = pick();
-      if (!el) throw new Error('index (or x and y) is required');
+      if (!el) throw new Error('index is required');
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-      return center(el).clientX !== undefined ? { x: center(el).clientX, y: center(el).clientY } : null;
+      const { clientX: x, clientY: y } = center(el);
+      return { x, y };
     }
     case 'focus': {
       const el = pick() || document.activeElement;
@@ -888,13 +889,9 @@ function pageAction(params) {
         const target = document.elementFromPoint(Number(params.x), Number(params.y));
         if (!target) throw new Error('nothing at that point of the viewport');
         const at = { clientX: Number(params.x), clientY: Number(params.y) };
-        for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown']) {
-          target.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type, { bubbles: true, cancelable: true, composed: true, view: window, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true, ...at }));
-        }
+        for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown']) pointer(target, type, at);
         if (typeof target.focus === 'function') target.focus({ preventScroll: true });
-        for (const type of ['pointerup', 'mouseup', 'click']) {
-          target.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type, { bubbles: true, cancelable: true, composed: true, view: window, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true, ...at }));
-        }
+        for (const type of ['pointerup', 'mouseup', 'click']) pointer(target, type, at);
         return { message: `Clicked at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${target.tagName.toLowerCase()}>` };
       }
       const el = pick();
@@ -963,10 +960,7 @@ function pageAction(params) {
         altKey: mods.has('alt') || mods.has('option'),
         shiftKey: mods.has('shift')
       };
-      const aliases = { return: 'Enter', enter: 'Enter', esc: 'Escape', escape: 'Escape', tab: 'Tab', backspace: 'Backspace',
-        delete: 'Delete', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', space: ' ',
-        page_up: 'PageUp', page_down: 'PageDown', home: 'Home', end: 'End' };
-      const keyName = aliases[name.toLowerCase()] || name;
+      const keyName = keyAliases[name.toLowerCase()] || name;
       const { proceed } = key(target, keyName, { ...init, code: keyName.length === 1 ? `Key${keyName.toUpperCase()}` : keyName });
       // Default actions that synthetic key events do not perform by themselves.
       if (proceed && !init.metaKey && !init.ctrlKey) {
@@ -1016,7 +1010,7 @@ function pageAction(params) {
       const el = pick();
       if (!el || el.tagName !== 'INPUT' || el.type !== 'file') throw new Error(`element ${params.index} is not a file input`);
       const encoded = (state.uploads || {})[params.token] || '';
-      delete state.uploads[params.token];
+      if (state.uploads) delete state.uploads[params.token];
       const binary = atob(encoded);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);

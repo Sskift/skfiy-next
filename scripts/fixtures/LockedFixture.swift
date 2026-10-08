@@ -1,6 +1,9 @@
-// A dedicated app for scripts/smoke_locked.py. It never locks or unlocks the
-// Mac. Its only output is a state file and an append-only event journal in the
-// caller's temporary directory. Run it with:
+// A dedicated app for direct locked use: built by smoke_locked.build_helpers
+// for scripts/smoke_locked_direct.py and smoke_locked_direct_multiwindow.py
+// (which patches three of its lines by exact text into a two-window variant;
+// keep them in step), and by diagnose_locked_direct.py. It never locks or
+// unlocks the Mac. Its only output is a state file and an append-only event
+// journal in the caller's temporary directory. Run it with:
 //   LockedFixture --journal /absolute/path/state.json --nonce RUN_NONCE
 // The companion journal is state.json.jsonl. The fixture exits after ten
 // minutes unless --lifetime SECONDS is supplied.

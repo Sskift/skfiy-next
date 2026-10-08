@@ -19,8 +19,9 @@ import subprocess
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parent.parent
-PROBE = Path('/tmp/skfiy-compat/bin/AXProbe')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scenario import ROOT, probe  # noqa: E402
+
 SUITE_LOCK = Path('/tmp/skfiy-compat/suite.lock')
 
 
@@ -34,10 +35,12 @@ def one_at_a_time():
 
 
 def session():
-    if not PROBE.exists():
-        PROBE.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(['/usr/bin/swiftc', '-O', str(ROOT / 'scripts/fixtures/AXProbe.swift'), '-o', str(PROBE)], check=True)
-    return json.loads(subprocess.run([str(PROBE), 'session'], capture_output=True, text=True, timeout=10).stdout)
+    return probe('session')
+
+
+def read_suites(path):
+    """The commands of a suite list: one per line; blank lines and # comments skipped."""
+    return [line.strip() for line in path.read_text().splitlines() if line.strip() and not line.startswith('#')]
 
 
 def main():
@@ -64,8 +67,7 @@ def main():
         snapshot = Path('/tmp/skfiy-compat/bin/skfiy-locked-run')
         snapshot.unlink(missing_ok=True)
         shutil.copy2(args.binary, snapshot)
-        suites = [line.strip() for line in args.suites.read_text().splitlines()
-                  if line.strip() and not line.startswith('#')]
+        suites = read_suites(args.suites)
         print(f'locked: running {len(suites)} suite(s)', flush=True)
         for command in suites:
             if not session()['locked']:

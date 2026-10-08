@@ -184,7 +184,7 @@ def textedit_flow(flows, browser):
         print('  skipped: TextEdit is running (maybe with the user\'s documents)')
         return
     try:
-        with session('flow-textedit-1', flows, None) as s:
+        with session('flow-textedit-1', flows) as s:
             if s.locked:
                 s.check('TextEdit flow needs the Mac unlocked (open_file, save_document)', True, 'skipped while locked')
                 return
@@ -202,7 +202,7 @@ def textedit_flow(flows, browser):
             recorded = agent.record('open', 'done', window)
             s.check('TextEdit: the opened document is recorded by its window', not opened['is_error'] and not recorded['is_error'], recorded['text'][:200])
             path = agent.memory['path']
-        with session('flow-textedit-2', flows, None) as s:
+        with session('flow-textedit-2', flows) as s:
             agent = Agent(s, browser, flow, run, file_name)
             result, data = agent.status()
             s.check('TextEdit: after reconnecting, the window still holds; next is process', data['next'].startswith('3.') and not data['replan'],
@@ -227,7 +227,7 @@ def textedit_flow(flows, browser):
         subprocess.run(['pkill', '-x', 'TextEdit'])
 
 
-def session(name, flows, binary):
+def session(name, flows):
     return Session(name, fixture=False, environment={'SKFIY_FLOW_DIR': str(flows), 'SKFIY_UPLOAD_WITHOUT_ASKING': '1'})
 
 
@@ -249,7 +249,7 @@ def main():
         return s.check('test browser connected', compat.wait_until(lambda: not s.call('browser_tabs', browser=browser)['is_error'], timeout=60, interval=1), pid)
 
     # resume: interrupted after the download, and right after the submit.
-    with session('flow-resume-1', flows, binary) as s:
+    with session('flow-resume-1', flows) as s:
         if not connect(s):
             return
         run = s.nonce
@@ -259,7 +259,7 @@ def main():
         s.check('flow started', not started['is_error'], started['text'][:120])
         recorded = agent.download()
         s.check('download recorded as done, verified now', not recorded['is_error'] and 'verified now' in recorded['text'], recorded['text'][:200])
-    with session('flow-resume-2', flows, binary) as s:
+    with session('flow-resume-2', flows) as s:
         agent = Agent(s, browser, flow, run, file_name)
         result, data = agent.status()
         s.check('after reconnecting: download still holds, next is open', data['next'].startswith('2.') and not data['replan']
@@ -268,7 +268,7 @@ def main():
         s.check('flow_start on an existing flow resumes it, nothing reset', 'resuming it' in again['text'] and '✓ 1. download' in again['text'], again['text'][:200])
         agent.open()
         agent.process(send=True, record_done=False)  # the connection drops right after the submit
-    with session('flow-resume-3', flows, binary) as s:
+    with session('flow-resume-3', flows) as s:
         agent = Agent(s, browser, flow, run, file_name)
         result, data = agent.status()
         s.check('the submit sent before the drop is confirmed from the page, flow complete', data['complete'] and not data['unconfirmed']
@@ -283,17 +283,17 @@ def main():
             agent.call('browser_close_tab', tab_id=tab)
 
     # takeover: open recorded pending, the user opens the file, the flow confirms it.
-    with session('flow-takeover-1', flows, binary) as s:
+    with session('flow-takeover-1', flows) as s:
         run = s.nonce
         flow, file_name = f'takeover {run}', f'data-{run}.txt'
         agent = Agent(s, browser, flow, run, file_name)
         agent.call('flow_start', name=flow, steps=STEPS)
         agent.download()
         tab = agent.open(record_pending_only=True)
-    with session('flow-takeover-user', flows, binary) as user:  # the user, in the browser
+    with session('flow-takeover-user', flows) as user:  # the user, in the browser
         user.call('browser_upload', browser=browser, tab_id=tab, target={'name': 'Data file'}, download_id=agent.memory['download'])
         time.sleep(0.5)
-    with session('flow-takeover-2', flows, binary) as s:
+    with session('flow-takeover-2', flows) as s:
         agent = Agent(s, browser, flow, run, file_name)
         result, data = agent.status()
         s.check('the step the user did is confirmed, not redone; next is process', data['next'].startswith('3.') and 'has taken effect' in result['text'],
@@ -306,7 +306,7 @@ def main():
         agent.call('browser_close_tab', tab_id=agent.tab())
 
     # replan: the file is deleted and the tab closed behind the flow's back.
-    with session('flow-replan-1', flows, binary) as s:
+    with session('flow-replan-1', flows) as s:
         run = s.nonce
         flow, file_name = f'replan {run}', f'data-{run}.txt'
         agent = Agent(s, browser, flow, run, file_name)
@@ -315,9 +315,9 @@ def main():
         agent.open()
         path, tab = agent.memory['path'], agent.tab()
     Path(path).unlink()
-    with session('flow-replan-outside', flows, binary) as other:
+    with session('flow-replan-outside', flows) as other:
         other.call('browser_close_tab', browser=browser, tab_id=tab)
-    with session('flow-replan-2', flows, binary) as s:
+    with session('flow-replan-2', flows) as s:
         agent = Agent(s, browser, flow, run, file_name)
         result, data = agent.status()
         s.check('replan needed: download and open no longer hold, with reasons', data['replan'] and data['broken'] == ['download', 'open']
@@ -332,7 +332,7 @@ def main():
         agent.call('browser_close_tab', tab_id=agent.tab())
 
     # unconfirmed: the submit was recorded pending, but the drop came before it was sent.
-    with session('flow-unconfirmed-1', flows, binary) as s:
+    with session('flow-unconfirmed-1', flows) as s:
         run = s.nonce
         flow, file_name = f'unconfirmed {run}', f'data-{run}.txt'
         agent = Agent(s, browser, flow, run, file_name)
@@ -344,7 +344,7 @@ def main():
         s.check('a checkpoint whose proof does not hold is refused', refused['is_error'] and 'does not hold' in refused['text'], refused['text'][:200])
         missing = agent.record('download', 'done', {'file': '/tmp/skfiy-compat/no-such-file.txt'})
         s.check('a file proof for a missing file is refused', missing['is_error'] and 'not there' in missing['text'], missing['text'][:200])
-    with session('flow-unconfirmed-2', flows, binary) as s:
+    with session('flow-unconfirmed-2', flows) as s:
         agent = Agent(s, browser, flow, run, file_name)
         result, data = agent.status()
         s.check('the unsent submit is reported unconfirmed, with the warning not to repeat blindly', data['unconfirmed'] == ['process']

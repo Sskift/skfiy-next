@@ -20,9 +20,12 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+# watch and make_pdf (eval/*.swift), rebuilt when their source changed.
+from scenario import tool as helper_binary  # noqa: E402
+
 WORK = "/tmp/skfiy-eval"
 BINARY = f"{WORK}/bin/skfiy"
-WATCH = f"{WORK}/watch"
 CFT = "Google Chrome for Testing"
 FIXTURE = "http://127.0.0.1:8765/web.html"
 APP_TOOLS = ["list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
@@ -254,7 +257,7 @@ def bold_check(answer, _):
 
 def pdf_setup():
     os.makedirs(f"{WORK}/files", exist_ok=True)
-    subprocess.run([f"{WORK}/make_pdf", f"{WORK}/files/brief.pdf", "Quarterly brief, page one.",
+    subprocess.run([str(helper_binary("make_pdf")), f"{WORK}/files/brief.pdf", "Quarterly brief, page one.",
                     "The code word is TANGERINE."], check=True)
 
 
@@ -318,7 +321,7 @@ class Watcher:
     """Samples the front app and the owner of the topmost normal window."""
 
     def __init__(self):
-        self.proc = subprocess.Popen([WATCH], stdout=subprocess.PIPE, text=True)
+        self.proc = subprocess.Popen([str(helper_binary("watch"))], stdout=subprocess.PIPE, text=True)
         self.samples = []
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -414,9 +417,6 @@ def main():
     if os.path.exists(BINARY):
         os.remove(BINARY)  # replace, never overwrite a signed binary in place
     shutil.copy(f"{ROOT}/.build/debug/skfiy", BINARY)
-    for tool in ("watch", "make_pdf"):
-        if not os.path.exists(f"{WORK}/{tool}"):
-            subprocess.run(["swiftc", "-O", f"{ROOT}/eval/{tool}.swift", "-o", f"{WORK}/{tool}"], check=True)
     results_dir = f"{ROOT}/eval/results/{datetime.datetime.now():%Y%m%d-%H%M%S}"
     os.makedirs(results_dir)
 
@@ -434,13 +434,12 @@ def main():
                 continue
             if task.get("setup"):
                 task["setup"]()
-            context = {"tabs_before": tab_ids()}
             start = time.time()
             run = run_claude(task["prompt"], task["tools"], options.model, options.budget, options.timeout,
                              f"{results_dir}/{name}.jsonl")
             end = time.time() + 0.5
             time.sleep(0.6)
-            context["opened_tabs"] = run["opened_tabs"]
+            context = {"opened_tabs": run["opened_tabs"]}
             try:
                 checks = task["check"](run["answer"], context)
             except Exception as error:  # noqa: BLE001 - reported as a failed check

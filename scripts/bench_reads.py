@@ -2,7 +2,7 @@
 """Reading less: one task set against the scenario app, done twice, in
 whatever state the Mac is in:
 
-    python3 scripts/bench_reads.py .build/debug/skfiy [--rounds 2]
+    python3 scripts/bench_reads.py .build/debug/skfiy [--rounds 2] [--textedit]
 
 - full: every look is a full get_app_state, and waits poll (SKFIY_WAIT_EVENTS=0),
   as before state versions existed;
@@ -13,6 +13,7 @@ whatever state the Mac is in:
 Both must catch the same things: a status change after a click, a text that
 completes later, a dialog window opening and closing, an animation ending.
 Measured per call on the client side: seconds, text bytes, image bytes.
+With --textedit, a real app's task set (a TextEdit document) instead.
 Writes eval/results/bench-reads-*/summary.json.
 """
 import argparse
@@ -20,6 +21,7 @@ import os
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 
@@ -27,32 +29,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scenario import ROOT, Session, main_binary  # noqa: E402
 
 
-def run_tasks(s, incremental):
-    rows = []
-    state = {'version': None}
-    main_title = f'Scenario {s.nonce}'
-    dialog = f'Scenario dialog {s.nonce}'
+class Calls:
+    """Tool calls, each measured into rows. look() is get_app_state(**target);
+    incremental looks and waits pass since: <the last State version>."""
 
-    def call(step, tool, **arguments):
+    def __init__(self, s, incremental, **target):
+        self.s, self.incremental, self.target = s, incremental, target
+        self.rows = []
+        self.version = None
+
+    def call(self, step, tool, **arguments):
         started = time.monotonic()
-        result = s.call(tool, **arguments)
+        result = self.s.call(tool, **arguments)
         seconds = time.monotonic() - started
         images = sum(Path(path).stat().st_size for path in result['images'])
         looks = re.search(r'\((\d+) looks?', result['text'])
-        rows.append({'step': step, 'tool': tool, 'seconds': round(seconds, 3), 'textBytes': len(result['text'].encode()),
-                     'imageBytes': images, 'error': result['is_error'], 'looks': int(looks[1]) if looks else None})
+        self.rows.append({'step': step, 'tool': tool, 'seconds': round(seconds, 3), 'textBytes': len(result['text'].encode()),
+                          'imageBytes': images, 'error': result['is_error'], 'looks': int(looks[1]) if looks else None})
         version = re.search(r'State: (v\d+)', result['text'])
         if version:
-            state['version'] = version[1]
+            self.version = version[1]
         return result
 
-    def look(step, **extra):
-        arguments = {'app': s.app, 'window': main_title, **extra}
-        if incremental and state['version']:
-            arguments['since'] = state['version']
-        return call(step, 'get_app_state', **arguments)
+    def look(self, step):
+        arguments = dict(self.target)
+        if self.incremental and self.version:
+            arguments['since'] = self.version
+        return self.call(step, 'get_app_state', **arguments)
 
-    call('first look', 'get_app_state', app=s.app, window=main_title)
+    def since(self):
+        return {'since': self.version} if self.incremental else {}
+
+
+def run_tasks(s, incremental):
+    main_title = f'Scenario {s.nonce}'
+    dialog = f'Scenario dialog {s.nonce}'
+    calls = Calls(s, incremental, app=s.app, window=main_title)
+    call, look = calls.call, calls.look
+
+    look('first look')
     for _ in range(3):
         idle = look('look again, nothing changed')
     s.check('nothing changed: ' + ('"unchanged", no screenshot' if incremental else 'full state again'),
@@ -68,7 +83,7 @@ def run_tasks(s, incremental):
     done = f'done {s.nonce[:6]}'
     s.fixture.command('text', value=done, after=3)
     waited = call('wait for a text that comes after 3 s', 'wait_for', app=s.app, window=main_title, text=done, timeout=15,
-                  **({'since': state['version']} if incremental else {}))
+                  **calls.since())
     s.check('completion text caught by wait_for', not waited['is_error'] and 'appeared after' in waited['text'], waited['text'][:200])
 
     s.fixture.command('open_window', title=dialog)
@@ -85,46 +100,26 @@ def run_tasks(s, incremental):
 
     s.fixture.command('animate', seconds=2)
     settled = call('wait for the animation to settle', 'wait_for', app=s.app, window=main_title, stable_for=1, timeout=15,
-                   **({'since': state['version']} if incremental else {}))
+                   **calls.since())
     s.check('animation end caught (window stable, completion message shown)', not settled['is_error'] and 'animation done' in settled['text'],
             settled['text'][:240])
     for _ in range(2):
         idle = look('look again, nothing changed')
-    return rows
+    return calls.rows
 
 
 def run_textedit(s, incremental):
     """A real app: a TextEdit document, typed into and scrolled, looked at
     between steps."""
-    import subprocess
-    rows = []
-    state = {'version': None}
     path = s.directory / f'bench-{s.nonce}.txt'
     path.write_text(''.join(f'Bench line {i:03d}\n' for i in range(1, 121)))
     subprocess.run(['open', '-g', '-F', '-a', 'TextEdit', str(path)], check=True)
     time.sleep(2.5)
-
-    def call(step, tool, **arguments):
-        started = time.monotonic()
-        result = s.call(tool, **arguments)
-        seconds = time.monotonic() - started
-        images = sum(Path(p).stat().st_size for p in result['images'])
-        looks = re.search(r'\((\d+) looks?', result['text'])
-        rows.append({'step': step, 'tool': tool, 'seconds': round(seconds, 3), 'textBytes': len(result['text'].encode()),
-                     'imageBytes': images, 'error': result['is_error'], 'looks': int(looks[1]) if looks else None})
-        version = re.search(r'State: (v\d+)', result['text'])
-        if version:
-            state['version'] = version[1]
-        return result
-
-    def look(step):
-        arguments = {'app': 'TextEdit', 'window': path.name, 'ocr': True}
-        if incremental and state['version']:
-            arguments['since'] = state['version']
-        return call(step, 'get_app_state', **arguments)
+    calls = Calls(s, incremental, app='TextEdit', window=path.name, ocr=True)
+    call, look = calls.call, calls.look
 
     try:
-        first = call('first look', 'get_app_state', app='TextEdit', window=path.name, ocr=True)
+        first = look('first look')
         for _ in range(3):
             idle = look('look again, nothing changed')
         s.check('TextEdit: nothing changed', ('Unchanged since' in idle['text']) if incremental else ('Bench' in idle['text'] and idle['images']),
@@ -135,7 +130,7 @@ def run_textedit(s, incremental):
         # Locked, the action already returned the state after it.
         s.check('TextEdit: the typed marker is reported', marker in after['text'] or marker in typed['text'], after['text'][-200:])
         waited = call('wait for the marker', 'wait_for', app='TextEdit', window=path.name, text=marker, timeout=10,
-                      **({'since': state['version']} if incremental else {}))
+                      **calls.since())
         s.check('TextEdit: wait_for sees the marker', not waited['is_error'], waited['text'][:160])
         line = re.search(r'"Bench[^"]*" x=(\d+) y=(\d+)', first['text'])
         if line:
@@ -151,7 +146,7 @@ def run_textedit(s, incremental):
             look('look again, nothing changed')
     finally:
         subprocess.run(['pkill', '-x', 'TextEdit'])
-    return rows
+    return calls.rows
 
 
 def totals(rows):
@@ -166,9 +161,8 @@ def main():
     parser.add_argument('--rounds', type=int, default=2)
     parser.add_argument('--textedit', action='store_true', help='the real-app task set (TextEdit) instead of the scenario app')
     args = parser.parse_args()
-    main_binary()
+    main_binary(args.binary)
     if args.textedit:
-        import subprocess
         if subprocess.run(['pgrep', '-x', 'TextEdit'], capture_output=True).returncode == 0:
             raise SystemExit('TextEdit is running (maybe with the user\'s documents); not touching it.')
     results = {'full': [], 'incremental': []}

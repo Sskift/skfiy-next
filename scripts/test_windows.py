@@ -2,12 +2,13 @@
 """Window identity through reading and acting, against the scenario app, in
 whatever state the Mac is in:
 
-    python3 scripts/test_windows.py .build/debug/skfiy
+    python3 scripts/test_windows.py .build/debug/skfiy [--textedit]
 
 Two windows with the same title must be told apart by id; actions go to the
 window of the latest screenshot and nowhere else; a window closed and
 recreated (same title, new id), a moved window, or a window_id that is not the
-screenshot's are refused without sending anything.
+screenshot's are refused without sending anything. With --textedit, also two
+same-named TextEdit documents, scrolled by id.
 """
 import re
 import sys
@@ -121,7 +122,6 @@ def textedit(s):
     try:
         time.sleep(2.5)
         same = s.call('get_app_state', app='TextEdit', window='twin.txt')
-        ids = [int(i) for i in re.findall(r'(?:id |\b)(\d{3,6})(?=: twin|\b[^\n]*twin)', same['text'])]
         s.check('TextEdit: same-named documents need an id', same['is_error'] and same['text'].count('twin') >= 2, same['text'][:220])
         states = {}
         for candidate in sorted(set(re.findall(r'\b(\d{3,6})\b', same['text']))):
@@ -137,10 +137,10 @@ def textedit(s):
         scrolled = s.call('scroll', app='TextEdit', window_id=str(beta_id), x=line[1], y=line[2], direction='down', pages=2)
         beta_after = s.call('get_app_state', app='TextEdit', window=str(beta_id), ocr=True)
         alpha_after = s.call('get_app_state', app='TextEdit', window=str(states['Alpha'][0]), ocr=True)
-        first = lambda text, word: min((int(m[1]) for label, _, _ in ocr_lines(text) if (m := re.search(r'line (\d{3})', label))), default=None)
-        s.check('TextEdit: the Beta window scrolled', not scrolled['is_error'] and (first(beta_after['text'], 'Beta') or 0) > 10,
-                f"Beta first line {first(beta['text'], 'Beta')} -> {first(beta_after['text'], 'Beta')}")
-        s.check('TextEdit: the Alpha window did not move', first(alpha_after['text'], 'Alpha') == 1, f"Alpha first line {first(alpha_after['text'], 'Alpha')}")
+        first = lambda text: min((int(m[1]) for label, _, _ in ocr_lines(text) if (m := re.search(r'line (\d{3})', label))), default=None)
+        s.check('TextEdit: the Beta window scrolled', not scrolled['is_error'] and (first(beta_after['text']) or 0) > 10,
+                f"Beta first line {first(beta['text'])} -> {first(beta_after['text'])}")
+        s.check('TextEdit: the Alpha window did not move', first(alpha_after['text']) == 1, f"Alpha first line {first(alpha_after['text'])}")
     finally:
         subprocess.run(['pkill', '-x', 'TextEdit'])
 

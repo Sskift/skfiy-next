@@ -8,8 +8,9 @@
 //                      an increasing "id"; each is applied once (works while locked)
 //   dir/state.json     the latest state (atomic), dir/events.jsonl every event
 //
-// Commands: text(value, after), clear(after), animate(seconds), open_window(title),
-// close_window(title), move(title, dx, dy), place(title, x, y), resize(title, width, height),
+// Commands: text(value, after), clear(after), animate(seconds), open_window(title, key:
+// the name later commands use for it, by default its title), close_window(title),
+// move(title, dx, dy), place(title, x, y), resize(title, width, height),
 // recreate(title), hide, unhide, swap, tiny(code), key(title), quit.
 import AppKit
 import CoreGraphics
@@ -102,7 +103,6 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private var submitted: [String] = []
     private var keys: [String: Int] = [:]
     private var canvasClicks: [[String: Any]] = []
-    private var appliedCommands = 0
     private var lastCommand = 0
     private var animation: Timer?
     private var sequence = 0
@@ -309,7 +309,6 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         case "quit": NSApp.terminate(nil)
         default: record("unknown_command", ["op": op])
         }
-        appliedCommands += 1
         record("command", ["op": op])
     }
 

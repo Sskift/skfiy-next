@@ -9,9 +9,14 @@ front app came back. TextEdit must not be running.
     python3 scripts/smoke_foreground.py [path/to/skfiy] [--accept]
 """
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scenario import probe  # noqa: E402
 
 ARGS = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
 BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
@@ -60,11 +65,9 @@ def front():
 
 
 def idle_seconds():
-    output = subprocess.run(["ioreg", "-c", "IOHIDSystem", "-d", "4"], capture_output=True, text=True).stdout
-    for line in output.splitlines():
-        if "HIDIdleTime" in line:
-            return int(line.split("=")[-1]) / 1e9
-    return 0
+    # The user's own keys, clicks, moves and scrolls: IOHIDSystem's HIDIdleTime
+    # is reset by skfiy's mouse events too.
+    return probe("session")["idleSeconds"]
 
 
 def check(condition, message):

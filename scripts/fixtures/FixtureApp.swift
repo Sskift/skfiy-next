@@ -1,12 +1,17 @@
-// A small app for the smoke tests (scripts/smoke_fixture.py). Its window
-// opens behind every other window and never activates. It has:
-// - an icon button whose only label is its tooltip,
+// A small app for the smoke tests (scripts/smoke_fixture.py). Its windows
+// open behind every other window and it never activates. It has:
+// - an icon button whose only label is its tooltip, with a context menu
+//   (Archive all, Label > Red / Blue) for run_in_front's menu_item,
 // - "Choose file…" and "Save as…", which open the system's file panels as
 //   sheets (served by another process, since the fixture is sandboxed),
+// - a password field,
 // - two custom-drawn canvases that publish no accessibility, one accepting
 //   the first click of an inactive window and one not, and a web view (as in
 //   Tauri apps) with a canvas,
-// - a status line, and each canvas's screen frame, readable in the tree.
+// - a status line, and each canvas's screen frame, readable in the tree,
+// - a second window, "skfiy opaque", whose words are pixels only,
+// - menus that stay enabled in the background: File > Save As…, and Edit >
+//   Copy / Paste of a swatch (an image and a type of its own, no text).
 import AppKit
 import WebKit
 

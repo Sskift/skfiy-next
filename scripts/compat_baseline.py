@@ -24,7 +24,6 @@ risked the user's own windows or data).
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -36,7 +35,8 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from smoke_locked import Client, Evidence, ROOT, require  # noqa: E402
+from scenario import Client, Evidence, ROOT, ocr_find, ocr_lines, probe, require, tool  # noqa: E402
+from scenario import wait_until as scenario_wait_until  # noqa: E402
 
 WORK = Path('/tmp/skfiy-compat')
 PORT = 8766
@@ -57,23 +57,11 @@ def sh(*args, timeout=60, check=True):
 
 
 def build_tools():
-    """AXProbe, Launch and make_pdf, rebuilt when their source changed."""
-    (WORK / 'bin').mkdir(parents=True, exist_ok=True)
-    tools = {'AXProbe': ROOT / 'scripts/fixtures/AXProbe.swift', 'Launch': ROOT / 'scripts/fixtures/Launch.swift',
-             'make_pdf': ROOT / 'eval/make_pdf.swift', 'Front': ROOT / 'scripts/fixtures/Front.swift',
-             'WindowGuard': ROOT / 'scripts/fixtures/WindowGuard.swift'}
-    for name, source in tools.items():
-        binary = WORK / 'bin' / name
-        if not binary.exists() or binary.stat().st_mtime < source.stat().st_mtime:
-            sh('/usr/bin/swiftc', '-O', source, '-o', binary, timeout=180)
-    return {name: WORK / 'bin' / name for name in tools}
+    """AXProbe, Launch, make_pdf, Front and WindowGuard (scenario.SOURCES), rebuilt when their source changed."""
+    return {name: tool(name) for name in ('AXProbe', 'Launch', 'make_pdf', 'Front', 'WindowGuard')}
 
 
 TOOLS = {}
-
-
-def probe(*args):
-    return json.loads(sh(TOOLS['AXProbe'], *args, timeout=20))
 
 
 def ensure_server():
@@ -100,35 +88,8 @@ def page_state(run):
 
 
 def wait_until(check, timeout=6, interval=0.2):
-    deadline = time.monotonic() + timeout
-    value = None
-    while time.monotonic() < deadline:
-        try:
-            value = check()
-        except Exception:  # a probe that cannot answer yet
-            value = None
-        if value:
-            return value
-        time.sleep(interval)
-    return value
-
-
-OCR_LINE = re.compile(r'^\s*("(?:[^"\\]|\\.)*")\s+x=(-?[\d.]+)\s+y=(-?[\d.]+)')
-
-
-def ocr_lines(text):
-    lines = []
-    for line in text.splitlines():
-        match = OCR_LINE.match(line)
-        if match:
-            lines.append((json.loads(match[1]), float(match[2]), float(match[3])))
-    return lines
-
-
-def ocr_find(text, needle):
-    """Coordinates of the uppermost OCR line containing needle (case-insensitive)."""
-    hits = [(label, x, y) for label, x, y in ocr_lines(text) if needle.casefold() in label.casefold()]
-    return min(hits, key=lambda hit: (hit[2], hit[1])) if hits else None
+    # Any error is a probe that cannot answer yet (an app still starting, a page not loaded).
+    return scenario_wait_until(check, timeout, interval, errors=Exception)
 
 
 def tree_index(text, pattern):
@@ -275,7 +236,6 @@ class Case:
         self.nonce = run.nonce
         self.pid = None
         self.window = None
-        self.last = None
 
     # Shared shapes ---------------------------------------------------------
     def precondition(self):
@@ -285,8 +245,7 @@ class Case:
         arguments = {'app': self.app, 'ocr': True, **extra}
         if self.window:
             arguments['window'] = self.window
-        self.last = self.run.call('get_app_state', **arguments)
-        return self.last
+        return self.run.call('get_app_state', **arguments)
 
     def act(self, tool, **arguments):
         return self.run.call(tool, app=self.app, **arguments)
@@ -409,12 +368,10 @@ class TextEdit(Case):
             detail = f'caret at {location}, line 10 spans {start}-{end}'
         else:
             verified, detail = False, 'the probe could not read the caret (AX unavailable)'
-        self.clicked = verified
         self.outcome('click', result, verified, detail, 'coordinates')
 
     def op_type(self):
         marker = f'MARK{self.nonce[:6].upper()}'
-        self.marker = marker
         result = self.act('type_text', text=marker)
         value = wait_until(lambda: marker in (self.text_value().get('value') or '') and self.text_value(), timeout=4)
         if value:
@@ -702,13 +659,10 @@ def launch_chrome(binary, url='about:blank', restart=False):
     host.unlink(missing_ok=True)
     shutil.copy2(binary, host)
     sh(host, 'install-browser-bridge', '--user-data-dir', profile)
-    sh(TOOLS['Launch'] if TOOLS else BIN_LAUNCH, chrome_app(), f'--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
+    sh(TOOLS['Launch'], chrome_app(), f'--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
        '--disable-search-engine-choice-screen', '--disable-features=DisableLoadExtensionCommandLineSwitch',
        f'--load-extension={extension}', url, timeout=30)
     return wait_until(chrome_pid, timeout=10)
-
-
-BIN_LAUNCH = WORK / 'bin/Launch'
 
 
 def chrome_app():
@@ -718,7 +672,6 @@ def chrome_app():
 
 class WebApp(Case):
     """The compat page in an app, driven with the app tools (AX / pixels)."""
-    channel = 'app'
 
     def page(self):
         return page_state(self.run_id)
@@ -803,19 +756,14 @@ class Chrome(WebApp):
         ensure_server()
         self.run_id = f'{self.nonce}-{self.key}'
         profile = WORK / 'chrome-profile'
-        extension = WORK / 'extension'
-        if not self.running():
+        if not chrome_pid():
             shutil.rmtree(profile, ignore_errors=True)
             launch_chrome(self.run.binary, f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
         else:
             sh('open', '-g', '-a', chrome_app(), f'http://127.0.0.1:{PORT}/compat.html?run={self.run_id}')
         require(self.wait_page(lambda s: s.get('run') == self.run_id, timeout=20), 'the compat page did not load in Chrome')
-        self.pid = wait_until(lambda: self.running(), timeout=5)
+        self.pid = wait_until(chrome_pid, timeout=5)
         self.window = 'skfiy compat ' + self.run_id
-
-    def running(self):
-        out = sh('pgrep', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', check=False).split()
-        return int(out[0]) if out else None
 
 
 class ChromeExtension(Chrome):

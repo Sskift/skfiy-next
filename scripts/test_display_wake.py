@@ -38,7 +38,7 @@ def main():
     parser.add_argument('binary')
     parser.add_argument('--wait', type=float, default=720)
     args = parser.parse_args()
-    main_binary()
+    main_binary(args.binary)
     state = probe('session')
     if not state['locked']:
         print('skipped: the Mac is not locked (this test is about the locked display)')

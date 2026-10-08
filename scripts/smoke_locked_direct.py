@@ -21,6 +21,7 @@ import time
 import uuid
 
 from diagnose_locked_direct import no_custom_authorization
+from scenario import OCR_LINE
 from smoke_locked import Client, Evidence, ROOT, build_helpers, probe_sample, require, run, wait_for
 
 
@@ -35,7 +36,7 @@ def ocr_coordinates(result, needle, exact=False):
     require(result['images'], 'Coordinate selection requires an actual current screenshot')
     choices = []
     for line in result['text'].splitlines():
-        match = re.match(r'^\s*("(?:[^"\\]|\\.)*")\s+x=(-?[\d.]+)\s+y=(-?[\d.]+)\s*$', line)
+        match = OCR_LINE.fullmatch(line.rstrip())
         if match:
             text = json.loads(match[1])
             matches = text.casefold() == needle.casefold() if exact else needle.casefold() in text.casefold()

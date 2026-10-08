@@ -26,9 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from smoke_locked import Client, Evidence, ROOT, require  # noqa: E402,F401
 
 BIN = Path('/tmp/skfiy-compat/bin')
+# Every helper binary the scripts build, by name: its source, or (source, Objective-C header).
 SOURCES = {'AXProbe': 'scripts/fixtures/AXProbe.swift', 'Launch': 'scripts/fixtures/Launch.swift',
-           'WindowGuard': 'scripts/fixtures/WindowGuard.swift', 'ScenarioFixture': 'scripts/fixtures/ScenarioFixture.swift',
-           'VirtualDisplay': ('scripts/fixtures/VirtualDisplay.swift', 'scripts/fixtures/VirtualDisplay.h')}
+           'Front': 'scripts/fixtures/Front.swift', 'WindowGuard': 'scripts/fixtures/WindowGuard.swift',
+           'ScenarioFixture': 'scripts/fixtures/ScenarioFixture.swift', 'KeyboardProbe': 'scripts/fixtures/KeyboardProbe.swift',
+           'VirtualDisplay': ('scripts/fixtures/VirtualDisplay.swift', 'scripts/fixtures/VirtualDisplay.h'),
+           'make_pdf': 'eval/make_pdf.swift', 'watch': 'eval/watch.swift'}
 
 
 def tool(name):
@@ -46,13 +49,14 @@ def probe(*args):
     return json.loads(subprocess.run([str(tool('AXProbe')), *map(str, args)], capture_output=True, text=True, timeout=20, check=True).stdout)
 
 
-def wait_until(check, timeout=8, interval=0.1):
+def wait_until(check, timeout=8, interval=0.1, errors=(OSError, ValueError, KeyError)):
+    """check's first truthy value within timeout, else its last; errors count as not yet."""
     deadline = time.monotonic() + timeout
     value = None
     while time.monotonic() < deadline:
         try:
             value = check()
-        except (OSError, ValueError, KeyError):
+        except errors:
             value = None
         if value:
             return value
@@ -68,8 +72,31 @@ def ocr_lines(text):
 
 
 def ocr_find(text, needle):
+    """Coordinates of the uppermost OCR line containing needle (case-insensitive)."""
     hits = [hit for hit in ocr_lines(text) if needle.casefold() in hit[0].casefold()]
     return min(hits, key=lambda hit: (hit[2], hit[1])) if hits else None
+
+
+SHOT = re.compile(r'Screenshot: (\d+)×(\d+) px showing screen region x=(-?[\d.]+) y=(-?[\d.]+) w=([\d.]+) h=([\d.]+)')
+
+
+def geometry(text):
+    """Where a get_app_state screenshot is on screen, and its pixels per point; None without one."""
+    m = SHOT.search(text)
+    if not m:
+        return None
+    width, height, x, y, w, h = (float(v) for v in m.groups())
+    return {'x': x, 'y': y, 'sx': width / w, 'sy': height / h, 'width': width, 'height': height}
+
+
+def to_pixels(g, point):
+    """A screen point in pixels of that screenshot."""
+    return (point[0] - g['x']) * g['sx'], (point[1] - g['y']) * g['sy']
+
+
+def canvas_target(canvas):
+    """The screen point at the centre of the scenario app's 10×10 pt red target."""
+    return canvas['x'] + 235, canvas['y'] + 25   # the canvas is flipped: target at (230, 20, 10, 10)
 
 
 def capabilities(result):
@@ -168,7 +195,7 @@ class Session:
         self.client = Client(self.binary, self.evidence, environment=self.environment, name='skfiy-scenario')
         return self
 
-    binary = None  # set by main()
+    binary = None  # set by main_binary()
 
     def _sample(self):
         while self.sampling:
@@ -219,9 +246,12 @@ class Session:
         return True  # the summary records the error
 
 
-def main_binary():
-    require(len(sys.argv) > 1, 'pass the skfiy binary')
-    binary = Path(sys.argv[1]).resolve()
+def main_binary(path=None):
+    """The skfiy binary every Session runs: path, or else the first command-line argument."""
+    if path is None:
+        require(len(sys.argv) > 1, 'pass the skfiy binary')
+        path = sys.argv[1]
+    binary = Path(path).resolve()
     require(binary.exists(), f'{binary} does not exist')
     Session.binary = binary
     return binary

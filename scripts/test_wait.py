@@ -2,11 +2,13 @@
 """wait_for against the scenario app, in whatever state the Mac is in
 (direct mode while locked, the accessibility tree while unlocked):
 
-    python3 scripts/test_wait.py .build/debug/skfiy
+    python3 scripts/test_wait.py .build/debug/skfiy [--chrome]
 
 Delayed text, text going away, an animation settling, a region that ignores
 an animation elsewhere, timeout with the current state, cancellation from
 the client, the window closing mid-wait; and that waiting sent nothing.
+With --chrome, also a page's delayed load in Chrome for Testing (running
+already, as scripts/compat_baseline.py --case chrome leaves it).
 """
 import json
 import re
@@ -115,14 +117,11 @@ def chrome(s):
     """A real app: the compat page in Chrome for Testing's front tab; the page's
     own button starts a 3 s load (through the extension), and wait_for watches
     the browser window like any app."""
-    import subprocess
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from compat_baseline import ensure_server, PORT, page_state
-    pids = subprocess.run(['pgrep', '-f', 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'],
-                          capture_output=True, text=True).stdout.split()
-    if not s.check('Chrome for Testing running', pids, 'start it with scripts/compat_baseline.py --case chrome'):
+    from compat_baseline import PORT, chrome_pid, ensure_server, page_state
+    pid = chrome_pid()
+    if not s.check('Chrome for Testing running', pid, 'start it with scripts/compat_baseline.py --case chrome'):
         return
-    browser = pids[0]
+    browser = str(pid)
     ensure_server()
     tabs = s.call('browser_tabs', browser=browser)
     front = re.search(r'tab (\d+) \[(?:front tab of its window|shown)\]', tabs['text'])
@@ -136,7 +135,6 @@ def chrome(s):
     state = s.call('browser_state', browser=browser, tab_id=int(front[1]), screenshot=False)
     index = re.search(r'\[(\d+)\] button "Load later"', state['text'])
     clicked = s.call('browser_click', browser=browser, tab_id=int(front[1]), index=int(index[1]))
-    started = time.monotonic()
     result = s.call('wait_for', app=app, text=f'LOADED {run}', timeout=15)
     seconds = waited(result)
     s.check('Chrome: delayed page text seen by wait_for', not clicked['is_error'] and not result['is_error'] and 'appeared' in result['text'],

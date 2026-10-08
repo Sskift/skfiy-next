@@ -30,7 +30,6 @@ def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     binary = Path(sys.argv[1]).resolve()
-    sys.argv = sys.argv[:1]
     compat.TOOLS.update(compat.build_tools())
     session = compat.probe('session')
     if session['locked']:
@@ -56,7 +55,6 @@ def main():
     try:
         run.start_client()
         case.prepare()
-        pid = compat.pids_of('TextEdit')[0]
         for label, text in [('250 characters (accessibility)', ''.join(f'entry{i:03d} ' for i in range(28))[:250]),
                             ('a short text (keystrokes)', f'KEYED {nonce.upper()}')]:
             windows = len(case.dump()['windows'])

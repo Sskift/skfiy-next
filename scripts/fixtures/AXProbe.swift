@@ -5,6 +5,8 @@
 //   AXProbe dump <pid>     windows (AX + CG), sheets with their buttons, focused element, selected rows
 //   AXProbe front          the frontmost app and the owner of the top normal window
 //   AXProbe session        whether the console session is locked, and the user's idle seconds
+//   AXProbe displays       the online displays (global top-left points) and their pixels per point
+//   AXProbe windows <pid>  the window server's frames of an app's windows
 //   AXProbe ocr <image>    text recognized in an image file (Vision, accurate)
 //   AXProbe red <image>    the centre of the image's strongly red pixels, in its pixels
 import AppKit
