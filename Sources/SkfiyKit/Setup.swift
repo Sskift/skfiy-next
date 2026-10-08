@@ -146,11 +146,14 @@ public enum Setup {
         }
     }
 
-    /// The command a user would type to register skfiy by hand.
-    static func manualCommand(_ client: Client, executable: String) -> String {
-        client == .claude
-            ? "claude mcp add --scope user skfiy -- \(shellQuoted(executable)) mcp"
-            : "codex mcp add skfiy -- \(shellQuoted(executable)) mcp"
+    /// The command a user would type to register skfiy by hand, with the
+    /// settings that setup was given.
+    static func manualCommand(_ client: Client, executable: String, environment: [String: String] = [:]) -> String {
+        let flag = client == .claude ? "-e" : "--env"
+        let settings = environment.sorted { $0.key < $1.key }.map { " \(flag) \(shellQuoted("\($0.key)=\($0.value)"))" }.joined()
+        return client == .claude
+            ? "claude mcp add --scope user skfiy\(settings) -- \(shellQuoted(executable)) mcp"
+            : "codex mcp add skfiy\(settings) -- \(shellQuoted(executable)) mcp"
     }
 
     /// The client's CLI: on PATH, or where its installer puts it under ~.
@@ -194,11 +197,11 @@ public enum Setup {
     /// entry that is already there; returns a line for the report.
     static func register(_ client: Client, add: Bool, executable: String, environment: [String: String]) -> Line? {
         guard let tool = findTool(client.rawValue) else {
-            return !add ? nil : Line(.skipped, "\(client.displayName): not installed. To add skfiy later: \(manualCommand(client, executable: executable))")
+            return !add ? nil : Line(.skipped, "\(client.displayName): not installed. To add skfiy later: \(manualCommand(client, executable: executable, environment: environment))")
         }
         let existing = currentEntry(client, tool: tool)
         if existing == nil, !add {
-            return Line(.skipped, "\(client.displayName): skfiy is not added. To use it there too: `skfiy setup --\(client.rawValue)` or \(manualCommand(client, executable: executable))")
+            return Line(.skipped, "\(client.displayName): skfiy is not added. To use it there too: `skfiy setup --\(client.rawValue)` or \(manualCommand(client, executable: executable, environment: environment))")
         }
         let commands = registrationCommands(client, existing: existing, executable: executable, environment: environment)
         if commands.isEmpty {
@@ -208,7 +211,7 @@ public enum Setup {
             let result = run(tool, arguments)
             if result.status != 0 {
                 let reason = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                return Line(.failed, "\(client.displayName): `\(client.rawValue) \(arguments.joined(separator: " "))` failed: \(reason). Register by hand: \(manualCommand(client, executable: executable))")
+                return Line(.failed, "\(client.displayName): `\(client.rawValue) \(arguments.joined(separator: " "))` failed: \(reason). Register by hand: \(manualCommand(client, executable: executable, environment: (existing?.environment ?? [:]).merging(environment) { $1 }))")
             }
         }
         let verb = existing == nil ? "registered skfiy" : "updated the skfiy entry"
@@ -228,7 +231,7 @@ public enum Setup {
     static func abbreviated(_ path: String) -> String { SkfiyPaths.abbreviated(path) }
 
     static func shellQuoted(_ text: String) -> String {
-        text.allSatisfy({ $0.isLetter || $0.isNumber || "/._-+~".contains($0) }) ? text : "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        text.allSatisfy({ $0.isLetter || $0.isNumber || "/._-+~=".contains($0) }) ? text : "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: - Checks shared with doctor
@@ -389,7 +392,7 @@ public enum Setup {
             if line.mark == .ok { registered = true }
         }
         if !options.claude {
-            lines.append(Line(.skipped, "Claude Code: left alone. To add skfiy: \(manualCommand(.claude, executable: executable))"))
+            lines.append(Line(.skipped, "Claude Code: left alone. To add skfiy: \(manualCommand(.claude, executable: executable, environment: options.environment))"))
         } else if !registered {
             todo.append("Add skfiy to your MCP client (commands above). Any other MCP client: command \(executable), argument mcp.")
         }
@@ -405,7 +408,7 @@ public enum Setup {
             """, at: 0)
         }
         if let line = pathLine(executable: executable) { lines.append(line) }
-        lines += settingWarnings()
+        lines += settingWarnings(environment: ProcessInfo.processInfo.environment.merging(options.environment) { $1 })
 
         lines.forEach { print($0.rendered) }
         if !todo.isEmpty {
@@ -417,8 +420,6 @@ public enum Setup {
         return failed ? 1 : 0
     }
 
-    /// `skfiy uninstall`: undoes setup and removes skfiy's files. The binary
-    /// goes too unless `keepBinary`.
     /// True when `path` is another skfiy binary that still exists, so what
     /// points at it belongs to another install and uninstall leaves it alone.
     static func isOtherInstall(_ path: String?, executable: String) -> Bool {
@@ -430,6 +431,7 @@ public enum Setup {
     /// `skfiy uninstall`: undoes what setup did for this binary. Registrations
     /// and host manifests that launch another skfiy binary still on disk are
     /// left alone, and so are the shared folders while that install uses them.
+    /// The binary goes too unless `keepBinary`.
     public static func uninstall(keepBinary: Bool) -> Int32 {
         let executable = SkfiyPaths.executable
         var failed = false
@@ -512,8 +514,11 @@ public enum Setup {
         let permissions = permissionLines(host: host)
         var lines = permissions.lines
         if let line = pathLine(executable: executable) { lines.append(line) }
+        // The server runs with the settings in its registration, not doctor's own.
+        var settings = ProcessInfo.processInfo.environment
         if let tool = findTool("claude") {
             if let entry = currentEntry(.claude, tool: tool) {
+                settings.merge(entry.environment) { $1 }
                 let ours = entry.command == executable && entry.arguments == ["mcp"]
                 lines.append(Line(ours ? .ok : .warning, "Claude Code: skfiy runs \(abbreviated(entry.command)) \(entry.arguments.joined(separator: " "))\(ours ? "" : " (not this binary; `skfiy setup` updates it)")"))
             } else {
@@ -529,10 +534,10 @@ public enum Setup {
         if !stale.isEmpty {
             lines.append(Line(.warning, "\(stale.count) running skfiy server\(stale.count == 1 ? "" : "s") (pid \(stale.map(String.init).joined(separator: ", "))) still use\(stale.count == 1 ? "s" : "") an older build: restart those Claude Code sessions"))
         }
-        if let mode = ProcessInfo.processInfo.environment["SKFIY_LOCKED_USE"], mode == "direct" {
+        if settings["SKFIY_LOCKED_USE"] == "direct" {
             lines.append(Line(.ok, "Locked use: direct"))
         }
-        lines += settingWarnings()
+        lines += settingWarnings(environment: settings)
         lines.forEach { print($0.rendered) }
         if browser.loadExtension {
             print("\n" + loadExtensionSteps)

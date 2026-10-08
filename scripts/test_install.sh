@@ -146,8 +146,14 @@ as_user "$installed" doctor --check > "$work/out7" 2>&1
 check "doctor --check reports permissions" contains "$work/out7" "Screen Recording:"
 check "doctor --check sees the registration" contains "$work/out7" "Claude Code: skfiy runs"
 check "doctor --check sees the bridge" contains "$work/out7" "Browser bridge (Chrome): registered"
-as_user env SKFIY_LOCKED_USE=1 "$installed" doctor --check > "$work/out7b" 2>&1
-check "doctor flags SKFIY_LOCKED_USE=1" contains "$work/out7b" "SKFIY_LOCKED_USE=1 is not recognized"
+check "doctor --check reads the registered settings" contains "$work/out7" "Locked use: direct"
+as_user env SKFIY_CURSER=0 "$installed" doctor --check > "$work/out7b" 2>&1
+check "doctor flags a misspelled setting" contains "$work/out7b" "SKFIY_CURSER is set but skfiy does not read it"
+as_user "$installed" setup --no-browser -e SKFIY_LOCKED_USE=1 > "$work/out7c" 2>&1
+check "setup flags SKFIY_LOCKED_USE=1 given with -e" contains "$work/out7c" "SKFIY_LOCKED_USE=1 is not recognized"
+as_user "$installed" doctor --check > "$work/out7d" 2>&1
+check "doctor flags SKFIY_LOCKED_USE=1 in the registration" contains "$work/out7d" "SKFIY_LOCKED_USE=1 is not recognized"
+as_user "$installed" setup --no-browser -e SKFIY_LOCKED_USE=direct > /dev/null 2>&1
 as_user "$installed" stop --help > "$work/out7c" 2>&1
 check "stop --help prints usage" contains "$work/out7c" "Usage:"
 check "stop --help does not stop skfiy" test ! -e "$support/skfiy/stopped"

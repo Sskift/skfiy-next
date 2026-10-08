@@ -152,6 +152,10 @@ struct MCPRegistrationTests {
     @Test func manualCommandsAreReadyToPaste() {
         #expect(Setup.manualCommand(.claude, executable: "/Users/a b/skfiy") == "claude mcp add --scope user skfiy -- '/Users/a b/skfiy' mcp")
         #expect(Setup.manualCommand(.codex, executable: "/opt/skfiy") == "codex mcp add skfiy -- /opt/skfiy mcp")
+        #expect(Setup.manualCommand(.claude, executable: "/opt/skfiy", environment: ["SKFIY_LOCKED_USE": "direct", "SKFIY_CURSOR": "0"])
+            == "claude mcp add --scope user skfiy -e SKFIY_CURSOR=0 -e SKFIY_LOCKED_USE=direct -- /opt/skfiy mcp")
+        #expect(Setup.manualCommand(.codex, executable: "/opt/skfiy", environment: ["SKFIY_LOCKED_USE": "direct"])
+            == "codex mcp add skfiy --env SKFIY_LOCKED_USE=direct -- /opt/skfiy mcp")
     }
 }
 
