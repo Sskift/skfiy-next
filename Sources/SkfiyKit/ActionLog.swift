@@ -17,7 +17,7 @@ public struct ActionLog: Sendable {
         let setting = ProcessInfo.processInfo.environment["SKFIY_ACTION_LOG"]
         if setting == "off" { return nil }
         if let setting, !setting.isEmpty { return ActionLog(file: URL(fileURLWithPath: setting)) }
-        return ActionLog(file: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/skfiy/actions.jsonl"))
+        return ActionLog(file: SkfiyPaths.logs.appendingPathComponent("actions.jsonl"))
     }
 
     static let maxBytes = 5_000_000

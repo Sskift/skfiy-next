@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 
 public let skfiyVersion = "0.6.0"
@@ -35,6 +36,16 @@ public final class MCPServer {
         self.executor = executor
         self.tools = ToolSchemas.all + ToolSchemas.browser
         self.write = write
+    }
+
+    /// Put before the instructions when a permission is missing, so the
+    /// model tells the user before the first tool fails mid-task.
+    static func setupNote(accessibility: Bool = AXIsProcessTrusted(), screenRecording: Bool = CGPreflightScreenCaptureAccess(),
+                          host: @autoclosure () -> String = hostApplicationName()) -> String {
+        let missing = (accessibility ? [] : ["Accessibility"]) + (screenRecording ? [] : ["Screen Recording"])
+        guard !missing.isEmpty else { return "" }
+        let host = host()
+        return "Setup incomplete: macOS has not granted \(missing.joined(separator: " and ")) to \(host), the app running skfiy. Before using the tools, ask the user to enable it in System Settings → Privacy & Security (or run `skfiy doctor` in \(host)), then quit and reopen \(host) and Claude Code.\n\n"
     }
 
     nonisolated public static func writeToStdout(_ data: Data) {
@@ -133,7 +144,7 @@ public final class MCPServer {
                 "protocolVersion": version,
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "skfiy", "title": "skfiy computer use", "version": skfiyVersion],
-                "instructions": ToolSchemas.instructions
+                "instructions": Self.setupNote() + ToolSchemas.instructions
             ])
         case "ping":
             return result([:])

@@ -6,8 +6,7 @@ import Foundation
 /// hard link of its own, named after its pid and removed when it exits; links
 /// left by servers that were killed are cleaned up by the next one.
 public enum Instance {
-    static let directory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Caches/skfiy/instances")
+    static let directory = SkfiyPaths.caches.appendingPathComponent("instances")
     static let variable = "SKFIY_INSTANCE"
 
     /// Re-executes this process from its own hard link. Returns only when that

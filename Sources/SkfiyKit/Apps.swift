@@ -317,16 +317,32 @@ func isProtectedInterface(_ app: NSRunningApplication) -> Bool {
 /// This process and its ancestors (the shell, the agent, the terminal or
 /// editor hosting them).
 func ancestorProcessIDs() -> Set<pid_t> {
-    var pids: Set<pid_t> = []
+    Set(ancestorChain())
+}
+
+/// This process, its parent, its grandparent… up to (not including) launchd.
+func ancestorChain() -> [pid_t] {
+    var chain: [pid_t] = []
     var pid = getpid()
-    while pid > 1, pids.insert(pid).inserted {
+    while pid > 1, !chain.contains(pid) {
+        chain.append(pid)
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { break }
         pid = info.kp_eproc.e_ppid
     }
-    return pids
+    return chain
+}
+
+/// The app macOS asks about permissions for skfiy: the outermost app among
+/// its ancestors (the terminal, VS Code, Claude…), since Accessibility and
+/// Screen Recording are granted to it rather than to skfiy.
+public func hostApplicationName() -> String {
+    let apps = ancestorChain().dropFirst().compactMap { NSRunningApplication(processIdentifier: $0) }
+        .filter { $0.bundleURL?.pathExtension == "app" }
+    if let name = apps.last?.localizedName { return name }
+    return ProcessInfo.processInfo.environment["TERM_PROGRAM"] ?? "the app that runs Claude Code"
 }
 
 /// Whether Apple Events to `bundleID` are already allowed, without asking:
