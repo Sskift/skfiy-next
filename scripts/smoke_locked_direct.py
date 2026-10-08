@@ -21,14 +21,15 @@ import time
 import uuid
 
 from diagnose_locked_direct import no_custom_authorization
+from harness import Client, Evidence, ROOT, require
 from scenario import OCR_LINE
-from smoke_locked import Client, Evidence, ROOT, build_helpers, probe_sample, require, run, wait_for
+from smoke_locked import build_helpers, probe_sample, run, wait_for
 
 
 class DirectClient(Client):
     """Run the real MCP with direct locked mode explicitly enabled."""
     def __init__(self, binary, evidence):
-        super().__init__(binary, evidence, environment={'SKFIY_LOCKED_USE': 'direct'},
+        super().__init__(binary, evidence, env={'SKFIY_LOCKED_USE': 'direct'},
                          name='skfiy-direct-locked-smoke')
 
 

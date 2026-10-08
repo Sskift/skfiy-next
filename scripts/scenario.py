@@ -24,7 +24,7 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from smoke_locked import Client, Evidence, ROOT, require  # noqa: E402,F401
+from harness import Client, Evidence, ROOT, require, wait_until  # noqa: E402,F401
 
 # SKFIY_TEST_BIN keeps a run's helper binaries apart from another run's.
 BIN = Path(os.environ.get('SKFIY_TEST_BIN', '/tmp/skfiy-compat/bin'))
@@ -51,19 +51,10 @@ def probe(*args):
     return json.loads(subprocess.run([str(tool('AXProbe')), *map(str, args)], capture_output=True, text=True, timeout=20, check=True).stdout)
 
 
-def wait_until(check, timeout=8, interval=0.1, errors=(OSError, ValueError, KeyError)):
-    """check's first truthy value within timeout, else its last; errors count as not yet."""
-    deadline = time.monotonic() + timeout
-    value = None
-    while time.monotonic() < deadline:
-        try:
-            value = check()
-        except errors:
-            value = None
-        if value:
-            return value
-        time.sleep(interval)
-    return value
+def idle_seconds():
+    # The user's own keys, clicks, moves and scrolls: IOHIDSystem's HIDIdleTime
+    # is reset by skfiy's mouse events too.
+    return probe('session')['idleSeconds']
 
 
 OCR_LINE = re.compile(r'^\s*("(?:[^"\\]|\\.)*")\s+x=(-?[\d.]+)\s+y=(-?[\d.]+)')
@@ -163,7 +154,7 @@ class Fixture:
 class Session:
     """One test run: evidence, the fixture, an MCP client in the mode matching the lock state."""
 
-    def __init__(self, name, direct=None, fixture=True, environment=None, window_guard=True):
+    def __init__(self, name, direct=None, fixture=True, environment=None, window_guard=True, answer=None):
         self.nonce = uuid.uuid4().hex[:10]
         self.session_at_start = probe('session')
         self.locked = self.session_at_start['locked']
@@ -178,6 +169,7 @@ class Session:
         # when a test window gets on top; tests that check the order themselves go without
         # (as does every test with SKFIY_TEST_WINDOW_GUARD=0).
         self.window_guard = window_guard
+        self.answer = answer  # how the client answers skfiy's approval questions (harness.APPROVE); None: it cannot ask
         self.checks = []
         self.samples = []
         self.summary = {'name': name, 'nonce': self.nonce, 'mode': self.mode, 'direct': self.direct,
@@ -198,7 +190,7 @@ class Session:
             fixture_dir.mkdir()
             self.fixture = Fixture(fixture_dir, self.nonce).launch()
             self.app = self.fixture.name
-        self.client = Client(self.binary, self.evidence, environment=self.environment, name='skfiy-scenario')
+        self.client = Client(self.binary, self.evidence, env=self.environment, answer=self.answer, name='skfiy-scenario')
         return self
 
     binary = None  # set by main_binary()

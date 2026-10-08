@@ -36,8 +36,8 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Client, Evidence, ROOT, ocr_find, ocr_lines, probe, require, tool  # noqa: E402
-from scenario import wait_until as scenario_wait_until  # noqa: E402
+from harness import Client, Evidence, ROOT, require, wait_until as harness_wait_until  # noqa: E402
+from scenario import ocr_find, ocr_lines, probe, tool  # noqa: E402
 
 WORK = Path('/tmp/skfiy-compat')
 PORT = 8766
@@ -90,7 +90,7 @@ def page_state(run):
 
 def wait_until(check, timeout=6, interval=0.2):
     # Any error is a probe that cannot answer yet (an app still starting, a page not loaded).
-    return scenario_wait_until(check, timeout, interval, errors=Exception)
+    return harness_wait_until(check, timeout, interval, errors=Exception)
 
 
 def tree_index(text, pattern):
@@ -175,7 +175,7 @@ class Run:
     def start_client(self):
         environment = {'SKFIY_LOCKED_USE': 'direct'} if self.mode == 'locked' else {}
         environment['SKFIY_SETTLE_SECONDS'] = '0.5'
-        self.client = Client(self.binary, self.evidence, environment=environment, name='skfiy-compat-baseline')
+        self.client = Client(self.binary, self.evidence, env=environment, name='skfiy-compat-baseline')
 
     def call(self, tool, **arguments):
         """A tool call; in background mode, also checks that the front app stayed."""

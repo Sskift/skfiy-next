@@ -9,10 +9,14 @@ is connected, and it never reconnects.
 """
 import json
 import os
+from pathlib import Path
 import struct
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import wait_until  # noqa: E402
 
 BINARY = sys.argv[1] if len(sys.argv) > 1 else '.build/debug/skfiy'
 # Sockets are named after the host's parent, the browser; here that is us.
@@ -34,24 +38,15 @@ def inode():
         return None
 
 
-def wait_until(check, timeout=5):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if check():
-            return True
-        time.sleep(0.05)
-    return False
-
-
 def main():
     old = start_host()
     new = None
     try:
-        if not wait_until(inode):
+        if not wait_until(inode, timeout=5, interval=0.05):
             sys.exit('FAIL: the first host never listened')
         first = inode()
         new = start_host()
-        if not wait_until(lambda: inode() not in (None, first)):
+        if not wait_until(lambda: inode() not in (None, first), timeout=5, interval=0.05):
             sys.exit('FAIL: the second host never listened')
         second = inode()
         old.stdin.close()
@@ -61,7 +56,7 @@ def main():
         print(f"{'PASS' if kept else 'FAIL'}: the old host exiting {'kept' if kept else 'removed'} the new host's socket")
         new.stdin.close()
         new.wait(5)
-        gone = wait_until(lambda: inode() is None, timeout=2)
+        gone = wait_until(lambda: inode() is None, timeout=2, interval=0.05)
         print(f"{'PASS' if gone else 'FAIL'}: the last host exiting {'removed' if gone else 'left'} its socket")
         sys.exit(0 if kept and gone else 1)
     finally:

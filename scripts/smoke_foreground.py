@@ -8,66 +8,32 @@ front app came back. TextEdit must not be running.
 
     python3 scripts/smoke_foreground.py [path/to/skfiy] [--accept]
 """
-import json
-import os
 from pathlib import Path
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import probe  # noqa: E402
+import harness  # noqa: E402
+from harness import APPROVE, DECLINE, frontmost  # noqa: E402
+from scenario import idle_seconds  # noqa: E402
 
 ARGS = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
 BINARY = ARGS[0] if ARGS else ".build/debug/skfiy"
 ACCEPT = "--accept" in sys.argv
 
 
-class Client:
-    def __init__(self, elicitation, answer):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env={**os.environ, "SKFIY_ACTION_LOG": "off"})
-        self.answer = answer
-        self.asked = []
-        self.next_id = 0
-        capabilities = {"elicitation": {"form": {}}} if elicitation else {}
-        self.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": capabilities, "clientInfo": {"name": "smoke", "version": "0"}})
-
-    def send(self, message):
-        self.proc.stdin.write(json.dumps(message) + "\n")
-        self.proc.stdin.flush()
-
-    def request(self, method, params):
-        self.next_id += 1
-        self.send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
-        while True:
-            message = json.loads(self.proc.stdout.readline())
-            if message.get("method") == "elicitation/create":
-                self.asked.append(message["params"]["message"])
-                self.send({"jsonrpc": "2.0", "id": message["id"], "result": self.answer})
-            elif message.get("id") == self.next_id:
-                return message["result"]
+class Client(harness.Client):
+    def __init__(self, answer=None):
+        super().__init__(BINARY, answer=answer)
 
     def call(self, tool, **arguments):
-        result = self.request("tools/call", {"name": tool, "arguments": {"app": "TextEdit", **arguments}})
-        return ("ERROR: " if result["isError"] else "") + result["content"][0]["text"]
-
-    def close(self):
-        self.proc.stdin.close()
+        result = super().call(tool, allow_error=True, **{"app": "TextEdit", **arguments})
+        return ("ERROR: " if result["is_error"] else "") + result["text"]
 
 
 def osascript(script):
     return subprocess.run(["osascript", "-e", script], capture_output=True, text=True).stdout.strip()
-
-
-def front():
-    asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
-    return subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True).stdout.strip()
-
-
-def idle_seconds():
-    # The user's own keys, clicks, moves and scrolls: IOHIDSystem's HIDIdleTime
-    # is reset by skfiy's mouse events too.
-    return probe("session")["idleSeconds"]
 
 
 def check(condition, message):
@@ -83,7 +49,7 @@ def main():
     if subprocess.run(["pgrep", "-x", "TextEdit"], capture_output=True).returncode == 0:
         sys.exit("TextEdit is running; quit it first so no real document is touched.")
     results = []
-    setup = Client(elicitation=False, answer=None)
+    setup = Client()
     try:
         setup.call("get_app_state")
         setup.call("press_key", key="cmd+n")
@@ -94,16 +60,16 @@ def main():
         setup.call("press_key", key="cmd+a")
         time.sleep(2)  # TextEdit may activate itself once after launching; skfiy hands the front back
 
-        before = front()
+        before = frontmost()
         out = setup.call("run_in_front", key="super+b", reason="make the title bold")
-        results.append(check(out.startswith("ERROR") and "cannot ask" in out and front() == before and not bold(),
+        results.append(check(out.startswith("ERROR") and "cannot ask" in out and frontmost() == before and not bold(),
                              "a client that cannot ask the user: nothing happens"))
 
-        declining = Client(elicitation=True, answer={"action": "decline"})
+        declining = Client(DECLINE)
         declining.call("get_app_state")
-        before = front()
+        before = frontmost()
         out = declining.call("run_in_front", key="super+b", reason="make the title bold")
-        after = front()
+        after = frontmost()
         results.append(check(out.startswith("ERROR") and "declined" in out and len(declining.asked) == 1
                              and after == before and not bold(),
                              f"the user declines: nothing happens (asked {len(declining.asked)}×, front {before} -> {after}, {out[:70]!r})"))
@@ -111,14 +77,14 @@ def main():
 
         if ACCEPT:
             print("  … waiting until you have been idle for 10 s (not in Ghostty)")
-            while idle_seconds() < 10 or "Ghostty" in front() or "TextEdit" in front():
+            while idle_seconds() < 10 or "Ghostty" in frontmost() or "TextEdit" in frontmost():
                 time.sleep(1)
-            accepting = Client(elicitation=True, answer={"action": "accept", "content": {"allow": True}})
+            accepting = Client(APPROVE)
             accepting.call("get_app_state")
-            user = front()
+            user = frontmost()
             out = accepting.call("run_in_front", key="super+b", reason="make the title bold")
             results.append(check(not out.startswith("ERROR") and bold(), f"the user approves: the title is bold ({out.splitlines()[0][:90]})"))
-            results.append(check(front() == user, f"the front app came back ({front()})"))
+            results.append(check(frontmost() == user, f"the front app came back ({frontmost()})"))
             accepting.close()
     finally:
         osascript('tell application "TextEdit" to close every document saving no')

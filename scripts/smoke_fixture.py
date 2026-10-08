@@ -20,7 +20,9 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import probe  # noqa: E402
+import harness  # noqa: E402
+from harness import APPROVE, DECLINE, case, frontmost, index, results, status  # noqa: E402
+from scenario import idle_seconds  # noqa: E402
 
 FRONT = "--front" in sys.argv
 ARGS = [arg for arg in sys.argv[1:] if arg != "--front"]
@@ -32,52 +34,18 @@ PANEL_DIR = "/Users/Shared/skfiy-panel-test"
 ACTION_LOG = f"/tmp/skfiy-fixture-actions-{os.getpid()}.jsonl"  # never the user's log
 
 
-class Client:
-    def __init__(self, can_ask=False, approve=False):
-        self.proc = subprocess.Popen([BINARY, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
-                                     env={**os.environ, "SKFIY_ACTION_LOG": ACTION_LOG})
-        self.next_id = 0
-        self.asked = []  # approvals the server asked for
-        self.answer = {"action": "accept", "content": {"allow": True}} if approve else {"action": "decline"}
-        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {"elicitation": {"form": {}}} if can_ask else {}})
-
-    def send(self, message):
-        self.proc.stdin.write(json.dumps(message) + "\n")
-        self.proc.stdin.flush()
-
-    def request(self, method, params):
-        self.next_id += 1
-        self.send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
-        while True:
-            response = json.loads(self.proc.stdout.readline())
-            if response.get("method") == "elicitation/create":
-                self.asked.append(response["params"]["message"])
-                self.send({"jsonrpc": "2.0", "id": response["id"], "result": self.answer})
-                continue
-            if "error" in response:
-                raise RuntimeError(response["error"])
-            return response["result"]
+class Client(harness.Client):
+    def __init__(self, answer=None):
+        super().__init__(BINARY, env={"SKFIY_ACTION_LOG": ACTION_LOG}, answer=answer)
 
     def call(self, tool, **arguments):
         before = frontmost()
-        result = self.request("tools/call", {"name": tool, "arguments": {"app": APP, **arguments}})
-        text = result["content"][0]["text"]
+        result = super().call(tool, allow_error=True, **{"app": APP, **arguments})
         if APP not in before and APP in frontmost():
             raise AssertionError(f"{tool} brought {APP} to the front")
-        if result["isError"]:
-            raise RuntimeError(f"{tool}: {text}")
-        return text
-
-
-def idle_seconds():
-    # The user's own keys, clicks, moves and scrolls: IOHIDSystem's HIDIdleTime
-    # is reset by skfiy's mouse events too.
-    return probe("session")["idleSeconds"]
-
-
-def frontmost():
-    asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()
-    return subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True).stdout
+        if result["is_error"]:
+            raise RuntimeError(f"{tool}: {result['text']}")
+        return result["text"]
 
 
 def build():
@@ -94,18 +62,6 @@ def build():
         plistlib.dump({"com.apple.security.app-sandbox": True, "com.apple.security.files.user-selected.read-write": True,
                        "com.apple.security.network.client": True}, plist)  # web views need it even for inline pages
     subprocess.run(["codesign", "--force", "-s", "-", "--entitlements", entitlements, APP_PATH], check=True, capture_output=True)
-
-
-def index(tree, pattern):
-    for line in tree.splitlines():
-        if re.search(pattern, line):
-            return re.search(r"\[(\d+)\]", line).group(1)
-    raise AssertionError(f"no element matches {pattern!r}")
-
-
-def status(tree, prefix="status"):
-    match = re.search(prefix + r': ([^"]*)"', tree)
-    return match.group(1) if match else "?"
 
 
 def clipboard_fingerprint():
@@ -134,20 +90,6 @@ def green_half(caller, name):
     match = re.search(re.escape(name) + r" at (\d+),(\d+) (\d+)x(\d+)", now)
     left, top, width, height = map(int, match.groups())
     return to_pixels(now, left + width / 4, top + height / 2)
-
-
-results = []
-
-
-def case(name, run, expect):
-    try:
-        observed = run()
-        ok = re.search(expect, observed) is not None
-    except Exception as error:  # noqa: BLE001 - scored, not raised
-        observed = f"error: {error}"
-        ok = False
-    results.append(ok)
-    print(f"  {'✔' if ok else '✘'} {name}: {observed}")
 
 
 def main():
@@ -216,7 +158,7 @@ def main():
         # here: one client cannot ask, the other declines.
         def read_clipboard():
             answers = []
-            for asker in (client, Client(can_ask=True)):
+            for asker in (client, Client(DECLINE)):
                 try:
                     asker.call("read_clipboard", reason="smoke test")
                     answers.append("read")
@@ -225,7 +167,7 @@ def main():
                                    else "empty" if "clipboard is empty" in str(error) else str(error)[:60])
                 if asker is not client:
                     answers.append(f"asked {len(asker.asked)}x")
-                    asker.proc.stdin.close()
+                    asker.close()
             return " | ".join(answers)
         # With an empty clipboard there is nothing to ask about.
         case("read_clipboard only with the user's approval", read_clipboard, r"^(cannot ask \| declined \| asked 1x|empty \| empty \| asked 0x)$")
@@ -234,7 +176,7 @@ def main():
         # confirmation is checked against the app.
         def hand_over():
             answers = []
-            for asker in (client, Client(can_ask=True), Client(can_ask=True, approve=True)):
+            for asker in (client, Client(DECLINE), Client(APPROVE)):
                 try:
                     out = asker.call("hand_over", message="Sign in (smoke test)", app=APP, expect="skfiy fixture")
                     answers.append("done, checked" if out.startswith('The user says it is done. "skfiy fixture" appeared') else out[:60])
@@ -242,7 +184,7 @@ def main():
                     text = str(error)
                     answers.append("cannot ask" if "No answer came" in text else "declined" if "did not do it" in text else text[:60])
                 if asker is not client:
-                    asker.proc.stdin.close()
+                    asker.close()
             return " | ".join(answers)
         case("hand_over waits for the user and checks the app", hand_over, r"^cannot ask \| declined \| done, checked$")
 
@@ -258,14 +200,14 @@ def main():
         case("a background right-click is refused and points to run_in_front", right_click, r"^refused, pointing to run_in_front$")
 
         def declined_menu():
-            asker = Client(can_ask=True)
+            asker = Client(DECLINE)
             now = asker.call("get_app_state", window="skfiy fixture")
             try:
                 asker.call("run_in_front", element_index=index(now, r'Button "archive"'), menu_item="Label > Red", reason="smoke test")
                 answer = "ran"
             except RuntimeError as error:
                 answer = "declined" if "declined" in str(error) else str(error)[:80]
-            asker.proc.stdin.close()
+            asker.close()
             return answer + " | " + status(client.call("get_app_state", window="skfiy fixture"))
         case("run_in_front with a context menu does nothing when declined", declined_menu, r"^declined \| (?!label)")
 
@@ -274,16 +216,16 @@ def main():
                 print("  … waiting until you have been idle for 10 s (not in Ghostty)")
                 while idle_seconds() < 10 or "Ghostty" in frontmost() or APP in frontmost():
                     subprocess.run(["sleep", "1"])
-                asker = Client(can_ask=True, approve=True)
-                now = asker.request("tools/call", {"name": "get_app_state", "arguments": {"app": APP, "window": "skfiy fixture"}})["content"][0]["text"]
+                asker = Client(APPROVE)
+                now = asker.call("get_app_state", window="skfiy fixture")
                 user = frontmost()
-                result = asker.request("tools/call", {"name": "run_in_front", "arguments": {
-                    "app": APP, "element_index": index(now, r'Button "archive"'), "menu_item": "Label > Red", "reason": "smoke test"}})
+                # Without this script's check: run_in_front brings the app forward by design.
+                result = harness.Client.call(asker, "run_in_front", allow_error=True, app=APP, element_index=index(now, r'Button "archive"'),
+                                             menu_item="Label > Red", reason="smoke test")
                 back = frontmost() == user
-                asker.proc.stdin.close()
-                text = result["content"][0]["text"]
-                if result["isError"]:
-                    return text[:120]
+                asker.close()
+                if result["is_error"]:
+                    return result["text"][:120]
                 return status(client.call("get_app_state", window="skfiy fixture")) + (" | front app back" if back else f" | front app now {frontmost()}")
             case("run_in_front chooses from a context menu once approved", approved_menu, r"^label red chosen \| front app back$")
 
@@ -291,15 +233,14 @@ def main():
                 def run():
                     while idle_seconds() < 10 or "Ghostty" in frontmost() or APP in frontmost():
                         subprocess.run(["sleep", "1"])
-                    asker = Client(can_ask=True, approve=True)
+                    asker = Client(APPROVE)
                     x, y = green_half(asker, name)
                     user = frontmost()
-                    result = asker.request("tools/call", {"name": "run_in_front", "arguments": {
-                        "app": APP, "x": x, "y": y, "reason": "smoke test"}})
+                    result = harness.Client.call(asker, "run_in_front", allow_error=True, app=APP, x=x, y=y, reason="smoke test")
                     back = frontmost() == user
-                    asker.proc.stdin.close()
-                    if result["isError"]:
-                        return result["content"][0]["text"][:120]
+                    asker.close()
+                    if result["is_error"]:
+                        return result["text"][:120]
                     return status(client.call("get_app_state", window="skfiy fixture")) + (" | front app back" if back else f" | front app now {frontmost()}")
                 return run
             case("run_in_front clicks a view that ignores background clicks", approved_click("strict canvas"), r"^strict canvas green clicked \| front app back$")
@@ -352,16 +293,16 @@ def main():
         case("a view ignoring background clicks is reported, not faked", click_canvas("strict canvas"), r"^(?!strict).* \| points to focus$")
 
         def declined_focus():
-            asker = Client(can_ask=True)
+            asker = Client(DECLINE)
             x, y = green_half(asker, "strict canvas")
             answer = asker.call("click", x=x, y=y, focus=True)
-            asker.proc.stdin.close()
+            asker.close()
             return ("declined noted" if "declined giving it focus" in answer else answer[:80]) + f" | asked {len(asker.asked)}x"
         case("click focus asks the user, and a decline is respected", declined_focus, r"^declined noted \| asked 1x$")
 
         client.call("press_key", key="cmd+q")
     finally:
-        client.proc.stdin.close()
+        client.close()
         subprocess.run(["pkill", "-x", APP])
         subprocess.run(["rm", "-rf", PANEL_DIR])
         if os.path.exists(ACTION_LOG):

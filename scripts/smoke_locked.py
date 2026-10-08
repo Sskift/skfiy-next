@@ -1,25 +1,18 @@
 #!/usr/bin/env python3
-"""Shared fixture, evidence and MCP helpers for direct locked-use acceptance;
-its Client, Evidence and require are also the MCP client and evidence log of
-scenario.py and compat_baseline.py.
+"""Shared fixture and lock-probe helpers for direct locked-use acceptance.
 
 This is a support module. Run smoke_locked_direct.py or
 smoke_locked_direct_multiwindow.py for direct-mode acceptance. These helpers
 never install an authorization plugin, lock/unlock macOS, or inject global HID
 events.
 """
-import base64
 import json
-import os
-from pathlib import Path
 import plistlib
-import queue
 import subprocess
-import threading
 import time
 
+from harness import ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
 
 # The independent probe only observes session state or OCRs a supplied fixture
 # screenshot. Sampling both ends detects state transitions during collection.
@@ -86,111 +79,6 @@ default: die("Unknown probe mode")
 
 def run(*args, timeout=20):
     return subprocess.run([str(arg) for arg in args], check=True, capture_output=True, text=True, timeout=timeout).stdout
-
-
-def require(condition, message):
-    if not condition:
-        raise AssertionError(message)
-
-
-class Evidence:
-    def __init__(self, directory):
-        self.directory = directory
-        self.events = (directory / "harness.jsonl").open("x", buffering=1)
-        self.sequence = 0
-
-    def record(self, event, **details):
-        self.sequence += 1
-        row = {"sequence": self.sequence, "timestamp": time.time(), "monotonic": time.monotonic(), "event": event, **details}
-        self.events.write(json.dumps(row, ensure_ascii=False) + "\n")
-        return row
-
-
-class Client:
-    def __init__(self, binary, evidence, *, environment=None, name="skfiy-lock-smoke"):
-        self.evidence = evidence
-        self.next_id = 0
-        self.inbox = queue.Queue()
-        self.stderr = (evidence.directory / "mcp.stderr").open("x")
-        self.proc = subprocess.Popen([str(binary), "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=self.stderr, text=True, bufsize=1,
-                                     env={**os.environ, **(environment or {}),
-                                          "SKFIY_ACTION_LOG": str(evidence.directory / "actions.jsonl"),
-                                          "SKFIY_STOP_FILE": str(evidence.directory / "stopped")})
-
-        def read():
-            try:
-                for line in self.proc.stdout:
-                    self.inbox.put(json.loads(line))
-            except Exception as error:
-                self.inbox.put(error)
-            finally:
-                self.inbox.put(EOFError("MCP stdout closed"))
-
-        self.reader = threading.Thread(target=read, daemon=True)
-        self.reader.start()
-        try:
-            self.request("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
-                                        "clientInfo": {"name": name, "version": "1"}})
-            self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        except BaseException:
-            self.close()
-            raise
-
-    def send(self, value):
-        self.proc.stdin.write(json.dumps(value) + "\n")
-        self.proc.stdin.flush()
-
-    def request(self, method, params, timeout=25):
-        self.next_id += 1
-        request_id = self.next_id
-        self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-        deadline = time.monotonic() + timeout
-        while True:
-            reply = self.inbox.get(timeout=max(0.01, deadline - time.monotonic()))
-            if isinstance(reply, Exception):
-                raise reply
-            if reply.get("method") == "elicitation/create":
-                self.send({"jsonrpc": "2.0", "id": reply["id"], "result": {"action": "decline"}})
-                raise AssertionError("The isolated lock smoke unexpectedly asked for approval.")
-            if reply.get("id") != request_id:
-                self.evidence.record("mcp_notification", message=reply)
-                require(time.monotonic() < deadline, "MCP reply deadline elapsed")
-                continue
-            if "error" in reply:
-                raise RuntimeError(reply["error"])
-            return reply["result"]
-
-    def call(self, tool, allow_error=False, rpc_timeout=25, **arguments):
-        began = time.time()
-        result = self.request("tools/call", {"name": tool, "arguments": arguments}, timeout=rpc_timeout)
-        text = "\n".join(block["text"] for block in result.get("content", []) if block.get("type") == "text")
-        images = []
-        for offset, block in enumerate(result.get("content", [])):
-            if block.get("type") == "image":
-                suffix = ".png" if block.get("mimeType") == "image/png" else ".jpg"
-                path = self.evidence.directory / f"tool-{self.next_id:03d}-{offset}{suffix}"
-                path.write_bytes(base64.b64decode(block["data"], validate=True))
-                images.append(str(path))
-        self.evidence.record("tool", tool=tool, arguments=arguments, started=began,
-                             is_error=bool(result.get("isError")), text=text, images=images)
-        if not allow_error:
-            require(not result.get("isError"), f"{tool}: {text}")
-        return {"text": text, "images": images, "is_error": bool(result.get("isError"))}
-
-    def close(self):
-        if self.proc.poll() is None:
-            try:
-                self.proc.stdin.close()
-            except BrokenPipeError:
-                pass
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=3)
-        self.reader.join(timeout=1)
-        self.stderr.close()
 
 
 def build_helpers(directory, nonce):

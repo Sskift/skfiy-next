@@ -34,7 +34,8 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat_baseline as compat  # noqa: E402
-from scenario import Client, Session, main_binary  # noqa: E402
+from harness import Client  # noqa: E402
+from scenario import Session, main_binary  # noqa: E402
 
 STEPS = [{'id': 'download', 'title': 'Download the data file'},
          {'id': 'open', 'title': 'Open it in the processing page'},
@@ -149,7 +150,7 @@ def app_flow(flows):
             s.client.close()
             stderr = s.directory / 'mcp.stderr'
             stderr.rename(s.directory / f'mcp.stderr.{time.time_ns()}')
-            s.client = Client(s.binary, s.evidence, environment=s.environment, name='skfiy-scenario')
+            s.client = Client(s.binary, s.evidence, env=s.environment, answer=s.answer, name='skfiy-scenario')
 
         def status():
             result = s.call('flow_status', name=flow)
