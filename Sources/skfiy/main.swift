@@ -6,8 +6,8 @@ let usage = """
 skfiy \(skfiyVersion) — macOS computer use for AI agents
 
 Usage:
-  skfiy setup                    Finish installing: browser extension files and bridge, Claude Code
-                                 registration, permission check. Safe to run again.
+  skfiy setup                    Register the MCP client and guide you through permissions and
+                                 verification; browser extension is optional. Safe to run again.
   skfiy doctor [--check]         Check the setup; without --check, macOS asks for missing permissions
   skfiy uninstall [--keep-binary]  Undo setup and remove skfiy's files (and this binary)
   skfiy mcp                      Run the MCP server (your MCP client starts it)

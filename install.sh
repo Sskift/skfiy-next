@@ -3,17 +3,17 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh | bash
 #
-# Installs the prebuilt universal binary from the latest GitHub release when
-# there is one, otherwise builds from source (needs Apple's Command Line
-# Tools). The binary goes to ~/.local/bin/skfiy; then `skfiy setup` installs
+# Installs the prebuilt universal binary from the latest GitHub release.
+# Source builds require --from-source and Apple's Command Line Tools.
+# The binary goes to ~/.local/bin/skfiy; then `skfiy setup` installs
 # the browser extension files and bridge, registers skfiy with Claude Code
 # when the claude CLI is installed (Codex too with --codex), checks
 # permissions without prompting and lists what is left to do. Run it again
 # to update; nothing needs sudo.
 #
 # Options (after `bash -s --` when piping from curl):
-#   --from-source     build from source even when a release exists
-#   --release         download the release even when run from a clone
+#   --from-source     build the checkout (or clone and build if outside one)
+#   --release         download the release (default, including from a clone)
 #   --binary FILE     install this skfiy binary instead
 #   --prefix DIR      install into DIR/bin (default ~/.local; also $SKFIY_PREFIX)
 #   --version X.Y.Z   a given release instead of the latest
@@ -22,7 +22,7 @@
 #   Anything else goes to `skfiy setup`, e.g. --codex or -e SKFIY_LOCKED_USE=direct.
 #
 # Environment: SKFIY_REPO (default Sskift/skfiy-next), SKFIY_RELEASE_URL (default
-# https://github.com/$SKFIY_REPO/releases), SKFIY_SOURCE_DIR (a checkout to build).
+# https://github.com/$SKFIY_REPO/releases), SKFIY_SOURCE_DIR (with --from-source).
 
 set -euo pipefail
 
@@ -33,7 +33,7 @@ main() {
     local repo=${SKFIY_REPO:-Sskift/skfiy-next}
     local releases=${SKFIY_RELEASE_URL:-https://github.com/$repo/releases}
     local prefix=${SKFIY_PREFIX:-$HOME/.local}
-    local mode="" binary="" version="" run_setup=1 uninstall=0
+    local mode=release binary="" version="" run_setup=1 uninstall=0
     local setup_args=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -72,26 +72,14 @@ main() {
     work=$(mktemp -d "${TMPDIR:-/tmp}/skfiy-install.XXXXXX")
     trap 'rm -rf "${work:?}"' EXIT
 
-    # A clone of the repository builds itself, like `make install`.
+    # --from-source uses this checkout if present. Plain installs always use releases.
     local here=""
     if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
         here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
         [ -f "$here/Package.swift" ] && [ -d "$here/Sources/SkfiyKit" ] || here=""
     fi
-    if [ -z "$mode" ]; then
-        if [ -n "${SKFIY_SOURCE_DIR:-}" ] || [ -n "$here" ]; then mode=source; else mode=release; fi
-    fi
-
     if [ "$mode" = release ]; then
-        local status=0
-        binary=$(download "$releases" "$version" "$work") || status=$?
-        if [ "$status" = 3 ]; then
-            [ -z "$version" ] || die "could not download skfiy $version from $releases."
-            say "No prebuilt release found at $releases; building from source instead."
-            mode=source
-        elif [ "$status" != 0 ]; then
-            exit "$status"
-        fi
+        binary=$(download "$releases" "$version" "$work")
     fi
     if [ "$mode" = source ]; then
         binary=$(build "${SKFIY_SOURCE_DIR:-$here}" "$repo" "$work")
@@ -117,15 +105,31 @@ main() {
     fi
 }
 
+# Fetches a release file, keeping curl's diagnostic and distinguishing missing
+# assets from connection failures. Neither case starts a source build.
+fetch() {
+    local url=$1 destination=$2 status=0 http_code
+    http_code=$(curl -fsSL --retry 2 --connect-timeout 15 --max-time 120 \
+        -w '%{http_code}' -o "$destination" "$url") || status=$?
+    [ "$status" -eq 0 ] && return 0
+    if [ "$http_code" = 404 ]; then
+        die "release file not found (HTTP 404): $url
+Check the version and release assets, then retry. Nothing was installed.
+To build from source explicitly, rerun with --from-source (requires Swift 6)."
+    fi
+    die "could not download $url (curl error $status, HTTP ${http_code:-unknown}).
+Check your connection to GitHub or proxy settings, then retry. Nothing was installed.
+No source build was attempted; developer tools are not needed for release installs."
+}
+
 # Downloads and checks the release tarball; prints the path of the binary.
-# Returns 3 when there is no release to download.
 download() {
     local releases=$1 version=$2 work=$3
     local asset=skfiy-macos-universal.tar.gz url
     if [ -n "$version" ]; then url="$releases/download/v$version/$asset"; else url="$releases/latest/download/$asset"; fi
     say "Downloading $url" >&2
-    curl -fsSL --retry 2 -o "$work/$asset" "$url" 2>/dev/null || return 3
-    curl -fsSL --retry 2 -o "$work/$asset.sha256" "$url.sha256" 2>/dev/null || die "the release has no checksum file ($url.sha256)."
+    fetch "$url" "$work/$asset"
+    fetch "$url.sha256" "$work/$asset.sha256"
     local expected actual
     expected=$(awk '{print $1; exit}' "$work/$asset.sha256")
     actual=$(shasum -a 256 "$work/$asset" | awk '{print $1}')

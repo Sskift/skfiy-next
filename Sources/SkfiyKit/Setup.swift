@@ -258,7 +258,7 @@ public enum Setup {
         let directory = (executable as NSString).deletingLastPathComponent
         guard !onPath(directory) else { return nil }
         let shown = directory == SkfiyPaths.home.path + "/.local/bin" ? "$HOME/.local/bin" : directory
-        return Line(.warning, "\(abbreviated(directory)) is not on your PATH, so type the full path (\(abbreviated(executable))) or run: echo 'export PATH=\"\(shown):$PATH\"' >> ~/.zprofile")
+        return Line(.skipped, "Optional: \(abbreviated(directory)) is not on your PATH. You can use \(shellQuoted(executable)) without changing PATH. To use plain `skfiy` in zsh, add `export PATH=\"\(shown):$PATH\"` to ~/.zprofile and reopen your terminal.")
     }
 
     /// Settings with a value skfiy does not understand; they would silently do nothing.
@@ -344,7 +344,8 @@ public enum Setup {
     public static func run(_ options: Options) -> Int32 {
         let executable = SkfiyPaths.executable
         var lines: [Line] = []
-        var todo: [String] = []
+        var browserReport: [Line] = []
+        var browserTodo: [String] = []
         var failed = false
         print("skfiy \(skfiyVersion) setup: \(abbreviated(executable))\n")
 
@@ -353,31 +354,31 @@ public enum Setup {
                 let change = try installExtension()
                 let folder = abbreviated(SkfiyPaths.browserExtension.path)
                 switch change {
-                case .unchanged: lines.append(Line(.ok, "Browser extension files: \(folder) (\(extensionVersion), up to date)"))
-                case .installed: lines.append(Line(.ok, "Browser extension files: installed \(extensionVersion) in \(folder)"))
-                case .updated(let from): lines.append(Line(.ok, "Browser extension files: updated \(from ?? "?") → \(extensionVersion) in \(folder)"))
+                case .unchanged: browserReport.append(Line(.ok, "Browser extension files: \(folder) (\(extensionVersion), up to date)"))
+                case .installed: browserReport.append(Line(.ok, "Browser extension files: installed \(extensionVersion) in \(folder)"))
+                case .updated(let from): browserReport.append(Line(.ok, "Browser extension files: updated \(from ?? "?") → \(extensionVersion) in \(folder)"))
                 }
                 var written = try BrowserBridge.install(executable: executable)
                 if !options.userDataDirectories.isEmpty {
                     written += try BrowserBridge.install(executable: executable, extraUserDataDirectories: options.userDataDirectories)
                 }
                 if written.isEmpty {
-                    lines.append(Line(.skipped, "Browser bridge: no Chromium browser (Chrome, Edge, Brave…) found; the browser tools are optional. Run `skfiy setup` again after installing one"))
+                    browserReport.append(Line(.skipped, "Browser bridge: no Chromium browser (Chrome, Edge, Brave…) found; the browser tools are optional. Run `\(shellQuoted(executable)) setup` again after installing one"))
                 } else {
                     let names = written.map { URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent().lastPathComponent }
-                    lines.append(Line(.ok, "Browser bridge: registered for \(names.joined(separator: ", "))"))
+                    browserReport.append(Line(.ok, "Browser bridge: registered for \(names.joined(separator: ", "))"))
                     let connected = BrowserBridge.connectedBrowsers()
                     if connected.isEmpty {
-                        todo.append(loadExtensionSteps)
+                        browserTodo.append(loadExtensionSteps)
                     } else if change != .unchanged {
                         // chrome.runtime.reload() did not bring the extension back in testing, so this stays manual.
                         for browser in connected {
-                            todo.append("\(browser.name) runs the old extension files: click the reload button on the skfiy card in chrome://extensions.")
+                            browserTodo.append("\(browser.name) runs the old extension files: click the reload button on the skfiy card in chrome://extensions.")
                         }
                     }
                 }
             } catch {
-                lines.append(Line(.failed, "Browser extension: \(error.localizedDescription)"))
+                browserReport.append(Line(.failed, "Browser extension: \(error.localizedDescription)"))
                 failed = true
             }
         }
@@ -392,29 +393,42 @@ public enum Setup {
         }
         if !options.claude {
             lines.append(Line(.skipped, "Claude Code: left alone. To add skfiy: \(manualCommand(.claude, executable: executable, environment: options.environment))"))
-        } else if !registered {
-            todo.append("Add skfiy to your MCP client (commands above). Any other MCP client: command \(executable), argument mcp.")
         }
 
+        print("1. Install")
+        lines.forEach { print($0.rendered) }
+        if !registered {
+            print("Add skfiy to your MCP client using the commands above, or set command to \(executable), argument mcp.")
+        }
+
+        print("\n2. Permissions")
         let host = hostApplicationName()
         let permissions = permissionLines(host: host)
-        lines += permissions.lines
+        permissions.lines.forEach { print($0.rendered) }
         if !permissions.missing.isEmpty {
-            todo.insert("""
-            Grant \(permissions.missing.joined(separator: " and ")) to the app that runs Claude Code (here: \(host)), not to skfiy:
-                 run `\(abbreviated(executable)) doctor` in it to get the macOS prompts, or enable it in System Settings → Privacy & Security.
-                 Then quit and reopen \(host) and Claude Code.
-            """, at: 0)
+            print("""
+            In the app that runs your MCP client (here: \(host)), run:
+              \(shellQuoted(executable)) doctor
+            Grant \(permissions.missing.joined(separator: " and ")) to that app in System Settings → Privacy & Security.
+            Then quit and reopen that app and your MCP client.
+            """)
         }
-        if let line = pathLine(executable: executable) { lines.append(line) }
-        lines += settingWarnings(environment: ProcessInfo.processInfo.environment.merging(options.environment) { $1 })
 
-        lines.forEach { print($0.rendered) }
-        if !todo.isEmpty {
-            print("\nStill to do:")
-            for (index, step) in todo.enumerated() { print("  \(index + 1). \(step)") }
-        } else {
-            print("\nDone. In Claude Code, ask for something like \"Open Notes and make a new note\".")
+        print("""
+
+        3. Verify
+        Restart your MCP client to load this version, then check:
+          \(shellQuoted(executable)) doctor --check
+        In your MCP client, ask: "Use skfiy to list the apps on my Mac."
+        """)
+        settingWarnings(environment: ProcessInfo.processInfo.environment.merging(options.environment) { $1 })
+            .forEach { print($0.rendered) }
+        if let line = pathLine(executable: executable) { print(line.rendered) }
+
+        if options.browser {
+            print("\nOptional: browser extension (desktop app tools work without it)")
+            browserReport.forEach { print($0.rendered) }
+            browserTodo.forEach { print($0) }
         }
         return failed ? 1 : 0
     }
@@ -514,16 +528,23 @@ public enum Setup {
         var lines = permissions.lines
         if let line = pathLine(executable: executable) { lines.append(line) }
         // The server runs with the settings in its registration, not doctor's own.
-        var settings = ProcessInfo.processInfo.environment
-        if let tool = findTool("claude") {
-            if let entry = currentEntry(.claude, tool: tool) {
-                settings.merge(entry.environment) { $1 }
+        var foundRegistration = false
+        for client in [Client.claude, .codex] {
+            guard let tool = findTool(client.rawValue) else { continue }
+            if let entry = currentEntry(client, tool: tool) {
+                foundRegistration = true
+                let settings = ProcessInfo.processInfo.environment.merging(entry.environment) { $1 }
                 let ours = entry.command == executable && entry.arguments == ["mcp"]
-                lines.append(Line(ours ? .ok : .warning, "Claude Code: skfiy runs \(abbreviated(entry.command)) \(entry.arguments.joined(separator: " "))\(ours ? "" : " (not this binary; `skfiy setup` updates it)")"))
-            } else {
-                lines.append(Line(.warning, "Claude Code: skfiy is not registered (`skfiy setup` registers it)"))
+                lines.append(Line(ours ? .ok : .warning, "\(client.displayName): skfiy runs \(abbreviated(entry.command)) \(entry.arguments.joined(separator: " "))\(ours ? "" : " (not this binary; run `\(shellQuoted(executable)) setup`)")"))
+                if settings["SKFIY_LOCKED_USE"] == "direct" {
+                    lines.append(Line(.ok, "\(client.displayName): Locked use: direct"))
+                }
+                lines += settingWarnings(environment: settings).map { Line($0.mark, "\(client.displayName): \($0.text)") }
+            } else if client == .claude {
+                lines.append(Line(.warning, "Claude Code: skfiy is not registered (`\(shellQuoted(executable)) setup` registers it)"))
             }
         }
+        if !foundRegistration { lines += settingWarnings() }
         let browser = browserLines(executable: executable)
         lines += browser.lines
         if EmergencyStop.isStopped {
@@ -531,12 +552,8 @@ public enum Setup {
         }
         let stale = staleServers(executable: executable)
         if !stale.isEmpty {
-            lines.append(Line(.warning, "\(stale.count) running skfiy server\(stale.count == 1 ? "" : "s") (pid \(stale.map(String.init).joined(separator: ", "))) still use\(stale.count == 1 ? "s" : "") an older build: restart those Claude Code sessions"))
+            lines.append(Line(.warning, "\(stale.count) running skfiy server\(stale.count == 1 ? "" : "s") (pid \(stale.map(String.init).joined(separator: ", "))) still use\(stale.count == 1 ? "s" : "") an older build: restart those MCP client sessions"))
         }
-        if settings["SKFIY_LOCKED_USE"] == "direct" {
-            lines.append(Line(.ok, "Locked use: direct"))
-        }
-        lines += settingWarnings(environment: settings)
         lines.forEach { print($0.rendered) }
         if browser.loadExtension {
             print("\n" + loadExtensionSteps)
@@ -546,7 +563,7 @@ public enum Setup {
 
             macOS grants these to the app hosting skfiy (\(host)), not to skfiy itself.
             Enable them in System Settings → Privacy & Security → Accessibility / Screen & System Audio Recording,
-            then quit and reopen \(host) (and Claude Code).
+            then quit and reopen \(host) and your MCP client.
             """)
             return 1
         }

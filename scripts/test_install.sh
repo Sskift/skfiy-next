@@ -83,6 +83,8 @@ check "codex: one add with the installed path" count "$work/cli/codex.log" "mcp 
 check "report lists the extension step" contains "$work/out1" "Load unpacked"
 check "report says ~/.local/bin is not on PATH" contains "$work/out1" "is not on your PATH"
 check "permissions are reported, not prompted" contains "$work/out1" "Accessibility:"
+check "setup gives a verification command that needs no PATH change" contains "$work/out1" "$installed doctor --check"
+check "browser setup is explicitly optional" contains "$work/out1" "Optional: browser extension (desktop app tools work without it)"
 
 echo "2. Running setup and install.sh again changes nothing"
 manifest_time=$(mtime "$manifest"); extension_time=$(mtime "$extension/background.js")
@@ -132,6 +134,50 @@ check "bad checksum says so" contains "$work/out5b" "checksum mismatch"
 check "bad checksum installs nothing" test ! -e "$installed"
 as_user bash install.sh --binary "$binary" > /dev/null 2>&1
 
+echo "5b. A clone still defaults to a release, never an implicit build"
+(cd "$work/releases/latest/download" && shasum -a 256 skfiy-macos-universal.tar.gz > skfiy-macos-universal.tar.gz.sha256)
+release_url="file://$work/releases" as_user env SKFIY_SOURCE_DIR=/nonexistent \
+    bash install.sh --no-setup > "$work/out5c" 2>&1
+check "plain install.sh downloads a release even inside the checkout" test $? -eq 0
+check "release installed without compiling" same_file "$binary" "$installed"
+
+echo "5c. Failed downloads preserve the install and never run build tools"
+failurebin="$work/failurebin"
+mkdir -p "$failurebin"
+cat > "$failurebin/curl" <<'CURL'
+#!/bin/bash
+for url in "$@"; do :; done
+if [ "${FAKE_CURL_STAGE:-asset}" = checksum ] && [[ "$url" != *.sha256 ]]; then
+    exec /usr/bin/curl "$@"
+fi
+echo "simulated curl failure" >&2
+printf '%s' "${FAKE_HTTP_STATUS:-000}"
+exit "${FAKE_CURL_STATUS:-35}"
+CURL
+cat > "$failurebin/xcrun" <<'BUILD'
+#!/bin/bash
+touch "$TMPDIR/build-attempted"
+exit 1
+BUILD
+cp "$failurebin/xcrun" "$failurebin/xcode-select"
+cp "$failurebin/xcrun" "$failurebin/git"
+chmod +x "$failurebin/"*
+for scenario in connection missing checksum; do
+    curl_status=35; http_status=000; curl_stage=asset
+    if [ "$scenario" = missing ]; then curl_status=22; http_status=404; fi
+    if [ "$scenario" = checksum ]; then curl_stage=checksum; fi
+    release_url="file://$work/releases" as_user env PATH="$failurebin:$fakebin:$basepath" \
+        FAKE_CURL_STATUS="$curl_status" FAKE_HTTP_STATUS="$http_status" FAKE_CURL_STAGE="$curl_stage" \
+        bash install.sh --no-setup > "$work/out5-$scenario" 2>&1
+    check "$scenario failure exits nonzero" test $? -ne 0
+    check "$scenario failure preserves curl's diagnostic" contains "$work/out5-$scenario" "simulated curl failure"
+    check "$scenario failure preserves the installed binary" same_file "$binary" "$installed"
+    check "$scenario failure never invokes build tools" test ! -e "$work/build-attempted"
+done
+check "network failure suggests connection or proxy repair" contains "$work/out5-connection" "proxy settings"
+check "404 explains the missing release file" contains "$work/out5-missing" "release file not found (HTTP 404)"
+check "checksum download failure names the checksum URL" contains "$work/out5-checksum" ".tar.gz.sha256"
+
 echo "6. Without claude, codex or a Chromium browser"
 home2="$work/home2"
 mkdir -p "$home2"
@@ -145,6 +191,7 @@ echo "7. doctor --check and the CLI"
 as_user "$installed" doctor --check > "$work/out7" 2>&1
 check "doctor --check reports permissions" contains "$work/out7" "Screen Recording:"
 check "doctor --check sees the registration" contains "$work/out7" "Claude Code: skfiy runs"
+check "doctor --check also sees the Codex registration" contains "$work/out7" "Codex: skfiy runs"
 check "doctor --check sees the bridge" contains "$work/out7" "Browser bridge (Chrome): registered"
 check "doctor --check reads the registered settings" contains "$work/out7" "Locked use: direct"
 as_user env SKFIY_CURSER=0 "$installed" doctor --check > "$work/out7b" 2>&1
@@ -153,6 +200,11 @@ as_user "$installed" setup --no-browser -e SKFIY_LOCKED_USE=1 > "$work/out7c" 2>
 check "setup flags SKFIY_LOCKED_USE=1 given with -e" contains "$work/out7c" "SKFIY_LOCKED_USE=1 is not recognized"
 as_user "$installed" doctor --check > "$work/out7d" 2>&1
 check "doctor flags SKFIY_LOCKED_USE=1 in the registration" contains "$work/out7d" "SKFIY_LOCKED_USE=1 is not recognized"
+as_user "$installed" setup --no-browser -e SKFIY_LOCKED_USE=direct > /dev/null 2>&1
+as_user "$installed" setup --no-browser --no-codex -e SKFIY_LOCKED_USE=1 > /dev/null 2>&1
+as_user "$installed" doctor --check > "$work/out7-settings" 2>&1
+check "Codex settings do not hide invalid Claude settings" contains "$work/out7-settings" "Claude Code: SKFIY_LOCKED_USE=1 is not recognized"
+check "doctor names the client using direct mode" contains "$work/out7-settings" "Codex: Locked use: direct"
 as_user "$installed" setup --no-browser -e SKFIY_LOCKED_USE=direct > /dev/null 2>&1
 as_user "$installed" stop --help > "$work/out7c" 2>&1
 check "stop --help prints usage" contains "$work/out7c" "Usage:"

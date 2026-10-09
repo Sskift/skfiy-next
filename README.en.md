@@ -1,91 +1,84 @@
 # skfiy
 
-macOS computer use for Claude Code and any other MCP client: an MCP server that sees and operates the apps on your Mac **in the background**. It does not take focus, raise windows, move your pointer or interrupt your typing; your clipboard is at most borrowed for an instant and put back. The only exception is `run_in_front`, which brings an app forward for about a second, and only after you approve it in Claude Code.
+Let Claude Code, Codex and other MCP clients see and operate Mac apps in the background. Normal operations keep your focus and pointer in place; operations that need the foreground ask for approval first.
 
-One Swift binary with no runtime dependencies (it links only macOS frameworks and carries its own browser extension). An optional Chromium extension lets the agent work in **background tabs** of your real Chrome, with your logins.
+**One Swift binary · No extra runtime dependencies · macOS 14+ · Apple silicon and Intel**
 
-The full documentation is in Chinese: [README.md](README.md).
+[中文](README.md) · [Tools and settings](docs/reference.md) · [Compatibility](docs/compatibility.md)
 
-## Install
+## 1. Install
 
-Requires macOS 14 or later. In a terminal:
+For Claude Code, run in a terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh | bash
 ```
 
-This:
+For Codex:
 
-1. Downloads the prebuilt universal binary (Apple silicon and Intel, about 2.6 MB) from the latest GitHub release and checks its sha256. No developer tools are needed; it takes a few seconds. With `--from-source` it builds from source instead, which needs Apple's Command Line Tools (`xcode-select --install`, about 1.3 GB; full Xcode is not needed; the build takes about a minute).
-2. Installs it as `~/.local/bin/skfiy`. No `sudo`.
-3. Runs `skfiy setup`: writes the browser extension files and registers its native messaging host, registers skfiy with Claude Code (user scope) when the `claude` CLI is installed, checks permissions without prompting, and lists what is left for you. `skfiy setup` can run any number of times; it only fixes what is missing or out of date.
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh | bash -s -- --codex --no-claude
+```
 
-What is usually left for you:
+Downloads and verifies a prebuilt release, installs it at `~/.local/bin/skfiy`, registers the client and lists the next steps. No `sudo`, Xcode, Node or Python required. Download failures stop with an explanation; they never trigger a source build.
 
-- **Permissions.** macOS grants Accessibility and Screen Recording to **the app that runs Claude Code** (your terminal, VS Code or the Claude desktop app), not to skfiy. Run `~/.local/bin/skfiy doctor` in that app to get the macOS prompts, then quit and reopen it and Claude Code.
-- **Browser extension (optional, recommended).** In Chrome open `chrome://extensions`, turn on Developer mode, click "Load unpacked" and choose `~/Library/Application Support/skfiy/browser-extension` (press cmd+shift+G in the folder dialog and paste the path).
+Other MCP clients: use the binary's full absolute path as the command and `mcp` as its argument. Run `~/.local/bin/skfiy setup --help` for options.
 
-Then ask Claude Code things like "make a new note in Notes saying …".
+## 2. Grant permissions
 
-**Update:** run the same command again. Restart running Claude Code sessions to use the new version; when the extension files changed, click reload on the skfiy card in `chrome://extensions`.
+In the app that actually runs your MCP client:
 
-**From a clone:** `./install.sh` or `make install` builds the checkout and does the rest the same way.
+```bash
+~/.local/bin/skfiy doctor
+```
 
-Options (when piping from curl: `curl … | bash -s -- --codex`; the first three also work with `skfiy setup`, the last three are installer-only):
+Follow the prompts to grant **the host app** (Terminal, Ghostty, VS Code or your desktop client) Accessibility and Screen Recording access. Quit and reopen the host app and your MCP client afterward.
 
-| Option | Effect |
-| --- | --- |
-| `--codex` | Also register skfiy with Codex (`codex mcp add`); an existing Codex entry is always kept up to date |
-| `-e SKFIY_LOCKED_USE=direct` | Add a setting to the registration (here: keep working while the Mac is locked); later setups keep it |
-| `--no-claude` / `--no-browser` | Leave the Claude Code registration / the browser part alone |
-| `--from-source` | Build from source even when a release exists |
-| `--prefix DIR` | Install into `DIR/bin` instead of `~/.local/bin` |
-| `--uninstall` | Uninstall (below) |
+## 3. Verify
 
-Other MCP clients: command `~/.local/bin/skfiy` (full path), argument `mcp`.
+```bash
+~/.local/bin/skfiy doctor --check
+```
 
-`skfiy doctor` checks everything: permissions (and which app needs them), PATH, which binary Claude Code runs, each browser's native host, the extension version and connection, the emergency stop, MCP servers still running an older build, and `SKFIY_*` settings that are invalid or misspelled. `skfiy doctor --check` never shows a prompt.
+Once permissions are granted, ask your client:
 
-`~/.local/bin` is not on the default PATH. To type plain `skfiy`, run `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile` and open a new terminal.
+> Use skfiy to list the apps on my Mac.
 
-## Uninstall
+After you get the app list, try “Make a shopping list in Notes.” See the [compatibility record](docs/compatibility.md) for app-specific support.
 
-`~/.local/bin/skfiy uninstall` (or `install.sh --uninstall`) removes skfiy from Claude Code and Codex, deletes the native host manifests, `~/Library/Application Support/skfiy`, `~/Library/Caches/skfiy`, `~/Library/Logs/skfiy` (including the action log and flows) and the binary (`--keep-binary` keeps it). Registrations and native hosts that point at another skfiy that still exists (say a second copy installed with `--prefix`) are left alone, and so are the shared folders; only this binary goes. Host manifests written for a custom profile with `--user-data-dir` must be deleted by hand (`NativeMessagingHosts/com.skfiy.bridge.json` in that folder). Left for you: remove the skfiy card in `chrome://extensions` and restart Claude Code sessions that still run skfiy.
+## Browser extension (optional)
+
+Load this to work in background tabs of your real Chrome, with your logins. Desktop app tools work without it.
+
+1. Open `chrome://extensions` in Chrome and enable Developer mode.
+2. Click **Load unpacked**.
+3. Press `⌘⇧G` in the folder dialog, paste `~/Library/Application Support/skfiy/browser-extension` and confirm.
+
+Keep a browser window open. After extension updates, click reload on the skfiy card.
+
+## Update and uninstall
+
+**Update:** run the installation command again; your settings are kept. Restart the MCP client and reload the browser extension when prompted.
+
+**Uninstall:**
+
+```bash
+~/.local/bin/skfiy uninstall
+```
+
+This removes registrations, the binary and skfiy's data, including logs and flow checkpoints. Remove the extension card from your browser manually.
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Problem | Fix |
 | --- | --- |
-| A tool says Accessibility or Screen Recording is missing | Grant it to the app that runs Claude Code (`skfiy doctor` names it), then restart that app and Claude Code |
-| Browser tools say no browser is connected | Run `skfiy setup`, then load the extension in `chrome://extensions`; Chrome with no window open has its extensions unloaded |
-| No `browser_*` tools at all | The browser bridge is not registered (they are only listed then): run `skfiy setup`, then restart the Claude Code session |
-| Every call is refused | The emergency stop is on: `skfiy resume` or press ⌃⌥⌘. |
-| Nothing changed after an update | Restart the Claude Code session; reload the extension if its files changed |
-| `skfiy: command not found` | See PATH above, or use the full path |
+| Download failed | Check the terminal's connection to GitHub or its proxy, then retry |
+| Permissions missing | Run `doctor` in the actual host app, grant access and restart it and your client |
+| `skfiy: command not found` | Use `~/.local/bin/skfiy`; changing PATH is optional |
+| Browser not connected | Load or reload the extension and keep a browser window open |
 
-## Settings
+Press `⌃⌥⌘.` to stop skfiy at any time; press it again to resume.
 
-Pass settings with `skfiy setup -e NAME=value` (kept by later setups) or `claude mcp add --scope user skfiy -e NAME=value -- ~/.local/bin/skfiy mcp` (the name goes before `-e`, which takes several values).
+Advanced documentation is in Chinese: [Installation](docs/installation.md) · [Locked mode](locked-use/README.md) · [Development](docs/development.md). To build a checkout, use `./install.sh --from-source` or `make install` (Swift 6 required); plain `./install.sh` installs the published release.
 
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `SKFIY_LOCKED_USE` | off | `direct`: keep operating apps while the Mac stays locked (window screenshots and pid-targeted input) |
-| `SKFIY_LOCKED_WAKE_DISPLAY` | on | `0`: do not wake a sleeping display while locked (no screenshots then) |
-| `SKFIY_BRIEF_FOCUS` | off | `1`: use a brief in-app focus for every pointer click without asking per app |
-| `SKFIY_ALLOW_TERMINALS` | off | `1`: allow input into terminal apps (never into the app hosting skfiy) |
-| `SKFIY_CURSOR` | on | `0`: hide skfiy's own cursor |
-| `SKFIY_CURSOR_IDLE` | `20` | Seconds without actions before that cursor fades out |
-| `SKFIY_ACTION_LOG` | `~/Library/Logs/skfiy/actions.jsonl` | Action log path; `off` records nothing |
-| `SKFIY_FLOW_DIR` | `~/Library/Application Support/skfiy/flows` | Where flow checkpoints are kept |
-| `SKFIY_SETTLE_SECONDS` | `0.4` | Time to let the UI settle before a screenshot |
-| `SKFIY_SCREENSHOT_FORMAT` | `jpeg` | `png` for lossless screenshots |
-
-skfiy's own files live under `$HOME/Library` and follow `HOME`, so `HOME=$(mktemp -d) skfiy setup` tries an install without touching your real setup. One exception for now: the `run_in_front` grant file still uses the real home folder (set `SKFIY_FRONT_GRANT_FILE` to isolate it).
-
-## Development
-
-`make test` runs the unit tests (use it rather than plain `swift test` with Command Line Tools only), `make test-install` tests install.sh, setup, doctor and uninstall in a throwaway HOME with fake `claude`/`codex` CLIs, and `make dist` builds the release tarball. Python 3 (standard library only) is needed only for the end-to-end test scripts in `scripts/`, which share one MCP client (`scripts/harness.py`). `swift scripts/make_extension_icons.swift browser-extension` redraws the committed extension icons (then run `make embed-extension`).
-
-## License
-
-[MIT](LICENSE).
+[Release notes](CHANGELOG.md) · [MIT](LICENSE)
