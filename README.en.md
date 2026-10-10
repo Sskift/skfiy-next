@@ -56,6 +56,10 @@ Load this to work in background tabs of your real Chrome, with your logins. Desk
 
 Keep a browser window open. After extension updates, click reload on the skfiy card.
 
+## Remote Windows desktops (optional)
+
+Use `skfiy remote add NAME SSH_HOST` with an existing SSH connection to configure a signed-in Windows desktop. The `remote_desktop` tool can then take screenshots, click, type, send shortcuts, scroll and drag while RustDesk stays in the background, without changing Mac focus or raising its windows. The Windows helper starts on demand and exits after two idle minutes. See the [setup guide and limits](docs/remote-desktop.md) (Chinese).
+
 ## Update and uninstall
 
 **Update:** run the installation command again; your settings are kept. Restart the MCP client and reload the browser extension when prompted.

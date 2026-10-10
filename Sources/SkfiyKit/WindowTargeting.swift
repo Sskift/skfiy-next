@@ -138,13 +138,16 @@ func isFullyCovered(_ id: CGWindowID, rows: [[String: Any]], displays: [CGRect],
 /// "<peer> - View Camera - RustDesk"). Its main window, file transfer and
 /// port forwarding windows are local UI.
 enum RemoteSurface {
+    static let inputLimitation = "This RustDesk remote session has no verified background input path in skfiy. Its remote desktop is an image, not a tree of remote accessibility controls."
+    static let foregroundCaveat = "run_in_front raises the local RustDesk window and changes keyboard focus; do not use it when the user requires no focus or window-order changes. For configured Windows computers, use remote_desktop over SSH (action: list shows bindings, state gives remote coordinates). Never reuse RustDesk screenshot coordinates for that tool."
+
     static func isRemoteSession(bundleID: String?, title: String) -> Bool {
         guard (bundleID ?? "").lowercased() == "com.carriez.rustdesk" else { return false }
         return title.contains("Remote Desktop - ") || title.contains("View Camera - ")
     }
 
     static func refusal(_ title: String, what: String) -> String {
-        "\(quote(title, limit: 80)) is a RustDesk remote session: \(what) there would go to the remote computer. skfiy does not send it background input: RustDesk only forwards input while that window is in front, and a click in it can make RustDesk capture the user's own keyboard for the remote computer. Nothing was sent. Screenshots and text recognition of it still work; for input there use run_in_front (asks the user), or ask the user to do it."
+        "\(quote(title, limit: 80)) is a RustDesk remote session: \(what) there would go to the remote computer. \(inputLimitation) A click can make RustDesk capture the user's own keyboard. Nothing was sent. Screenshots and text recognition still work. \(foregroundCaveat)"
     }
 }
 

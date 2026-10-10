@@ -69,6 +69,7 @@ Sources/SkfiyKit/
   FilePanel.swift     打开/存储面板
   BrowserBridge.swift native messaging 宿主 ⇄ Unix socket ⇄ MCP 的桥接、安装
   BrowserTools.swift  browser_* 工具
+  RemoteDesktop.swift / RemoteDesktopScripts.swift  SSH Windows 桌面工具、显式安装/移除、内嵌脚本
   EmergencyStop.swift / ActionLog.swift / Instance.swift   急停、操作日志、每个 MCP 服务独立的可执行文件链接
   Arguments.swift     工具参数的类型化读取
   Setup.swift         skfiy setup / doctor / uninstall：插件文件、native host、Claude Code / Codex 注册、检查清单
@@ -79,6 +80,7 @@ install.sh                 一键安装：下载 release 或从源码编译，�
 packaging/homebrew/        Homebrew formula 模板（未发布）
 browser-extension/         MV3 插件：service worker + 注入页面的快照/操作函数
 scripts/                   端到端测试（共用 harness.py 的 MCP 客户端）、应用覆盖探测、插件图标生成
+remote-windows/            Windows 交互会话组件及 SSH 入口；修改后 python3 scripts/embed_remote.py，make test 检查内嵌副本一致
 eval/                      真实任务评测：任务、独立判定、前台/最顶层窗口监视（结果在 eval/results，不入库）
 ```
 

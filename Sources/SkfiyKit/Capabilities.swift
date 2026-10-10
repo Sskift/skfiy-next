@@ -247,7 +247,7 @@ struct CapabilityReport {
             channels.append(Capability(name: "pointer", available: false, detail: "The app is hidden; use element actions or the keyboard."))
         } else if facts.remoteSession {
             channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks, drags and the wheel there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
-                                       limits: ["Screenshots and text recognition of it work."]))
+                                       limits: ["Screenshots and text recognition of it work.", RemoteSurface.foregroundCaveat]))
         } else {
             var limits: [String] = []
             if facts.chromium || facts.webContent {
@@ -282,7 +282,7 @@ struct CapabilityReport {
         } else if facts.remoteSession || facts.remoteKeyWindow {
             channels.append(Capability(name: "keyboard", available: false,
                                        detail: (facts.remoteSession ? "This window is" : "The app's key window, where key events go, is") + " a RustDesk remote session: keys there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
-                                       limits: facts.remoteSession ? [] : ["Click a text field of the app's main window by element_index first: skfiy then makes that window the key window, without raising it."]))
+                                       limits: facts.remoteSession ? [RemoteSurface.foregroundCaveat] : ["Click a text field of the app's main window by element_index first: skfiy then makes that window the key window, without raising it."]))
         } else {
             var limits: [String] = []
             if let key = facts.keyWindowElsewhere {
@@ -321,6 +321,8 @@ struct CapabilityReport {
         } else {
             if protectionNote != nil {
                 channels.append(Capability(name: "foreground", available: false, detail: protectionNote ?? ""))
+            } else if facts.frontmost && (facts.remoteSession || facts.remoteKeyWindow) {
+                channels.append(Capability(name: "foreground", available: false, detail: "RustDesk is already frontmost, but background input tools still refuse remote sessions; focus alone does not establish remote input support."))
             } else if facts.frontmost {
                 channels.append(Capability(name: "foreground", available: false, detail: "The app is already frontmost: press_key reaches it directly."))
             } else if !facts.clientCanAsk {

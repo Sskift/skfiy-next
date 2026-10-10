@@ -42,6 +42,7 @@ public struct ActionLog: Sendable {
 
     func record(tool: String, arguments: [String: Any], result: ToolResult, secret: Bool, date: Date = Date()) {
         guard Self.recordedTools.contains(tool) else { return }
+        if tool == "remote_desktop", ["state", "list"].contains(arguments["action"] as? String ?? "") { return }
         let entry: [String: Any] = [
             "time": ISO8601DateFormatter().string(from: date),
             "session": Int(getpid()),

@@ -56,6 +56,10 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 
 连接和其他浏览器的说明见[浏览器扩展](docs/installation.md#浏览器扩展可选)。
 
+## 远程 Windows 桌面
+
+需要控制 RustDesk 连接的 Windows 桌面、同时保持本机窗口和焦点不动时，可以使用[SSH 远程桌面通道](docs/remote-desktop.md)。复用已有 SSH 连接，执行 `skfiy remote add 名称 SSH主机别名` 配置一次，然后让模型使用 `remote_desktop` 工具。组件按需在远端的已登录用户会话中运行。
+
 ## 更新与卸载
 
 **更新**：重跑安装命令，已有设置会保留。重启客户端；提示扩展更新时，也在扩展页面刷新 skfiy。

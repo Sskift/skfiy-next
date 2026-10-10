@@ -26,12 +26,49 @@ import json
 from pathlib import Path
 import re
 import sys
+import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scenario import Session, geometry, main_binary, probe, tool  # noqa: E402
-from test_background_windows import Watch, tree_index  # noqa: E402
+from test_background_windows import tree_index  # noqa: E402
 
 BUNDLE = 'com.carriez.rustdesk'
+
+
+class BackgroundWatch:
+    """Observe only: never restore focus or reorder windows to hide a failure."""
+    def __init__(self, session, pid):
+        self.session, self.pid = session, pid
+        self.samples = []
+        self.stop = threading.Event()
+
+    def __enter__(self):
+        def sample():
+            while not self.stop.is_set():
+                try:
+                    self.samples.append(probe('front'))
+                except Exception:
+                    self.samples.append({})
+                self.stop.wait(0.05)
+        self.thread = threading.Thread(target=sample, daemon=True)
+        self.thread.start()
+        return self
+
+    def call(self, name, target=None, **arguments):
+        # Keep the user's passwords and remote screen in memory only. Session's
+        # normal client otherwise records every tool result and screenshot.
+        result = self.session.call(name, **arguments)
+        self.samples.append(probe('front'))
+        return result
+
+    def __exit__(self, *error):
+        self.stop.set()
+        self.thread.join(timeout=3)
+        changes = sum(x.get('frontPID') == self.pid or x.get('topOwner') == 'RustDesk' for x in self.samples)
+        unknown = sum(not x for x in self.samples)
+        self.session.check('RustDesk never gained focus or became the top window in continuous samples',
+                           bool(self.samples) and changes == 0 and unknown == 0,
+                           {'samples': len(self.samples), 'rustdeskInFrontOrOnTop': changes, 'unknown': unknown})
 
 
 def main():
@@ -45,12 +82,12 @@ def main():
         sys.exit('skipped: RustDesk is the front app (the user is using it)')
     pid = ui[0]['pid']
     flag_before = probe('attribute', pid, 'AXEnhancedUserInterface').get('value')
-    with Session('rustdesk', fixture=False, window_guard=False, environment={'SKFIY_CURSOR': '0'}) as s:
+    with Session('rustdesk', fixture=False, window_guard=False, answer=None, environment={'SKFIY_CURSOR': '0'}) as s, BackgroundWatch(s, pid) as w:
+        s.client.evidence = None
         if s.locked:
             s.check('the Mac is unlocked', False, 'skipped')
             return
         s.summary['instances'] = instances
-        w = Watch(s)
 
         def background():
             front = probe('front')
@@ -77,7 +114,7 @@ def main():
         background()
         look = w.call('get_app_state', main_window['id'], app='RustDesk', window=str(main_window['id']))
         fields = [line for line in look['text'].splitlines() if re.search(r'\] (TextField|Button)', line)]
-        s.check('Flutter semantics are on: the main window lists its fields and buttons', len(fields) >= 2, fields[:6])
+        s.check('Flutter semantics are on: the main window lists its fields and buttons', len(fields) >= 2, {'fieldAndButtonCount': len(fields)})
         s.check('the main window inspected by id comes with its own screenshot', bool(look['images']) and geometry(look['text']) is not None
                 and f'id {main_window["id"]}' in look['text'], look['text'].splitlines()[1][:200])
         field = tree_index(look['text'], r'\] TextField')
@@ -93,9 +130,13 @@ def main():
             background()
             shot = w.call('get_app_state', remote['id'], app='RustDesk', window=str(remote['id']))
             s.check('the remote-session window is captured and labelled as a remote session', bool(shot['images']) and 'remote session' in shot['text'],
-                    shot['text'].splitlines()[1][:200])
+                    'remote screenshot inspected in memory')
+            s.check('remote inspection does not advise clicking a nonexistent remote accessibility field',
+                    'until you click a text field here' not in shot['text'] and 'do not use it when the user requires no focus' in shot['text'])
             g = geometry(shot['text'])
             for name, arguments in (('type_text', {'text': 'x'}), ('press_key', {'key': 'a'}),
+                                    ('click', {'x': g['width'] * 0.5, 'y': g['height'] * 0.7}),
+                                    ('click', {'x': g['width'] * 0.5, 'y': g['height'] * 0.7, 'focus': True}),
                                     ('drag', {'from_x': g['width'] * 0.5, 'from_y': g['height'] * 0.7, 'to_x': g['width'] * 0.55, 'to_y': g['height'] * 0.7}),
                                     ('scroll', {'x': g['width'] * 0.5, 'y': g['height'] * 0.6, 'direction': 'down'})):
                 background()
@@ -112,7 +153,7 @@ def main():
             print('  note: no remote session window is open; those checks were not run', flush=True)
         s.check('RustDesk\'s key window is the one it had (skfiy changed nothing in it)', windows()['focusedWindow'] == key_before,
                 (key_before, windows()['focusedWindow']))
-        w.finish()
+        s.check('no foreground or brief-focus approval was requested', not s.client.asked)
         # Ending the MCP session turns Flutter's semantics back off.
         s.client.close()
         flag_after = probe('attribute', pid, 'AXEnhancedUserInterface').get('value')
@@ -122,6 +163,8 @@ def main():
         for image in list(s.directory.glob('tool-*.jpg')) + list(s.directory.glob('tool-*.png')):
             image.unlink()
         (s.directory / 'IMAGES-REMOVED.txt').write_text('Screenshots removed after the checks: they show the user\'s RustDesk.\n')
+    if not s.summary['ok']:
+        sys.exit(1)
 
 
 if __name__ == '__main__':

@@ -142,5 +142,29 @@ python3 scripts/compat_baseline.py --report                                    #
 17. **同一应用的窗口压着时，坐标与滚轮落到上面那个窗口。** 辅助功能的命中测试和鼠标事件的窗口号都取该点最上面的那个窗口。修复后，单独查看的窗口在被压住的地方照样命中自己的按钮（测试应用：点第二个窗口的“完成”，下面主窗口的“应用”计数不变），滚轮只到它（TextEdit：alpha 滚动，beta 不动）；修复前点中的是上面窗口的按钮、滚的是 beta。
 18. **完全被挡住的 Chromium 窗口不再更新。** Electron 窗口被用户窗口完全挡住一段时间后，页面变为 hidden：不绘制、辅助功能树不更新、滚轮被丢弃（滚动位置 245→245）。从被挡住到变 hidden 的时间不定，实测 13–27 秒，也有 40 秒内没变的；露出一角即恢复。按编号的点击和设值照样送到页面（页面计数 +1、收到值），只是截图和树看不到。修复前回复“窗口看起来与最新截图相同”，`set_value` 因读不回焦点而拒绝，`wait_for` 超时也不说原因；修复后都说明窗口被完全挡住、看到的可能过时，`expect` 不再判 no_effect。WKWebView 应用被挡住时一切照常（调查结论，未重测）。Chrome for Testing 因新窗口会出现在最上层而没有测，按同一 Chromium 内核推断表现相同。
 19. **最小化与隐藏。** 隐藏自己的辅助应用（`LSUIElement`）NSRunningApplication 仍报未隐藏，修复前按坐标点击报“窗口已关闭”、按编号滚动报成功；现在读应用的 AXHidden，按坐标和滚轮的操作都说明“应用已隐藏”并拒绝（测试应用实测）。最小化窗口同样说明“已最小化”（复核后用 `--minimize` 实测：测试应用的窗口此前不可最小化，这一项原先测不出东西，已改）。别的桌面空间没有测（本机只有一个空间）。
-20. **RustDesk。** 它以同一 bundle id 跑着界面进程和没有窗口的 `--server` 进程，修复前所有调用都落到后者、什么也做不了；现在取界面进程。Flutter 的树要打开 AXEnhancedUserInterface 才有（主窗口出现输入框和 “Connect” 按钮），会话结束后恢复原值（0）。主窗口按 id 查看时单独截取，截图里没有压在上面的远程会话。`set_value` 改 Flutter 输入框被拒且值不变。远程会话窗口能截图并标明是远程会话；`type_text`、`press_key`、`drag`、`scroll` 都在发送前拒绝，`get_app_capabilities` 报它的指针与键盘不可用；RustDesk 的键盘窗口前后不变。调查时测得：Flutter 不理会任何形式的后台鼠标点击（公开接口的 `CGEventPostToPid` 能点进去，但会激活 RustDesk，skfiy 不用）；主窗口是键盘窗口时，后台按键能输入到主窗口的输入框。为不改动用户的 RustDesk，这次没有向它发送点击和按键。
+20. **RustDesk。** 它以同一 bundle id 跑着界面进程和没有窗口的 `--server` 进程，修复前所有调用都落到后者、什么也做不了；现在取界面进程。Flutter 的树要打开 AXEnhancedUserInterface 才有（主窗口出现输入框和 “Connect” 按钮），会话结束后恢复原值（0）。主窗口按 id 查看时单独截取，截图里没有压在上面的远程会话。`set_value` 改 Flutter 输入框被拒且值不变。远程会话窗口能截图并标明是远程会话；`type_text`、`press_key`、`drag`、`scroll` 都在发送前拒绝，`get_app_capabilities` 报它的指针与键盘不可用；RustDesk 的键盘窗口前后不变。调查时测得：所测试的 Flutter 后台鼠标路径没有生效（公开接口的 `CGEventPostToPid` 能点进去，但会激活 RustDesk，skfiy 不用）；主窗口是键盘窗口时，后台按键能输入到主窗口的输入框。为不改动用户的 RustDesk，这次没有向它发送点击和按键。
+
 21. **表单（sheet）不在单独截取的图上（复核发现，已修）。** 单独截取被查看的窗口时没有带子窗口，按钮弹出的 NSAlert 表单、TextEdit 的保留询问不在操作后的截图里，回复说“窗口看起来相同”，而按坐标的点击已经会落到表单上。现在解锁时单独截取连同子窗口一起截：测试应用和复核的辅助应用里，表单都出现在操作后的截图和 `get_app_state` 截图里，按截图坐标点表单按钮生效。锁屏直连模式没有改，也没有测。
+
+### 2026-10-10 复核：不置顶、不抢焦点
+
+- 普通 AppKit 测试窗口被完全遮挡：`test_background_windows.py` 26/26（`eval/results/background-windows-unlocked-20261010-163211-41dbee1fb3`）。原有的窗口定位、后台点击和输入修复有效。
+- Chromium 完全遮挡：`test_covered_chromium.py` 11/11（`eval/results/covered-chromium-unlocked-20261010-163916-cf6e1f9ed9`）。这些检查确认冻结画面和滚轮限制被正确处理，**不代表完全遮挡时已经能正常交互**。
+- 用户已连接的 RustDesk 1.5.0：`test_rustdesk.py` 17/17（`eval/results/rustdesk-unlocked-20261010-170632-523de48bc4`）。截图、远程会话识别、输入拒绝、Flutter 状态恢复均通过；连续 45 次前台/最上层采样中，RustDesk 出现 0 次，未知 0 次，键盘窗口前后不变。测试客户端不能批准任何前台或短暂聚焦操作；截图和工具回复只留在内存中，不记录主窗口密码或远程画面。
+- 修正了两条误导：远程窗口不再建议“点击这里的文本框就能切换键盘目标”；RustDesk 已经在前台时，能力报告不再声称 `press_key` 可直接控制远端。拒绝提示说明 `run_in_front` 会改变本机焦点和窗口层级，不符合上述要求。
+- **原生 RustDesk 窗口路径仍没有后台输入。** 上面的 RustDesk 检查是读取与拒绝检查，没有向远程电脑发送点击或键盘输入，也没有远端收到文字的验收证据。原生界面没有远端辅助功能控件；[RustDesk 1.5.0 的远程窗口实现](https://github.com/rustdesk/rustdesk/blob/1.5.0/flutter/lib/desktop/pages/remote_page.dart)还在窗口失焦时释放键盘抓取、在点击画面时重新获取。后续采用下面的独立 SSH 通道。
+
+### 2026-10-10 SSH Windows 桌面验收
+
+用户允许复用已有 SSH 连接后，增加 [`remote_desktop`](remote-desktop.md)，在远端已登录用户的交互会话里截图、输入，本机 RustDesk 窗口和焦点不参与。
+
+- `test_remote_desktop.py` **16/16 通过**，证据 `eval/results/remote-desktop-20261010-181913-85ef3c8112`。对象是显式绑定 `lil-win` 的 Windows `SKFIY`，并非根据当前 RustDesk 标签推断目标。
+- 独立控件回执确认：Unicode（中文、emoji）、空格和标点原样输入；Ctrl+A 全选、替换、Backspace、Shift+方向键有效；单击、右键、双击、拖拽和滚轮均产生预期事件或状态变化。截图经独立 OCR 检出测试文字。
+- 已消费的截图编号不能重放点击；越界坐标和过期截图被拒绝，按钮计数不增加。
+- 连续 **836 次本机采样**，前台始终是飞书；前台/最上层窗口变化 **0 次**，RustDesk 抢焦点或置顶 **0 次**，未知采样 **0 次**。没有窗口守护或自动恢复掩盖变化。
+- 首次状态读取 6.2 秒，后续输入及结果截图约 2.9–4.0 秒/次。这是逐步桌面操作通道，不是低延迟视频操控通道。
+- 测试自己的远端窗口、任务和文件已清理；生产组件经过 `remote remove` / `remote add` 卸载重装检查。截图和用户桌面内容不存入测试报告。
+- 第一轮 Ctrl+A 检查失败，回执确认组合键已送达；原因是 PowerShell 的旧 .NET 兼容配置禁用多行 TextBox 的 Ctrl+A。测试窗按[微软的兼容开关说明](https://learn.microsoft.com/en-us/dotnet/api/system.windows.forms.textbox.processcmdkey)修正后，全选与替换的实际结果通过；没有在输入组件中伪造全选行为。
+- 原生 RustDesk 读取/拒绝复核仍为 **17/17**（`eval/results/rustdesk-unlocked-20261010-182111-1e8f1049ba`）。锁屏、UAC 安全桌面、高权限窗口及多显示器未做端到端验收；该通道要求 Windows 已登录，无法绕过这些系统边界。
+
+- 最终构建：`make test` 186/186，release 构建及签名校验通过，并安装到 `~/.local/bin/skfiy`。已安装版本复核（`eval/results/remote-desktop-installed-20261010.json`）确认截图可用、远端脚本 SHA-256 与源码一致、过期上传文件清理正常、临时请求/回复和测试任务均为 0；54 次本机采样无前台或窗口层级变化。

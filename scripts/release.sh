@@ -4,7 +4,7 @@
 # nothing; the Release workflow (.github/workflows/release.yml) uploads dist/.
 #
 #   scripts/release.sh            # version from Sources/SkfiyKit/MCPServer.swift
-#   scripts/release.sh v0.7.0     # fails unless the tag matches that version
+#   scripts/release.sh v0.8.0     # fails unless the tag matches that version
 #
 # Output: dist/skfiy-macos-universal.tar.gz and dist/skfiy-macos-universal.tar.gz.sha256
 set -euo pipefail

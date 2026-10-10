@@ -390,8 +390,11 @@ extension ComputerUse {
             windowTitles[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
         if let window = focusedWindow {
+            let remote = RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: window.string(kAXTitleAttribute) ?? "")
             var keyboard = ""
-            if chosenWindow != nil {
+            if remote {
+                keyboard = " — inspected without raising it; background remote input is unavailable"
+            } else if chosenWindow != nil {
                 let key = axElement(values[kAXFocusedWindowAttribute])
                 if let key, CFEqual(key, window) {
                     keyboard = " — inspected without raising it; it is the app's key window, so keyboard input goes here"
@@ -402,8 +405,8 @@ extension ComputerUse {
             }
             header.append("Window: \(quote(window.string(kAXTitleAttribute) ?? "", limit: 120))"
                 + (windowID(of: window).map { " (id \($0))" } ?? "") + keyboard)
-            if RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: window.string(kAXTitleAttribute) ?? "") {
-                header.append("This window is a RustDesk remote session: it shows another computer, and input to it goes there. Screenshots and text recognition work; skfiy sends it no background clicks or keys (use run_in_front, which asks the user). The app's own controls are in its main window (get_app_state with window: \"RustDesk\").")
+            if remote {
+                header.append("This window is a RustDesk remote session: screenshots and text recognition work. \(RemoteSurface.inputLimitation) \(RemoteSurface.foregroundCaveat) The app's own controls are in its main window (get_app_state with window: \"RustDesk\").")
             }
         }
         if let focusedElement, let index = elements.firstIndex(where: { CFEqual($0, focusedElement) }) {

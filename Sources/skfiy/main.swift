@@ -12,6 +12,8 @@ Usage:
   skfiy uninstall [--keep-binary]  Undo setup and remove skfiy's files (and this binary)
   skfiy mcp                      Run the MCP server (your MCP client starts it)
   skfiy tools                    List the tools: arguments (? optional) and what each is for
+  skfiy remote add NAME SSH_HOST Install the Windows desktop worker over an existing SSH connection
+  skfiy remote list | remove NAME  List bindings, or remove the remote worker and binding
   skfiy stop | resume | status   Emergency stop for every running skfiy (also ⌃⌥⌘. anywhere)
   skfiy log [N]                  The last N actions skfiy took (~/Library/Logs/skfiy/actions.jsonl)
   skfiy call <tool> [json-args]  Run one tool call and print the result; the screenshot
@@ -175,6 +177,14 @@ case "status":
 case "tools":
     noArguments(arguments)
     print(ToolSchemas.summary())
+
+case "remote":
+    Task { @MainActor in
+        do { print(try await RemoteDesktop.command(Array(arguments.dropFirst()))); exit(0) }
+        catch { fail(String(describing: error)) }
+    }
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    NSApplication.shared.run()
 
 case "call":
     guard arguments.count >= 2 else { fail("Usage: skfiy call <tool> [json-args]; `skfiy tools` lists the tools.") }

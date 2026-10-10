@@ -146,7 +146,7 @@ public final class ComputerUse {
         if name == "locked_use_end" {
             return ToolResult(text: "Locked use is off. To keep macOS locked while skfiy works, the user starts a new MCP session with SKFIY_LOCKED_USE=direct.")
         }
-        lastInputWasSecret = false
+        lastInputWasSecret = name == "remote_desktop"
         browser.lastInputWasSecret = false
         let result = await act(name, raw)
         if ["get_app_state", "wait_for"].contains(name), !result.isError { noteLooked(raw) }
@@ -212,6 +212,7 @@ public final class ComputerUse {
                 return ToolResult(text: "Desktop: \(isScreenLocked() ? "locked or unavailable" : "unlocked").\nLocked use: off.\nEmergency stop: \(EmergencyStop.isStopped ? "stopped" : "running").")
             case "get_app_state": return try await keepingFront(args, readOnly: true) { try await self.getAppState(args) }
             case "get_app_capabilities": return try await appCapabilities(args)
+            case "remote_desktop": return try await RemoteDesktop.call(args)
             case "click": return try await keepingFront(args) { try await self.click(args) }
             case "perform_secondary_action": return try await keepingFront(args) { try await self.performSecondaryAction(args) }
             case "set_value": return try await keepingFront(args) { try await self.setValue(args) }

@@ -200,6 +200,12 @@ struct WindowTargetingTests {
         facts.remoteSession = true
         report = CapabilityReport.evaluate(facts)
         #expect(report["pointer"]?.available == false && report["screenshot"]?.available == true)
+        #expect(report["pointer"]?.limits.contains(RemoteSurface.foregroundCaveat) == true)
+        #expect(report["keyboard"]?.limits.contains(RemoteSurface.foregroundCaveat) == true)
+        facts.frontmost = true
+        report = CapabilityReport.evaluate(facts)
+        #expect(report["foreground"]?.available == false)
+        #expect(report["foreground"]?.detail.contains("press_key reaches it directly") == false)
 
         var other = CapabilityInputs(session: .unlocked, mode: .normal, appName: "TextEdit")
         other.pid = 7
