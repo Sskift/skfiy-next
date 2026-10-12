@@ -1,5 +1,12 @@
 # Release notes
 
+## Unreleased
+
+- Approval prompts work with one click. Claude Code submits a form's default when you just accept it, and the switch in skfiy's prompts defaulted to off, so every accepted upload, `run_in_front`, clipboard and `hand_over` prompt read as a refusal. Accepting now approves; switching it off, declining or cancelling refuses.
+- `SKFIY_APPROVE=all` grants every approval without asking: `browser_upload`, `run_in_front`, `read_clipboard` and brief in-app focus. `hand_over` still waits for you. Turn it on with `skfiy setup -e SKFIY_APPROVE=all`; `skfiy doctor` flags other values.
+- `browser_upload` reaches file inputs that sites hide behind a styled button or drop zone: given the button, it attaches to the single file input the button labels or shares a container with, and refuses when there are several. It no longer reports a file as attached when the page did not confirm it, and says why an attach failed. `paths` attaches several files at once, in order, to an input that takes multiple.
+- `browser_click` at x/y reaches controls inside shadow roots, open or closed (web components such as a site's publish button), instead of stopping at their host element. The bundled browser extension is now 0.8.0: reload the skfiy extension card after updating.
+
 ## 0.8.0 — 2026-10-10
 
 Control a signed-in Windows desktop over an existing SSH connection while RustDesk stays in the background. Remote screenshots and input do not activate Mac windows, change Mac focus, move the Mac pointer or use its clipboard.

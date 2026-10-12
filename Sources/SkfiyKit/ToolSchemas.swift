@@ -550,10 +550,11 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_upload",
-            "Attach a local file to a file input of a tab (by index), without the file picker. This sends the file to the website, so the user is asked to approve every upload first; uploads are refused when the client cannot ask. Up to 20 MB.",
+            "Attach a local file to a file input of a tab (by index), without the file picker. The index may also be the button or drop zone a site hides its file input behind. This sends the file to the website, so the user is asked to approve every upload first (unless SKFIY_APPROVE=all); uploads are refused when the client cannot ask. Up to 20 MB in all.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
                 "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"],
+                "paths": ["type": "array", "items": ["type": "string"], "description": "Several files at once, in this order, for an input that takes multiple"],
                 "download_id": ["type": "integer", "description": "Instead of path: a finished download from browser_downloads"]
             ],
             required: ["tab_id"],

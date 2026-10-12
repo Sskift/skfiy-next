@@ -129,9 +129,19 @@ case "mcp":
     Task { @MainActor in
         let computerUse = ComputerUse()
         let server = MCPServer(executor: computerUse)
-        computerUse.askUser = { [weak server] message in await server?.confirm(message) }
-        computerUse.waitForUser = { [weak server] message in await server?.confirm(message, timeout: 1800) }
-        computerUse.clientCanAsk = { [weak server] in server?.clientCanAsk ?? false }
+        switch ApprovalMode.current {
+        case .ask:
+            computerUse.askUser = { [weak server] message in await server?.confirm(message) }
+            computerUse.clientCanAsk = { [weak server] in server?.clientCanAsk ?? false }
+        case .all:
+            computerUse.askUser = { message in
+                FileHandle.standardError.write(Data("Approved without asking (SKFIY_APPROVE=all): \(message)\n".utf8))
+                return true
+            }
+            computerUse.clientCanAsk = { true }
+        }
+        // A step only the user can do (signing in, a code), so it always waits for them.
+        computerUse.waitForUser = { [weak server] message in await server?.confirm(message, field: "Done", timeout: 1800) }
         server.start()
         // The emergency stop shortcut needs an event loop; another skfiy may
         // own it already, so keep trying until this one gets it.

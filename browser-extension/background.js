@@ -886,13 +886,29 @@ function pageAction(params, keyAliases = {}) {
     case 'click': {
       if (params.index == null && params.x != null && params.y != null) {
         // Coordinates in CSS pixels of the viewport (canvas, maps, custom widgets).
-        const target = document.elementFromPoint(Number(params.x), Number(params.y));
+        // Down through shadow roots: on pages built from web components the element at the point
+        // is only a host, and events dispatched on it never reach the button inside. Extensions may
+        // open closed roots too (chrome.dom).
+        const rootOf = (el) => {
+          if (el.shadowRoot) return el.shadowRoot;
+          // Only HTML elements can host one; the API throws for SVG and the like.
+          if (!(el instanceof HTMLElement)) return null;
+          try { return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) ?? null; } catch { return null; }
+        };
+        let target = document.elementFromPoint(Number(params.x), Number(params.y));
+        const outer = target;
+        for (let root = target && rootOf(target); root; root = rootOf(target)) {
+          const inner = root.elementFromPoint(Number(params.x), Number(params.y));
+          if (!inner || inner === target) break;
+          target = inner;
+        }
         if (!target) throw new Error('nothing at that point of the viewport');
         const at = { clientX: Number(params.x), clientY: Number(params.y) };
         for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown']) pointer(target, type, at);
         if (typeof target.focus === 'function') target.focus({ preventScroll: true });
         for (const type of ['pointerup', 'mouseup', 'click']) pointer(target, type, at);
-        return { message: `Clicked at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${target.tagName.toLowerCase()}>` };
+        const inside = target === outer ? '' : ` inside <${outer.tagName.toLowerCase()}>`;
+        return { message: `Clicked at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${target.tagName.toLowerCase()}>${inside}` };
       }
       const el = pick();
       if (!el) throw new Error('index (or x and y) is required');
@@ -1007,19 +1023,45 @@ function pageAction(params, keyAliases = {}) {
       return { message: `received ${state.uploads[params.token].length} characters` };
     }
     case 'upload-commit': {
-      const el = pick();
-      if (!el || el.tagName !== 'INPUT' || el.type !== 'file') throw new Error(`element ${params.index} is not a file input`);
-      const encoded = (state.uploads || {})[params.token] || '';
-      if (state.uploads) delete state.uploads[params.token];
-      const binary = atob(encoded);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      // Sites often hide the real <input type=file> behind a styled button or drop zone, and hidden
+      // inputs get no index: take the input the element is, labels, or shares a container with.
+      const isFile = (node) => node && node.tagName === 'INPUT' && node.type === 'file';
+      const fileInputFor = (start) => {
+        if (isFile(start)) return start;
+        if (isFile(start.control)) return start.control;
+        for (let node = start, depth = 0; node && depth < 5; node = node.parentElement, depth++) {
+          const inputs = node.querySelectorAll('input[type=file]');
+          if (inputs.length) return inputs.length === 1 ? inputs[0] : null;
+        }
+        return null;
+      };
+      // Failures come back as { error } rather than a throw, so they reach skfiy even where the
+      // page script's exception would be lost.
+      let picked;
+      try { picked = pick(); } catch (error) { return { error: String(error.message || error) }; }
+      const el = picked && fileInputFor(picked);
+      if (!el) {
+        const near = picked ? picked.closest('form, section, [role=dialog], body').querySelectorAll('input[type=file]').length : 0;
+        return { error: `element ${params.index} is not a file input, and no single file input belongs to it (${near} file inputs around it)` };
+      }
+      const files = params.files || [{ token: params.token, name: params.name, mime: params.mime }];
+      if (files.length > 1 && !el.multiple) return { error: `the file input behind [${params.index}] takes one file at a time` };
       const transfer = new DataTransfer();
-      transfer.items.add(new File([bytes], params.name, { type: params.mime || 'application/octet-stream' }));
+      let total = 0;
+      for (const file of files) {
+        const encoded = (state.uploads || {})[file.token] || '';
+        if (state.uploads) delete state.uploads[file.token];
+        const binary = atob(encoded);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        total += bytes.length;
+        transfer.items.add(new File([bytes], file.name, { type: file.mime || 'application/octet-stream' }));
+      }
       el.files = transfer.files;
       el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { message: `Attached ${params.name} (${bytes.length} bytes) to [${params.index}]` };
+      const behind = el === picked ? '' : ' (the file input behind it)';
+      return { message: `Attached ${files.map((f) => f.name).join(', ')} (${total} bytes) to [${params.index}]${behind}` };
     }
     default:
       throw new Error(`unknown action ${action}`);

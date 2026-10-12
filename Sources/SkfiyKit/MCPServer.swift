@@ -194,19 +194,30 @@ public final class MCPServer {
 
     /// Asks the user a yes/no question through the client (MCP elicitation).
     /// nil when the client cannot ask or no answer came in time.
-    public func confirm(_ message: String, timeout: TimeInterval = 180) async -> Bool? {
+    public func confirm(_ message: String, field: String = "Allow", timeout: TimeInterval = 180) async -> Bool? {
         guard clientCanAsk else { return nil }
-        let schema: [String: Any] = [
-            "type": "object",
-            "properties": ["allow": ["type": "boolean", "title": "Allow", "default": false]],
-            "required": ["allow"]
-        ]
-        guard let response = await request("elicitation/create", ["message": message, "requestedSchema": schema], timeout: timeout),
+        guard let response = await request("elicitation/create", ["message": message, "requestedSchema": Self.approvalSchema(field: field)], timeout: timeout),
               let result = response["result"] as? [String: Any] else {
             return nil
         }
-        let content = result["content"] as? [String: Any]
-        return result["action"] as? String == "accept" && content?["allow"] as? Bool == true
+        return Self.approval(result)
+    }
+
+    /// One switch, on by default: Claude Code submits a field's default when the user just accepts the
+    /// form, so with a default of off every accept read as a refusal.
+    nonisolated static func approvalSchema(field: String) -> [String: Any] {
+        [
+            "type": "object",
+            "properties": ["allow": ["type": "boolean", "title": field, "default": true]],
+            "required": ["allow"]
+        ]
+    }
+
+    /// Accepting the form is the approval; switching the field off inside it, declining or
+    /// cancelling refuses.
+    nonisolated static func approval(_ result: [String: Any]) -> Bool {
+        guard result["action"] as? String == "accept" else { return false }
+        return (result["content"] as? [String: Any])?["allow"] as? Bool ?? true
     }
 
     /// Sends a request to the client and waits for its response.

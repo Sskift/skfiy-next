@@ -154,7 +154,8 @@ final class BrowserTools {
             index = try await resolve(locator, args: args, tabID: tabID, pointAllowed: false).params["index"] as? Int
         }
         guard let index else { throw ToolError("Missing required argument \"index\" (or a target).") }
-        var requested = (args.string("path") ?? "") as NSString
+        var requested = (args.values["paths"] as? [String]) ?? []
+        if let path = args.string("path"), !path.isEmpty { requested.insert(path, at: 0) }
         if let downloadID = try args.int("download_id") {
             // A finished download hands its file straight on.
             let browser = try await browser(for: args, tabID: tabID)
@@ -162,44 +163,57 @@ final class BrowserTools {
             guard let ready = DownloadInfo(item), ready.usable else {
                 throw ToolError("Download \(downloadID) is not a finished file yet (\(DownloadInfo(item)?.status ?? "unknown")). Wait for it with browser_downloads action wait.")
             }
-            requested = ready.path as NSString
+            requested = [ready.path]
         }
-        guard requested.length > 0 else { throw ToolError("Pass path, or download_id of a finished download.") }
-        let path = requested.expandingTildeInPath
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
-            throw ToolError("No file at \(path).")
+        guard !requested.isEmpty else { throw ToolError("Pass path (or paths), or download_id of a finished download.") }
+        var files: [(path: String, name: String, data: Data)] = []
+        for item in requested {
+            let path = (item as NSString).expandingTildeInPath
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                throw ToolError("No file at \(path).")
+            }
+            do { files.append((path, (path as NSString).lastPathComponent, try Data(contentsOf: URL(fileURLWithPath: path)))) } catch {
+                throw ToolError("Could not read \(path): \(error.localizedDescription)")
+            }
         }
-        let data: Data
-        do { data = try Data(contentsOf: URL(fileURLWithPath: path)) } catch {
-            throw ToolError("Could not read \(path): \(error.localizedDescription)")
-        }
-        guard data.count <= 20_000_000 else { throw ToolError("\(path) is larger than 20 MB.") }
+        let total = files.reduce(0) { $0 + $1.data.count }
+        guard total <= 20_000_000 else { throw ToolError("The files add up to more than 20 MB.") }
         let browser = try await browser(for: args, tabID: tabID)
         let windows = (try? await send(browser, "tabs", [:]) as? [[String: Any]]) ?? []
         let url = windows.flatMap { ($0["tabs"] as? [[String: Any]]) ?? [] }.first { $0["id"] as? Int == tabID }?["url"] as? String
         let site = url.flatMap { URL(string: $0)?.host } ?? "tab \(tabID)"
-        let name = (path as NSString).lastPathComponent
-        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-        let allowed = await askUser?("skfiy wants to upload \(name) (\(size), from \(path)) to \(site).")
+        let names = files.map(\.name).joined(separator: ", ")
+        let size = ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)
+        let from = files.count == 1 ? files[0].path : (files[0].path as NSString).deletingLastPathComponent
+        let allowed = await askUser?("skfiy wants to upload \(names) (\(size), from \(from)) to \(site).")
         switch allowed {
         case nil: throw ToolError("Uploading sends a file to a website, so the user must approve it, and this client cannot ask them. Tell the user which file to attach.")
-        case false?: throw ToolError("The user declined uploading \(name). Do not ask again; tell them what is left to do.")
+        case false?: throw ToolError("The user declined uploading \(names). Do not ask again; tell them what is left to do.")
         case true?: break
         }
-        let token = UUID().uuidString
-        let encoded = data.base64EncodedString()
-        var offset = encoded.startIndex
-        while offset < encoded.endIndex {
-            let end = encoded.index(offset, offsetBy: 400_000, limitedBy: encoded.endIndex) ?? encoded.endIndex
-            _ = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-chunk",
-                                                "token": token, "data": String(encoded[offset..<end])], timeout: 30)
-            offset = end
+        var parts: [[String: Any]] = []
+        for file in files {
+            let token = UUID().uuidString
+            let encoded = file.data.base64EncodedString()
+            var offset = encoded.startIndex
+            while offset < encoded.endIndex {
+                let end = encoded.index(offset, offsetBy: 400_000, limitedBy: encoded.endIndex) ?? encoded.endIndex
+                _ = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-chunk",
+                                                    "token": token, "data": String(encoded[offset..<end])], timeout: 30)
+                offset = end
+            }
+            let mime = UTType(filenameExtension: (file.name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            parts.append(["token": token, "name": file.name, "mime": mime])
         }
-        let mime = UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         let result = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-commit",
-                                                     "token": token, "name": name, "mime": mime], timeout: 30) as? [String: Any] ?? [:]
-        return try await state(browser, tabID: tabID, prefix: ((result["message"] as? String) ?? "Attached \(name)") + ", with the user's approval.", screenshot: false)
+                                                     "files": parts], timeout: 30) as? [String: Any] ?? [:]
+        if let error = result["error"] as? String { throw ToolError("\(names) was not attached: \(error).") }
+        // No message means the page never confirmed it; saying "attached" then would be a guess.
+        guard let attached = result["message"] as? String else {
+            throw ToolError("The page did not confirm that \(names) was attached. Check the tab with browser_state before trying again.")
+        }
+        return try await state(browser, tabID: tabID, prefix: attached + ", with the user's approval.", screenshot: false)
     }
 
     /// Asks the page a few times a second, sending it nothing, until a text

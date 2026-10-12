@@ -267,8 +267,11 @@ public enum Setup {
         if let value = environment["SKFIY_LOCKED_USE"], !value.isEmpty, value != "direct" {
             lines.append(Line(.warning, "SKFIY_LOCKED_USE=\(value) is not recognized, so locked use stays off; the only value is direct"))
         }
+        if let value = environment["SKFIY_APPROVE"], !value.isEmpty, value != "all", value != "ask" {
+            lines.append(Line(.warning, "SKFIY_APPROVE=\(value) is not recognized, so skfiy keeps asking for approval; use all (or ask)"))
+        }
         let known: Set<String> = [
-            "SKFIY_LOCKED_USE", "SKFIY_LOCKED_WAKE_DISPLAY", "SKFIY_BRIEF_FOCUS", "SKFIY_ALLOW_TERMINALS", "SKFIY_CURSOR",
+            "SKFIY_LOCKED_USE", "SKFIY_LOCKED_WAKE_DISPLAY", "SKFIY_BRIEF_FOCUS", "SKFIY_APPROVE", "SKFIY_ALLOW_TERMINALS", "SKFIY_CURSOR",
             "SKFIY_CURSOR_IDLE", "SKFIY_ACTION_LOG", "SKFIY_SETTLE_SECONDS", "SKFIY_SCREENSHOT_FORMAT", "SKFIY_SCREENSHOT_OUT",
             "SKFIY_STOP_FILE", "SKFIY_FLOW_DIR", "SKFIY_WAIT_EVENTS", "SKFIY_FRONT_GRANT_FILE", "SKFIY_OCR_DUMP",
             "SKFIY_INSTANCE",

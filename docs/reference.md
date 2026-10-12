@@ -175,6 +175,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | `SKFIY_LOCKED_USE` | 关 | `direct`：启用保持系统锁定的单窗口截图和 PID 定向输入；旧值 `1` 不再支持 |
 | `SKFIY_LOCKED_WAKE_DISPLAY` | 开 | `0`：锁屏时不唤醒熄灭的显示器（此时截图不可用，见本文 direct 模式） |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1`：所有指针点击都用上文的空闲时短暂应用内聚焦，不再逐个应用询问 |
+| `SKFIY_APPROVE` | `ask` | `all`：需要你同意的操作——上传文件（`browser_upload`）、`run_in_front`、`read_clipboard`、短暂应用内聚焦——全部直接放行，不再弹确认框。`hand_over`（登录、验证码等要你本人做的步骤）照旧等你；模型仍按说明在付款、发消息、删除前先问你 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
 | `SKFIY_CURSOR` | 开 | `0`：不显示 skfiy 自己的光标（见“自己的光标”） |
 | `SKFIY_CURSOR_IDLE` | `20` | 没有操作多少秒后光标淡出 |
