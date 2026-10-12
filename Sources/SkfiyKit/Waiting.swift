@@ -302,9 +302,15 @@ extension ComputerUse {
             },
             observe: {
                 looks += 1
-                let snapshot: Snapshot
+                var snapshot: Snapshot
                 do {
                     snapshot = try self.buildSnapshot(app: app, appElement: appElement, windowQuery: watched)
+                    if let window = snapshot.shownWindow.flatMap(windowID(of:)),
+                       (try? self.refuseProtectedTarget(args)) != nil,
+                       self.chromiumWindowFrozen(app, window: window) || self.electronRendering.isLive(pid: app.processIdentifier, window: window),
+                       await self.electronRendering.prepare(app, window: window) {
+                        snapshot = try self.buildSnapshot(app: app, appElement: appElement, windowQuery: watched)
+                    }
                 } catch let error as ToolError where sawWindow && error.description.hasPrefix("No window") {
                     throw WaitStopped("the window closed.")
                 } catch {
@@ -338,7 +344,7 @@ extension ComputerUse {
         if case .timedOut = result {
             state.isError = true
             if chromiumWindowFrozen(app, window: sessions[app.processIdentifier]?.windowID) {
-                state.text = "The window is completely covered by other windows, so Chromium has not been updating it: what was waited for may have happened unseen (see below).\n" + state.text
+                state.text = "The window is completely covered by other windows, and fresh Chromium rendering could not be confirmed: what was waited for may have happened unseen (see below).\n" + state.text
             }
         }
         return state

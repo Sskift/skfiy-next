@@ -1,7 +1,7 @@
 import ApplicationServices
 import Foundation
 
-public let skfiyVersion = "0.8.0"
+public let skfiyVersion = "0.9.0"
 
 /// Executes tools for the MCP server; the real one is `ComputerUse`.
 @MainActor

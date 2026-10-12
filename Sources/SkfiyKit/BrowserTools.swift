@@ -58,6 +58,7 @@ final class BrowserTools {
             _ = try await send(browser, "close", ["tab_id": tabID])
             return ToolResult(text: "Closed tab \(tabID).")
         case "browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover":
+            if name == "browser_scroll", args.values["until"] != nil { return try await scrollUntil(args) }
             return try await act(name, args)
         case "browser_upload":
             return try await upload(args)
@@ -118,17 +119,60 @@ final class BrowserTools {
         default:
             params["action"] = "scroll"
             let direction = try args.requiredString("direction").lowercased()
-            guard ["up", "down", "left", "right"].contains(direction) else {
-                throw ToolError("direction must be up, down, left, or right.")
+            guard ["up", "down", "left", "right", "to"].contains(direction) else {
+                throw ToolError("direction must be up, down, left, right, or to (an index/target).")
             }
+            if direction == "to", params["index"] == nil { throw ToolError("direction: to requires an index or target.") }
             params["direction"] = direction
-            params["pages"] = try args.double("pages") ?? 1
+            let pages = try args.double("pages") ?? 1
+            guard pages.isFinite, pages > 0, pages <= 50 else { throw ToolError("pages must be greater than 0 and at most 50.") }
+            params["pages"] = pages
         }
         let browser = try await browser(for: args, tabID: tabID)
+        try Task.checkCancellation()
+        guard !EmergencyStop.isStopped else { throw ToolError(EmergencyStop.refusal) }
         let result = try await send(browser, "act", params, timeout: 30) as? [String: Any] ?? [:]
         lastInputWasSecret = result["secret"] as? Bool == true
         let message = (result["message"] as? String) ?? "Done"
         return try await state(browser, tabID: tabID, prefix: (located.map { $0 + "\n" } ?? "") + message + ".", screenshot: false)
+    }
+
+    /// Bounded search of a virtualized list. Locate again after every scroll;
+    /// never retain recycled element indices or spill out of its container.
+    private func scrollUntil(_ args: Arguments) async throws -> ToolResult {
+        guard let wanted = try Locator.parse(args.values["until"]) else { throw ToolError("until needs a target description.") }
+        guard try args.elementIndex("index") == nil else { throw ToolError("until cannot keep an index across scrolls; describe its container with target, or omit target for the page.") }
+        let direction = try args.requiredString("direction")
+        guard ["up", "down", "left", "right"].contains(direction) else { throw ToolError("until uses up, down, left or right.") }
+        let limit = try args.int("max_scrolls") ?? 5
+        let container = try Locator.parse(args.values["target"])
+        guard (1...20).contains(limit) else { throw ToolError("max_scrolls must be 1–20.") }
+        let tabID = try requiredTab(args)
+        let browser = try await browser(for: args, tabID: tabID)
+        var scrollArgs = args.values
+        scrollArgs.removeValue(forKey: "until"); scrollArgs.removeValue(forKey: "max_scrolls")
+        // Pin the browser, even if another browser connects during this call.
+        scrollArgs["browser"] = String(browser.pid)
+        for count in 0...limit {
+            try Task.checkCancellation()
+            guard !EmergencyStop.isStopped else { throw ToolError(EmergencyStop.refusal) }
+            let found = try await locate(wanted, browser: browser, tabID: tabID, within: container)
+            if let chosen = found.chosen, let index = chosen.candidate.index {
+                var result = try await act("browser_scroll", Arguments(["tab_id": tabID, "browser": String(browser.pid),
+                                                                        "direction": "to", "index": index]))
+                result.text = "Found \(wanted.summary) after \(count) scroll(s).\n" + result.text
+                return result
+            }
+            if !found.matches.isEmpty { throw ToolError(describe(found, locator: wanted, tabID: tabID, acting: true)) }
+            guard count < limit else { break }
+            let result = try await act("browser_scroll", Arguments(scrollArgs))
+            if result.text.contains("Scroll boundary reached") {
+                throw ToolError("Reached the scroll boundary without finding \(wanted.summary). Nothing was clicked.\n" + result.text)
+            }
+        }
+        var result = try await state(browser, tabID: tabID, prefix: "Stopped after \(limit) scrolls; \(wanted.summary) was not found. Nothing was clicked.", screenshot: false)
+        result.isError = true
+        return result
     }
 
     /// Without an index (or a target resolved to a point): x/y of the tab's
@@ -384,25 +428,30 @@ final class BrowserTools {
     }
 
     private func state(_ browser: ConnectedBrowser, tabID: Int, prefix: String?, screenshot: Bool, background: Bool = false) async throws -> ToolResult {
-        let page = try await send(browser, "state", ["tab_id": tabID]) as? [String: Any] ?? [:]
-        var text = formatState(browser: browser.name, page: page)
-        if let prefix { text = prefix + "\n" + text }
+        var page = try await send(browser, "state", ["tab_id": tabID]) as? [String: Any] ?? [:]
+        var note = ""
         var image: Data?
         let shown = page["active"] as? Bool == true
         if screenshot, shown || background {
             let shot = try? await send(browser, "screenshot", ["tab_id": tabID, "background": background]) as? [String: Any]
+            // Capturing delivers a frame to hidden tabs. Scroll handlers and
+            // virtual rows may have changed; publish their current indices.
+            if background, shot?["jpeg"] != nil {
+                page = try await send(browser, "state", ["tab_id": tabID]) as? [String: Any] ?? [:]
+            }
             if let jpeg = (shot?["jpeg"] as? String).flatMap({ Data(base64Encoded: $0) }),
                let viewportWidth = (page["viewport"] as? [String: Any])?["width"] as? Int,
                let scaled = fitForModel(jpeg) {
                 image = scaled.data
                 screenshotScale[tabID] = Double(viewportWidth) / Double(scaled.width)
-                text += "\n(Screenshot: \(scaled.width)×\(scaled.height) px of the viewport\(shot?["debugger"] as? Bool == true ? ", taken through Chrome's debugger" : ""); browser_click accepts x/y in these pixels.)"
+                note = "\n(Screenshot: \(scaled.width)×\(scaled.height) px of the viewport\(shot?["debugger"] as? Bool == true ? ", taken through Chrome's debugger" : ""); browser_click accepts x/y in these pixels.)"
             } else if background {
-                text += "\n(No screenshot: \((shot?["unavailable"] as? String) ?? "Chrome's debugger could not capture this tab").)"
+                note = "\n(No screenshot: \((shot?["unavailable"] as? String) ?? "Chrome's debugger could not capture this tab").)"
             }
         } else if screenshot {
-            text += "\n(No screenshot: this tab is in the background. Pass background_screenshot: true to take one through Chrome's debugger, if the page's look matters: canvas, charts, images.)"
+            note = "\n(No screenshot: this tab is in the background. Pass background_screenshot: true to take one through Chrome's debugger, if the page's look matters: canvas, charts, images.)"
         }
+        let text = (prefix.map { $0 + "\n" } ?? "") + formatState(browser: browser.name, page: page) + note
         return ToolResult(text: text, image: image, imageMimeType: "image/jpeg")
     }
 }
@@ -548,23 +597,35 @@ extension BrowserTools {
 
     /// The tab's elements and text blocks with their boxes, read now (which
     /// refreshes element indices, as browser_state does), matched.
-    func locate(_ locator: Locator, browser: ConnectedBrowser, tabID: Int) async throws -> Found {
+    func locate(_ locator: Locator, browser: ConnectedBrowser, tabID: Int, within scope: Locator? = nil) async throws -> Found {
         let page = try await send(browser, "state", ["tab_id": tabID, "locate": true, "max_chars": 200_000]) as? [String: Any] ?? [:]
         guard let raw = page["items"] as? [[String: Any]] else {
             throw ToolError("The skfiy extension in this browser is older than skfiy and cannot locate. Reload it: chrome://extensions → skfiy browser bridge → reload.")
         }
         let viewport = page["viewport"] as? [String: Any]
         let bounds = CGRect(x: 0, y: 0, width: (viewport?["width"] as? NSNumber)?.doubleValue ?? 0, height: (viewport?["height"] as? NSNumber)?.doubleValue ?? 0)
-        let candidates = raw.compactMap { item -> LocatorCandidate? in
+        var candidates = raw.compactMap { item -> LocatorCandidate? in
             guard let rect = (item["rect"] as? [NSNumber])?.map(\.doubleValue), rect.count == 4, rect[2] >= 1 || rect[3] >= 1 else { return nil }
             return LocatorCandidate(label: item["label"] as? String ?? "", role: item["kind"] as? String ?? "",
                                     frame: CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]),
-                                    containers: item["sections"] as? [String] ?? [], index: (item["index"] as? NSNumber)?.intValue)
+                                    containers: item["sections"] as? [String] ?? [], index: (item["index"] as? NSNumber)?.intValue,
+                                    identifier: item["identifier"] as? String, rowLabels: item["rowLabels"] as? [String] ?? [],
+                                    columnLabels: item["columnLabels"] as? [String] ?? [], ancestors: item["parents"] as? [Int] ?? [])
         }
         let scale = screenshotScale[tabID]
         let pixelArea = scale.map { scale in { (rect: CGRect) in CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale) } }
         if case .pixels? = locator.area, scale == nil {
             throw ToolError("A region in pixels needs a screenshot of this tab first (browser_state); or name the region, e.g. bottom-right.")
+        }
+        if let scope {
+            if case .pixels? = scope.area, scale == nil {
+                throw ToolError("A container region in pixels needs a screenshot of this tab first (browser_state).")
+            }
+            let matches = scope.matches(candidates, bounds: bounds, pixelArea: pixelArea)
+            guard let container = scope.unique(matches), let index = container.candidate.index else {
+                throw ToolError("The search container must resolve to one element now. Inspect it with browser_locate; nothing was scrolled.")
+            }
+            candidates = candidates.filter { $0.ancestors.contains(index) }
         }
         let matches = locator.matches(candidates, bounds: bounds, pixelArea: pixelArea)
         let elsewhere = matches.isEmpty ? (locator.loosened.map { $0.matches(candidates, bounds: bounds) } ?? []) : []
@@ -580,6 +641,9 @@ extension BrowserTools {
             parts.append("x=\(Int((candidate.frame.midX / scale).rounded())) y=\(Int((candidate.frame.midY / scale).rounded()))")
         }
         if let section = candidate.containers.first { parts.append("in \(quote(section, limit: 40))") }
+        if let identifier = candidate.identifier { parts.append("identifier=\(quote(identifier, limit: 80))") }
+        if !candidate.rowLabels.isEmpty { parts.append("row=\(quote(candidate.rowLabels.joined(separator: " | "), limit: 100))") }
+        if !candidate.columnLabels.isEmpty { parts.append("column=\(quote(candidate.columnLabels.joined(separator: " | "), limit: 80))") }
         if let distance = match.distance { parts.append("\(Int(distance.rounded())) px from the near text") }
         return parts.joined(separator: " ")
     }

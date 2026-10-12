@@ -32,6 +32,7 @@ BIN = Path(os.environ.get('SKFIY_TEST_BIN', '/tmp/skfiy-compat/bin'))
 SOURCES = {'AXProbe': 'scripts/fixtures/AXProbe.swift', 'Launch': 'scripts/fixtures/Launch.swift',
            'Front': 'scripts/fixtures/Front.swift', 'WindowGuard': 'scripts/fixtures/WindowGuard.swift',
            'ScenarioFixture': 'scripts/fixtures/ScenarioFixture.swift',
+           'BackgroundWatch': 'scripts/fixtures/BackgroundWatch.swift',
            'VirtualDisplay': ('scripts/fixtures/VirtualDisplay.swift', 'scripts/fixtures/VirtualDisplay.h'),
            'make_pdf': 'eval/make_pdf.swift', 'watch': 'eval/watch.swift'}
 

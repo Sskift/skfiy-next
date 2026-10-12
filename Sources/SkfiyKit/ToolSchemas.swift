@@ -54,9 +54,12 @@ public enum ToolSchemas {
         "description": "Instead of an index or x/y: describe the control, and skfiy finds it in the UI as it is now (accessibility or page elements; recognized text while locked). A name, or {\"name\": \"Save\", \"role\": \"button\", \"region\": \"bottom-right\"}; also within (a group, box or section label), near, below, right_of (another text). region: top-left, top, top-right, left, center, right, bottom-left, bottom, bottom-right, or [x, y, w, h] in screenshot pixels. Exactly one match is acted on; when several fit equally, nothing is done and they are listed",
         "properties": [
             "name": ["type": "string", "description": "Its label or text; exact beats partial"],
-            "role": ["type": "string", "description": "button, text field, checkbox, radio, link, menu item, pop-up, tab, row, slider, text, image, file input"],
+            "role": ["type": "string", "description": "button, text field, checkbox, radio, link, menu item, pop-up, tab, row, cell, table, list, scroll area, toolbar, menu, slider, text, image, file input; unnamed controls can be found by role and region"],
             "region": ["type": ["string", "array"]],
-            "within": ["type": "string"], "near": ["type": "string"], "below": ["type": "string"], "right_of": ["type": "string"]
+            "within": ["type": "string"], "near": ["type": "string"], "below": ["type": "string"], "right_of": ["type": "string"],
+            "identifier": ["type": "string", "description": "Exact AXIdentifier, DOM id or data-testid from locate; useful for icon-only controls"],
+            "row": ["type": "string", "description": "Text in the same structural table/list row, e.g. Alice; no geometric guessing"],
+            "column": ["type": "string", "description": "Column header of a table cell or its control, e.g. Email; requires published table structure"]
         ]
     ]
 
@@ -64,7 +67,7 @@ public enum ToolSchemas {
     /// schema is loaded into the model's context when it is used.
     private static let target: [String: Any] = [
         "type": ["object", "string"],
-        "description": "Instead of an index or x/y: the control by description (as locate takes it), found in the UI as it is now. A name, or {\"name\": \"Save\", \"role\": \"button\", \"region\": \"bottom-right\"}, also within, near, below, right_of; several equal matches: nothing is done, they are listed"
+        "description": "Instead of an index or x/y: a name or {\"name\": \"Save\", \"role\": \"button\", \"region\": \"bottom-right\"}, also within, near, below, right_of, exact identifier, row text, column header. Resolved against the current UI. Several equal matches: nothing is done, they are listed"
     ]
 
     /// Outcome checking, offered on every action that changes something.
@@ -385,6 +388,7 @@ public enum ToolSchemas {
                 "app": app,
                 "target": targetDetailed,
                 "ocr": ["type": "boolean", "description": "Unlocked: true also matches text recognized in the screenshot from the start. By default text is recognized when accessibility has no match; false skips that, though a window that publishes (almost) no accessibility elements is still read from its screenshot"],
+                "screenshot": ["type": "boolean", "description": "Attach a current window screenshot for visual disambiguation, including unnamed icons. Automatically attempted for missing or ambiguous targets"],
                 "window_id": ["type": "string", "description": "While locked: the window to look in, by id; defaults to the window of the latest screenshot"]
             ],
             required: ["app", "target"],
@@ -533,11 +537,13 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_scroll",
-            "Scroll a tab, or a scrollable element by index, by a number of viewport pages.",
+            "Scroll the nearest container of an element (or the page); never spill into the outer page at a nested boundary. direction: to reveals a target/index. until searches a virtualized list by repeatedly re-reading and scrolling, bounded by max_scrolls; target then names the container. It never clicks the match.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
-                "direction": ["type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"],
-                "pages": ["type": "number", "description": "Pages to scroll. Defaults to 1"]
+                "direction": ["type": "string", "enum": ["up", "down", "left", "right", "to"], "description": "Scroll direction"],
+                "pages": ["type": "number", "minimum": 0.01, "maximum": 50, "description": "Pages to scroll. Defaults to 1"],
+                "until": targetDetailed,
+                "max_scrolls": ["type": "integer", "minimum": 1, "maximum": 20, "description": "With until: maximum scroll attempts, defaults to 5; target optionally identifies the container, index is not allowed"]
             ],
             required: ["tab_id", "direction"],
             traits: [.target]

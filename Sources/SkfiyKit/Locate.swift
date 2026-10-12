@@ -40,13 +40,14 @@ extension ComputerUse {
                                            "AXLandmarkMain", "AXDialog"]
         let textRoles: Set<String> = ["AXStaticText", "AXHeading"]
         var out: [(LocatorCandidate, AXUIElement)] = []
-        var stack: [(AXUIElement, [String])] = [(window, [])]
+        let controlRoles = Locator.roleAliases.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+        var stack: [(AXUIElement, [String], [String], [String], [[String]])] = [(window, [], [], [], [])]
         var visited = 0
-        while let (element, containers) = stack.popLast(), visited < budget {
+        while let (element, containers, inheritedRows, inheritedColumns, inheritedHeaders) = stack.popLast(), visited < budget {
             visited += 1
             let values = element.multipleValues([kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
                                                  kAXPlaceholderValueAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
-                                                 kAXTitleUIElementAttribute])
+                                                 kAXTitleUIElementAttribute, kAXHelpAttribute, kAXIdentifierAttribute])
             let role = values[kAXRoleAttribute].flatMap(axString) ?? ""
             let titleElement = axElement(values[kAXTitleUIElementAttribute])
             let label = nonEmpty(values[kAXTitleAttribute].flatMap(axString))
@@ -54,15 +55,50 @@ extension ComputerUse {
                 ?? (textRoles.contains(role) ? nonEmpty(values[kAXValueAttribute].flatMap(axString)) : nil)
                 ?? nonEmpty(titleElement.flatMap { $0.string(kAXValueAttribute) ?? $0.string(kAXTitleAttribute) })
                 ?? nonEmpty(values[kAXPlaceholderValueAttribute].flatMap(axString))
+                ?? nonEmpty(values[kAXHelpAttribute].flatMap(axString))
+            let identifier = nonEmpty(values[kAXIdentifierAttribute].flatMap(axString))
+            let table = role == "AXTable" || role == "AXOutline"
+            let headers = table ? element.elements(kAXColumnsAttribute).map { column in
+                column.element(kAXHeaderAttribute).map { Self.structuralText(in: $0) } ?? []
+            } : inheritedHeaders
+            let rows = ["AXRow", "AXOutlineRow"].contains(role) ? Self.structuralText(in: element) : table ? [] : inheritedRows
+            var columns = table ? [] : inheritedColumns
+            if role == "AXCell" {
+                columns = element.elements("AXColumnHeaderUIElements").flatMap { Self.structuralText(in: $0) }
+                if columns.isEmpty, let raw = element.value("AXColumnIndexRange"), CFGetTypeID(raw) == AXValueGetTypeID() {
+                    var range = CFRange()
+                    if AXValueGetValue(raw as! AXValue, .cfRange, &range), range.location >= 0, range.length > 0,
+                       range.location < headers.count, range.length <= headers.count - range.location {
+                        columns = headers[range.location..<(range.location + range.length)].flatMap { $0 }
+                    }
+                }
+            }
             if !CFEqual(element, window), let frame = axFrame(position: values[kAXPositionAttribute], size: values[kAXSizeAttribute]),
-               frame.width >= 1, frame.height >= 1, label != nil || Locator.roleAliases["text field"]!.contains(role) {
-                out.append((LocatorCandidate(label: label ?? "", role: role, frame: frame, containers: containers), element))
+               frame.width >= 1, frame.height >= 1, label != nil || identifier != nil || controlRoles.contains(role) {
+                out.append((LocatorCandidate(label: label ?? "", role: role, frame: frame, containers: containers,
+                                             identifier: identifier, rowLabels: rows, columnLabels: columns), element))
             }
             let inner = containerRoles.contains(role) && label != nil ? [label!] + containers : containers
             let children = (values[kAXChildrenAttribute] as? [AXUIElement]) ?? []
-            stack.append(contentsOf: children.reversed().map { ($0, inner) })
+            stack.append(contentsOf: children.reversed().map { ($0, inner, rows, columns, headers) })
         }
         return out
+    }
+
+    /// A bounded structural label: never use editable values (passwords or
+    /// user-entered data) to name a row. Nested tables start a new context.
+    static func structuralText(in root: AXUIElement) -> [String] {
+        var pending = [root], labels: [String] = [], visited = 0
+        while let element = pending.popLast(), visited < 160, labels.count < 24 {
+            visited += 1
+            let role = element.string(kAXRoleAttribute) ?? ""
+            if !CFEqual(element, root), ["AXTable", "AXOutline"].contains(role) { continue }
+            let value = nonEmpty(element.string(kAXTitleAttribute)) ?? nonEmpty(element.string(kAXDescriptionAttribute))
+                ?? (Locator.textRoles.contains(role) ? nonEmpty(element.string(kAXValueAttribute)) : nil)
+            if let value, !labels.contains(value) { labels.append(String(value.prefix(200))) }
+            pending.append(contentsOf: element.elements(kAXChildrenAttribute).reversed())
+        }
+        return labels
     }
 
     /// The window the latest get_app_state showed (or the focused one), read
@@ -169,6 +205,9 @@ extension ComputerUse {
         parts.append(match.area)
         if let pixel = item.pixel { parts.append("x=\(Int(pixel.x.rounded())) y=\(Int(pixel.y.rounded()))") }
         if let container = item.candidate.containers.first { parts.append("in \(quote(container, limit: 40))") }
+        if let identifier = item.candidate.identifier { parts.append("identifier=\(quote(identifier, limit: 80))") }
+        if !item.candidate.rowLabels.isEmpty { parts.append("row=\(quote(item.candidate.rowLabels.joined(separator: " | "), limit: 100))") }
+        if !item.candidate.columnLabels.isEmpty { parts.append("column=\(quote(item.candidate.columnLabels.joined(separator: " | "), limit: 80))") }
         if let distance = match.distance { parts.append("\(Int(distance.rounded())) pt from the near text") }
         return parts.joined(separator: " ")
     }
@@ -225,8 +264,25 @@ extension ComputerUse {
             view = try await locateView(app: app, withText: true)
             outcome = Self.match(locator, in: view)
         }
-        let text = describeOutcome(outcome, locator: locator, pid: app.processIdentifier, acting: false)
-        return ToolResult(text: text, isError: outcome.matches.isEmpty)
+        var screenshot: ToolResult?
+        if outcome.chosen == nil || args.bool("screenshot") == true {
+            // Give the model a current image for unnamed/custom-drawn controls.
+            // Use the ordinary state path so returned coordinates and indices
+            // belong to the same window and replace any stale capture mapping.
+            var looking: [String: Any] = ["app": query]
+            if let id = sessions[app.processIdentifier]?.windowID { looking["window"] = String(id) }
+            if let fresh = try? await getAppState(Arguments(looking)), fresh.image != nil {
+                screenshot = fresh
+                view = try await locateView(app: app, withText: view.recognized)
+                outcome = Self.match(locator, in: view)
+            }
+        }
+        var text = describeOutcome(outcome, locator: locator, pid: app.processIdentifier, acting: false)
+        if screenshot != nil {
+            text += "\nA screenshot of this window is attached; x/y refer to this image. Use it to distinguish unnamed icons or custom-drawn controls."
+            if chromiumWindowFrozen(app, window: sessions[app.processIdentifier]?.windowID) { text += "\n" + frozenNote(app) }
+        }
+        return ToolResult(text: text, image: screenshot?.image, imageMimeType: screenshot?.imageMimeType ?? "image/jpeg", isError: outcome.matches.isEmpty)
     }
 
     /// Replaces `target` with the element_index or x/y it resolves to now, or

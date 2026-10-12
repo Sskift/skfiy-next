@@ -145,6 +145,7 @@ func front() -> [String: Any] {
     }
     return ["front": app?.localizedName ?? "?", "frontPID": Int(app?.processIdentifier ?? 0),
             "topOwner": top?[kCGWindowOwnerName as String] as? String ?? "?",
+            "topPID": top?[kCGWindowOwnerPID as String] as? Int ?? 0,
             "topWindow": top?[kCGWindowNumber as String] as? Int ?? 0]
 }
 

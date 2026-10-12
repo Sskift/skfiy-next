@@ -18,6 +18,11 @@ struct Locator: Equatable {
     var near: String?
     var below: String?
     var rightOf: String?
+    /// Exact accessibility/DOM identifier; useful for unnamed controls.
+    var identifier: String?
+    /// Structural row content and column header, never inferred from proximity.
+    var row: String?
+    var column: String?
 
     static let areaNames: [String: String] = [
         "top-left": "top-left", "top left": "top-left", "左上": "top-left", "左上角": "top-left",
@@ -49,10 +54,16 @@ struct Locator: Equatable {
         "slider": ["AXSlider", "AXIncrementor", "range", "slider"],
         "text": textRoles,
         "image": ["AXImage", "img", "image"],
-        "file input": ["file"]
+        "file input": ["file"],
+        "cell": ["AXCell", "cell", "gridcell", "td", "th"],
+        "table": ["AXTable", "AXOutline", "table", "grid", "treegrid"],
+        "list": ["AXList", "list", "listbox", "ul", "ol"],
+        "scroll area": ["AXScrollArea", "scrollarea"],
+        "toolbar": ["AXToolbar", "toolbar"],
+        "menu": ["AXMenu", "menu"]
     ]
 
-    var isEmpty: Bool { name == nil && role == nil && area == nil && within == nil && near == nil && below == nil && rightOf == nil }
+    var isEmpty: Bool { name == nil && role == nil && area == nil && within == nil && near == nil && below == nil && rightOf == nil && identifier == nil && row == nil && column == nil }
 
     init() {}
 
@@ -60,9 +71,12 @@ struct Locator: Equatable {
         let text = { (key: String) -> String? in
             (object[key] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         }
-        let known: Set<String> = ["name", "role", "region", "within", "near", "below", "right_of"]
+        let known: Set<String> = ["name", "role", "region", "within", "near", "below", "right_of", "identifier", "row", "column"]
         if let unknown = object.keys.first(where: { !known.contains($0) }) {
-            throw ToolError("A target has no \"\(unknown)\"; use name, role, region, within, near, below, right_of.")
+            throw ToolError("A target has no \"\(unknown)\"; use name, role, region, within, near, below, right_of, identifier, row, column.")
+        }
+        for key in known.subtracting(["region"]) where object[key] != nil {
+            guard object[key] is String, text(key) != nil else { throw ToolError("target.\(key) must be a nonempty string.") }
         }
         name = text("name")
         if let role = text("role") {
@@ -92,7 +106,10 @@ struct Locator: Equatable {
         near = text("near")
         below = text("below")
         rightOf = text("right_of")
-        guard !isEmpty else { throw ToolError("Describe the target with at least one of name, role, region, within, near, below, right_of.") }
+        identifier = text("identifier")
+        row = text("row")
+        column = text("column")
+        guard !isEmpty else { throw ToolError("Describe the target with name, role, region, within, near, below, right_of, identifier, row or column.") }
     }
 
     /// A target argument: an object, or just a name.
@@ -109,7 +126,8 @@ struct Locator: Equatable {
         let key = role.lowercased().replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
         let synonyms = ["textfield": "text field", "input": "text field", "field": "text field", "check box": "checkbox", "menuitem": "menu item",
                         "popup": "pop-up", "pop up": "pop-up", "dropdown": "pop-up", "select": "pop-up", "label": "text", "static text": "text",
-                        "按钮": "button", "输入框": "text field", "文本框": "text field", "复选框": "checkbox", "链接": "link", "标签页": "tab"]
+                        "按钮": "button", "输入框": "text field", "文本框": "text field", "复选框": "checkbox", "链接": "link", "标签页": "tab",
+                        "单元格": "cell", "表格": "table", "列表": "list", "行": "row", "滚动区域": "scroll area", "scrollarea": "scroll area", "工具栏": "toolbar", "菜单": "menu"]
         let resolved = synonyms[key] ?? key
         return roleAliases[resolved] != nil ? resolved : nil
     }
@@ -127,6 +145,9 @@ struct Locator: Equatable {
         if let near { parts.append("near \(quote(near, limit: 30))") }
         if let below { parts.append("below \(quote(below, limit: 30))") }
         if let rightOf { parts.append("right of \(quote(rightOf, limit: 30))") }
+        if let identifier { parts.append("identifier \(quote(identifier, limit: 60))") }
+        if let row { parts.append("row \(quote(row, limit: 60))") }
+        if let column { parts.append("column \(quote(column, limit: 40))") }
         return parts.joined(separator: " ")
     }
 }
@@ -143,6 +164,10 @@ struct LocatorCandidate: Equatable {
     var index: Int?
     /// True when the role is known (AX, DOM); false for recognized text.
     var roleKnown = true
+    var identifier: String?
+    var rowLabels: [String] = []
+    var columnLabels: [String] = []
+    var ancestors: [Int] = []
 }
 
 struct LocatorMatch: Equatable {
@@ -248,6 +273,9 @@ extension Locator {
         let rightAnchors = rightOf.map(anchors) ?? []
         var matches: [LocatorMatch] = []
         for candidate in candidates {
+            if let identifier, candidate.identifier != identifier { continue }
+            if let row, !candidate.rowLabels.contains(where: { Self.textScore($0, row) != nil }) { continue }
+            if let column, !candidate.columnLabels.contains(where: { Self.textScore($0, column) != nil }) { continue }
             let center = CGPoint(x: candidate.frame.midX, y: candidate.frame.midY)
             var nameScore = 0.5
             if let name {
@@ -307,10 +335,11 @@ extension Locator {
     /// Without the parts that narrow by position or relation: what the name
     /// and kind alone match, to say where those are when nothing matched.
     var loosened: Locator? {
-        guard area != nil || within != nil || near != nil || below != nil || rightOf != nil, name != nil || role != nil else { return nil }
+        guard area != nil || within != nil || near != nil || below != nil || rightOf != nil || row != nil || column != nil, name != nil || role != nil || identifier != nil else { return nil }
         var loose = Locator()
         loose.name = name
         loose.role = role
+        loose.identifier = identifier
         return loose
     }
 }

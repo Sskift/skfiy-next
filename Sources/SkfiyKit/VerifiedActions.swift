@@ -153,7 +153,7 @@ extension ComputerUse {
             ?? typingTargets[target.pid].flatMap { inTarget($0) ? $0 : nil }
         observation.value = element?.string(kAXValueAttribute)
         if chromiumWindowFrozen(app, window: target.window) {
-            observation.unobservable = "the window is completely covered by other windows, and Chromium does not update a covered window"
+            observation.unobservable = "the window is completely covered by other windows, and fresh Chromium rendering has not been confirmed"
         }
         return observation
     }

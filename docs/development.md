@@ -9,10 +9,13 @@
 ```bash
 make build          # swift build
 make test           # 单元测试（swift-testing）
+node scripts/test_electron_rendering_lease.mjs  # 不依赖桌面的渲染租约与恢复测试
 make test-install   # install.sh、skfiy setup / doctor / uninstall：在临时 HOME 里用假的 claude/codex 跑一遍，并核对你真实的配置没被改动；不碰界面
 make embed-extension  # 改了 browser-extension/ 之后：重新生成二进制里携带的插件副本（make release/install、源码安装和 release.sh 会自动做；不一致时 make test 失败）；内容变了而 manifest.json 的 version 没升时会提醒
 make dist           # 发布用的通用二进制压缩包（dist/），不发布任何东西；打 vX.Y.Z 标签后由 .github/workflows/release.yml 构建并发布
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
+python3 scripts/test_electron_rendering.py .build/debug/skfiy  # 自建 Electron：受控遮挡通知、真实冻结/恢复、输入、截图、节流恢复、调试连接生命周期、焦点/层级采样
+python3 scripts/test_complex_controls.py .build/debug/skfiy  # 自建 AppKit + 无界面 Chrome：行列定位、图标、后台虚拟列表、失效索引、截图 OCR 和前台采样；不启动窗口守护
 make smoke-fixture  # 自建的小应用（窗口放在所有窗口之后）：悬停提示、打开/存储面板、自绘视图的点击
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
 make smoke-browser  # 端到端：用浏览器插件在后台标签页操作测试网页，并断言你看到的标签页没变（先跑 scripts/test_bridge_host.py：插件重连时旧桥接进程不会删掉新进程的连接）
@@ -25,6 +28,8 @@ swift scripts/make_extension_icons.swift browser-extension   # 重新画插件�
 ```
 
 `make smoke-web` / `make smoke-browser` 先运行 `python3 scripts/compat_baseline.py <skfiy> --test-browser`：第一次会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，然后在后台用全新的临时 profile 启动它（加载插件、打开本地测试页服务 `scripts/compat_server.py` 上的 `scripts/fixtures/web.html`），不碰你自己的浏览器。`eval/run_eval.py` 也用这个测试浏览器。测试脚本共用 `scripts/harness.py` 里的 MCP 客户端：它不写你的操作日志；需要你同意的操作（例如上传文件），由测试按脚本里写好的回答答复。
+
+`test_electron_rendering.py` 需要 `~/.cache/skfiy-test/electron` 内的 Electron 32+、clang 和 Node 的 N-API 头文件（可用 `SKFIY_NODE_INCLUDE` 指定）。这是测试夹具的依赖，发布二进制不依赖 Node 或该 addon。Swift 测试在检测到 Node 时还会运行一次无界面的真实调试协议清理检查；没有 Node 时该项明确跳过。脚本只在自己创建的 Electron 内加载 `scripts/fixtures/electron-rendering/occlusion.mm`：覆盖测试窗口的 AppKit 遮挡状态并发送系统通知，避免录屏或不同系统版本令自然遮挡无法稳定复现。必须先看到页面 hidden 且动画帧停止，随后通过 MCP 恢复出帧，并由页面回报、截图 OCR 和独立窗口采样验收。`test_covered_chromium.py` 则显式关闭自动恢复，继续验证接口不可用时的保守提示。
 
 历史测试记录（2026-09-29，macOS 26.6.1；后续结果见 [roadmap](roadmap.md)）：
 

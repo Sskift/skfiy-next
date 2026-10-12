@@ -59,7 +59,7 @@ struct CapabilityInputs: Equatable {
     var keyWindowElsewhere: String?
     /// The inspected window is a remote session (RustDesk): input goes to another computer.
     var remoteSession = false
-    /// The inspected window of a Chromium app is completely covered, so it is not updated.
+    /// The inspected Chromium window is covered and its rendering is unconfirmed.
     var coveredChromium = false
     /// The app's key window is a remote session: key events would go to another computer.
     var remoteKeyWindow = false
@@ -171,14 +171,14 @@ struct CapabilityReport {
         } else if facts.accessibilityElements == 0 {
             channels.append(Capability(name: "ax", available: false, detail: "The window publishes no accessibility elements (custom-drawn UI or an embedded web view).",
                                        limits: ["Menu bar items still have element indices.", "Use OCR text positions with x/y instead."]
-                                        + (facts.coveredChromium ? ["The window is completely covered, and Chromium builds no tree for a window it does not draw: uncovering any corner of it brings the page's elements."] : [])))
+                                        + (facts.coveredChromium ? ["The window is completely covered and may have stopped rendering. Call get_app_state to try background rendering; uncovering any corner also lets Chromium update the tree."] : [])))
         } else {
             var limits: [String] = []
             if facts.flutter {
                 limits.append("set_value does not change Flutter text fields: click the field by element_index, then type_text.")
             }
             if facts.coveredChromium {
-                limits.append("The window is completely covered, so Chromium is not updating its tree: it may be out of date.")
+                limits.append("The window is completely covered and live rendering is unconfirmed; its tree may be out of date.")
             }
             if facts.chromium && !facts.webContent {
                 limits.append("No web content in the tree yet: Chromium builds it after the first get_app_state; call get_app_state again.")
@@ -220,7 +220,7 @@ struct CapabilityReport {
             screenshot = Capability(name: "screenshot", available: false, detail: "None of the app's windows is on screen (another desktop, full screen, or no window).")
         } else if facts.coveredChromium {
             screenshot = Capability(name: "screenshot", available: true, detail: "ScreenCaptureKit capture of the app's own windows, even when covered.",
-                                    limits: ["This window is completely covered, and Chromium stops drawing a covered window: its screenshot is its last drawn frame and does not show the effect of actions. Uncovering any corner of it (the user) makes it current again."])
+                                    limits: ["This window is completely covered and live rendering is unconfirmed. Its screenshot may be an old frame; call get_app_state to try background rendering, or use browser_* for browser pages."])
         } else {
             screenshot = Capability(name: "screenshot", available: true, detail: "ScreenCaptureKit capture of the app's own windows, even when covered.")
         }

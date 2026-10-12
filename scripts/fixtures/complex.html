@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8"><title>skfiy complex controls</title>
+<style>body{font:16px sans-serif;margin:16px;height:2000px}button,input{font:inherit}td,th{padding:4px 15px;border:1px solid #ddd}#nested,#virtual{height:150px;width:400px;overflow:auto;border:2px solid #369;margin:12px}#virtual{position:relative}.vrow{position:absolute;height:30px;width:360px}svg{width:24px;height:24px}</style>
+<h1 id="receipt">READY</h1>
+<button id="archive"><svg><title>Archive fixture</title><rect width="24" height="24"/></svg></button>
+<button id="unnamed"><svg><circle cx="12" cy="12" r="10"/></svg></button>
+<button id="reverse">Reverse rows</button><button id="recycle">Recycle row</button>
+<table aria-label="Customers"><thead><tr><th>Name</th><th>Email</th><th>Action</th></tr></thead><tbody></tbody></table>
+<div id="shadow"></div>
+<div id="nested" aria-label="Nested list"><div style="height:700px"><button id="nested-start">Nested start</button><button id="nested-end" style="display:block;margin-top:620px">Nested end</button></div></div>
+<div id="virtual" aria-label="Virtual list"><div style="height:1200px" id="spacer"></div></div>
+<script>
+const run=new URLSearchParams(location.search).get('run'), counts={};let names=['Alice','Bob','Carol'];
+const nested=document.querySelector('#nested'),virtual=document.querySelector('#virtual');
+let reports=Promise.resolve();
+function report(event='state'){const body=JSON.stringify({event,state:{run,counts,names,scrollY,nested:nested.scrollTop,virtual:virtual.scrollTop,visible:document.visibilityState,receipt:document.querySelector('#receipt').textContent,emails:[...document.querySelectorAll('input')].map(e=>e.value)}});reports=reports.then(()=>fetch('/event',{method:'POST',body}));}
+function clicked(id){counts[id]=(counts[id]||0)+1;document.querySelector('#receipt').textContent='RECEIPT '+id+' '+counts[id];report('click');}
+function table(){document.querySelector('tbody').innerHTML=names.map(n=>`<tr><td>${n}</td><td><input id="email-${n}" value="${n.toLowerCase()}@example.test"></td><td><button id="edit-${n}">Edit</button></td></tr>`).join('');}
+table();
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.id==='reverse'){names.reverse();table();}if(b.id==='recycle'){const r=document.querySelector('.vrow');r.textContent='Recycled person';r.dataset.person='Recycled';}clicked(b.id||b.dataset.person);});
+document.addEventListener('input',()=>report('input'));
+const shadow=document.querySelector('#shadow').attachShadow({mode:'open'});shadow.innerHTML='<span id="shadow-label">Shadow action</span><button aria-labelledby="shadow-label" id="shadow-action">★</button>';
+shadow.querySelector('button').onclick=()=>clicked('shadow-action');
+const pool=Array.from({length:7},()=>{const b=document.createElement('button');b.className='vrow';b.setAttribute('role','listitem');virtual.append(b);return b;});
+function rows(){const start=Math.floor(virtual.scrollTop/30);pool.forEach((b,i)=>{let n=start+i+1;b.style.top=((n-1)*30)+'px';b.textContent='Person '+n;b.dataset.person='person-'+n;b.style.display=n<=40?'block':'none';});report('render');}
+virtual.addEventListener('scroll',rows);nested.addEventListener('scroll',()=>report('scroll'));window.addEventListener('scroll',()=>report('scroll'));rows();report();
+let applied=false;
+setInterval(async()=>{const command=await(await fetch('/state?run='+run+'-command')).json();if(command.state?.recycle&&!applied){applied=true;pool[0].textContent='Recycled person';pool[0].dataset.person='recycled';report('recycled');}},500);
+</script>

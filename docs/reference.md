@@ -30,8 +30,8 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `get_app_capabilities` | 操作前先问：这个应用此刻能用哪些路径——辅助功能树、截图、OCR、坐标指针、键盘、浏览器扩展、前台、文件面板、剪贴板——各自不可用的原因或限制，以及现在能用的工具。随锁态、窗口数量、权限和浏览器连接变化；带版本号并指出与上次查询相比变了什么。只读，不启动应用、不发送任何输入 |
 | `get_app_state` | 应用窗口的截图 + 带编号的辅助功能树；未运行时在后台启动；可用 `window` 查看其他窗口（不会把它提到前面），用 `find` 只列出含某段文字的元素（大窗口省 token）；也列出应用在菜单栏右侧的状态图标。每个窗口带窗口 id，`window` 可传 id；同名窗口必须用 id 区分；操作可带 `window_id`，若最新截图不是该窗口、或窗口已移动/关闭/被重建，则拒绝且不发送输入。元素的悬停提示（tooltip）直接写在树里（`help="…"`），不用悬停。每次结果带状态版本 `State: vN`；再次查看时传 `since: "vN"` 只返回变化（改动、新增、消失的行，打开/关闭的窗口），没变化时只回一句且不附截图，仍在的元素编号不变。不公开辅助功能的窗口会自动识别截图里的文字（本机 Vision 框架，中英日韩），列出每段文字和可直接用于 `click` 的 x/y；`ocr: true` 可在其他窗口里识别画布、图片中的文字 |
 | `click` | 按元素编号或截图像素坐标点击；支持右键、中键、双击/三击、修饰键 |
-| `target`（参数） | `click`、`scroll`、`set_value`、`perform_secondary_action`、`select_text` 和网页的 `browser_click` / `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` / `browser_hover` / `browser_upload` 可以不给编号或坐标，而是描述控件：名称、类型（button、text field…）、窗口区域（`bottom-right`、`右下角`…或截图像素矩形）、所在分组（`within`：分组框、fieldset、标题下的区块）、邻近文字（`near` / `below` / `right_of`）。执行时按当下的界面重新查找（解锁用辅助功能树，树里没有时补上截图识别文字；锁屏用当场截图的识别文字及其位置；网页用页面元素），恰好一个时才操作；几个同样符合时不挑，什么都不做并列出候选 |
-| `locate` | 只查找不操作：按同样的描述列出当下符合的控件，各带元素编号（以及最新截图里的 x/y）、区域、所在分组；没有符合的时说明名称相同的控件现在在哪里 |
+| `target`（参数） | `click`、`scroll`、`set_value`、`perform_secondary_action`、`select_text` 和网页的 `browser_click` / `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` / `browser_hover` / `browser_upload` 可以不给编号或坐标，而是描述控件：名称、类型（button、text field…）、窗口区域（`bottom-right`、`右下角`…或截图像素矩形）、所在分组（`within`：分组框、fieldset、标题下的区块）、邻近文字（`near` / `below` / `right_of`），以及精确的 `identifier`（AXIdentifier、DOM id 或 data-testid）、`row`（同一行中的文字）、`column`（列标题）。行列条件只使用实际公开的表格结构，不用视觉距离猜测。执行时按当下的界面重新查找（解锁用辅助功能树，树里没有时补上截图识别文字；锁屏用当场截图的识别文字及其位置；网页用页面元素），恰好一个时才操作；几个同样符合时不挑，什么都不做并列出候选 |
+| `locate` | 只查找不操作：按同样的描述列出当下符合的控件，各带元素编号（以及最新截图里的 x/y）、区域、所在分组；没有符合的时说明名称相同的控件现在在哪里；没有唯一结果时附窗口截图，方便区分无文字图标，也可传 `screenshot: true`。未命名控件保留为候选，工具提示可作为名称；完全遮挡的 Chromium 截图仍会提示可能过期 |
 | `expect`（参数） | `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag` 等操作都可带 `expect`：文字出现/消失、值改变、窗口打开/关闭、有变化。结果首行给出“已验证完成（verified）／未观察到效果（no_effect）／目标变化（target_changed）／超时（timeout）”，未验证时附当前状态。提交、发送、付款等只能发生一次的操作 skfiy 从不自动重试；上一次未验证时，再原样重复会被拒绝，直到重新查看过状态（或明确 `confirm_repeat`） |
 | `perform_secondary_action` | 执行元素的辅助功能动作（Increment、ShowMenu、Confirm…） |
 | `set_value` | 直接设置文本框、滑块等可设值元素 |
@@ -52,6 +52,10 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `get_desktop_status` | 查看桌面锁定、锁屏模式和急停状态，不触发解锁；direct 模式下给出当前 MCP 会话是否启用、系统是否锁定及锁态是否已知 |
 | `locked_use_end` | direct 模式下结束当前 MCP 会话的锁屏操作权限并清除截图坐标；不改变系统锁定状态 |
 
+窗口完全被遮挡时，`get_app_state` 和后续操作会尝试恢复 Electron 的后台渲染：按系统窗口 ID 找到目标，临时关闭该窗口的后台节流，确认两帧实际完成后再读取界面。这个过程不激活、不抬高、不移动窗口。最后一次使用约 15 秒后，应用自身恢复原来的节流设置；即使 MCP 客户端退出，恢复计时仍会执行。
+
+这条路径使用 Electron 主进程的本机调试接口，不需要额外安装 Node。自动启动接口限 Electron 32+、允许主进程调试的构建及默认回环地址配置；已有的 IPv4 回环调试接口也可以复用。skfiy 创建的临时接口用完即关闭，应用原有的调试接口保持打开。应用关闭了相应 Electron fuse、接口不可用或没有完成新帧时，仍会说明画面可能过期；不会因此切到前台。Chrome 等浏览器网页继续使用 `browser_*`，CEF 和不支持上述接口的应用不在这条恢复路径内。设 `SKFIY_ELECTRON_RENDERING=0` 可禁用自动恢复。
+
 浏览器插件连上后多出 14 个网页工具（只在注册过浏览器桥接、也就是 `skfiy setup` 写过 native messaging 宿主时列出：没装插件的人不必在每次请求里带上它们的定义），按标签页 ID 操作，不切换你正在看的标签页。同源和跨域 iframe 里的元素一并编号，可以直接操作；在 agent 自己开的标签页里，网页的 alert / confirm / prompt 不会卡住页面，而是立即按 `browser_click` 的 `dialog` / `prompt_text` 应答并在页面状态里注明：
 
 | 工具 | 作用 |
@@ -59,14 +63,30 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `browser_tabs` | 列出窗口和标签页，`[shown]` 标出你正在看的那个 |
 | `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页；用 `action` 代替网址时让该标签页后退、前进或刷新 |
 | `browser_locate` | 按描述（名称、类型、视口区域、所在 fieldset/标题区块、邻近文字）在页面当下的元素和文字里查找，列出候选及刷新后的编号，不挑、不操作 |
-| `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页要截图（canvas、图表、图片）需传 `background_screenshot`，经 Chrome 调试接口截取，约 0.3 秒，之后可按截图坐标点击 |
+| `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页或被遮挡窗口要截图（canvas、图表、图片）传 `background_screenshot: true`，始终经 Chrome 调试接口截取，即使目标是该窗口的活动标签页；截图后重读元素编号，之后可按截图坐标点击 |
 | `browser_click` | 按编号点击（或按截图坐标）；`target=_blank` 链接改为后台新标签页打开 |
-| `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` | 输入（可清空、可提交）、选下拉项、按键、滚动页面或元素 |
+| `browser_type` / `browser_select` / `browser_press_key` | 输入（可清空、可提交）、选下拉项、按键 |
+| `browser_scroll` | 滚动页面或目标最近的滚动容器，到内层边界即停；`direction: "to"` 将目标滚入视口。`until` 描述要找的项目、`target` 描述列表容器，逐次滚动并重新读取，最多 `max_scrolls` 次（默认 5，范围 1–20），找到后不点击。滚动后短暂调用调试接口刷新一帧，使后台虚拟列表收到滚动事件并渲染新项目；不切换标签页或本机焦点，Chrome 可能短暂显示调试提示条 |
 | `browser_close_tab` | 关闭标签页 |
 | `browser_upload` | 把本地文件填进网页的上传框（不弹文件选择器）；每次上传前都在 Claude Code 里征得你同意，最大 20 MB |
 | `browser_hover` | 在后台标签页里悬停到元素上：页面收到打开悬停菜单所需的指针事件，页面 CSS 的 `:hover` 样式也会生效（其他域名的样式表由插件取回）；之后可按编号点击出现的菜单项 |
 | `browser_downloads` | 只列出 skfiy 引起的下载（在它操作过的标签页里 15 秒内发起的，或由它直接下载的），不列用户自己的下载：状态、本地路径、失败原因（网络中断、服务器无此文件、已取消……）。`wait` 等下载结束，只有完成且文件存在时才给出路径；`start` 直接下载某个网址（同名时浏览器自动改名，结果给出真实文件名）；`cancel` 取消。完成的文件可交给 `open_file(path)` 或 `browser_upload(download_id)`。Chrome 只允许一个网站在没有真实手势时自动下载一次，之后合成点击触发的下载会被拦截，这时 `wait` 会说明并建议用 `start` |
 | `browser_wait` | 不操作页面，等某段文字出现/消失（含所有 frame、标题和输入框的值），不给文字则等页面加载完且半秒内不再变化 |
+
+例如，编辑表格里 Bob 对应的按钮：
+
+```json
+{"target":{"name":"Edit","role":"button","row":"Bob","column":"Action"}}
+```
+
+在虚拟列表中向下找第 32 项，找到后先检查结果：
+
+```json
+{"tab_id":123,"direction":"down","target":{"identifier":"virtual-list"},"until":{"name":"Person 32","role":"row"},"max_scrolls":10}
+```
+
+`identifier` 精确匹配；重复标识或重复行仍需要加 `within` 等条件。网页表格合并单元格需要明确的 `headers` 或 ARIA 列关系。未公开结构的画布、自绘表格可用截图定位，但不能据此声称已识别行列。虚拟列表复用 DOM 节点后，旧编号的名称或行列身份若变化，会报错并要求重新定位；页面脚本异常也会明确返回失败。
+
 
 树的样子（Finder）：
 
@@ -174,6 +194,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | --- | --- | --- |
 | `SKFIY_LOCKED_USE` | 关 | `direct`：启用保持系统锁定的单窗口截图和 PID 定向输入；旧值 `1` 不再支持 |
 | `SKFIY_LOCKED_WAKE_DISPLAY` | 开 | `0`：锁屏时不唤醒熄灭的显示器（此时截图不可用，见本文 direct 模式） |
+| `SKFIY_ELECTRON_RENDERING` | 开 | `0`：禁用完全遮挡的 Electron 窗口自动恢复渲染；保留画面可能过期的提示 |
 | `SKFIY_BRIEF_FOCUS` | 关 | `1`：所有指针点击都用上文的空闲时短暂应用内聚焦，不再逐个应用询问 |
 | `SKFIY_APPROVE` | `ask` | `all`：需要你同意的操作——上传文件（`browser_upload`）、`run_in_front`、`read_clipboard`、短暂应用内聚焦——全部直接放行，不再弹确认框。`hand_over`（登录、验证码等要你本人做的步骤）照旧等你；模型仍按说明在付款、发消息、删除前先问你 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |

@@ -94,6 +94,7 @@ public final class ComputerUse {
     public var waitForUser: ((String) async -> Bool?)?
     let settleDelay: Double
     let directLockedUse = DirectLockedUse()
+    let electronRendering = ElectronRendering()
     /// Refuses repeating a risky action whose effect was not verified.
     var repeatGuard = RepeatGuard()
     /// The last capability report per app, to say what changed since.
@@ -157,6 +158,20 @@ public final class ComputerUse {
     private func act(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         var raw = raw
         var note: String?
+        // Renew rendering before target resolution and the verifier's first
+        // observation. Failure keeps the conservative covered-window warning.
+        if (Self.inputTools + ["scroll", "locate", "zoom"]).contains(name),
+           name != "run_in_front",
+           !isScreenLocked(), !EmergencyStop.isStopped,
+           let query = raw["app"] as? String, case .running(let app)? = try? directory.resolve(query),
+           let session = sessions[app.processIdentifier], let window = session.windowID {
+            let args = Arguments(raw)
+            if (try? checkWindowID(args, session: session)) != nil,
+               (try? refuseProtectedTarget(args)) != nil,
+               chromiumWindowFrozen(app, window: window) || electronRendering.isLive(pid: app.processIdentifier, window: window) {
+                _ = await electronRendering.prepare(app, window: window)
+            }
+        }
         // A target is resolved against the UI as it is now, then acted on by
         // element_index or x/y like any other call.
         if raw["target"] != nil, !name.hasPrefix("browser_"), name != "locate", !EmergencyStop.isStopped {
@@ -316,7 +331,7 @@ public final class ComputerUse {
     /// Typing into a terminal runs shell commands, sidestepping the MCP
     /// client's permission checks, and the app hosting the agent must never
     /// receive input from it.
-    private func refuseProtectedTarget(_ args: Arguments, scrolling: Bool = false) throws {
+    func refuseProtectedTarget(_ args: Arguments, scrolling: Bool = false) throws {
         guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return }
         let name = app.localizedName ?? query
         if isProtectedInterface(app) {
@@ -430,6 +445,8 @@ public final class ComputerUse {
             accessibilityEnabled.remove(pid)
         }
     }
+
+    func accessibilityRefresh(_ pid: pid_t) { accessibilityEnabled.remove(pid) }
 
     /// Whether Flutter has published semantics nodes (anything beyond its view's group).
     private func containsFlutterSemantics(_ window: AXUIElement) -> Bool {

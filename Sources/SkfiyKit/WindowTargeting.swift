@@ -337,10 +337,11 @@ extension ComputerUse {
         return best
     }
 
-    /// Whether a window is fully covered by other windows, so a Chromium app
-    /// stops drawing it and updating its accessibility (and drops wheel input).
+    /// Conservative rendering uncertainty: geometry alone cannot establish a
+    /// freeze. A successful Electron rendering lease removes that uncertainty.
     func chromiumWindowFrozen(_ app: NSRunningApplication, window: CGWindowID?) -> Bool {
         guard let window, isChromium(app) else { return false }
+        if electronRendering.isLive(pid: app.processIdentifier, window: window) { return false }
         let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let displays = displayInfos().map(\.frame)
         return isFullyCovered(window, rows: rows, displays: displays, ignoredOwners: ownProcesses()) == true
@@ -349,8 +350,8 @@ extension ComputerUse {
     /// The note for a Chromium window that is fully covered.
     func frozenNote(_ app: NSRunningApplication) -> String {
         let browser = Self.isBrowserBundle(app.bundleIdentifier)
-        return "This window is completely covered by other windows, and Chromium stops drawing a covered window and updating its accessibility tree (soon after it is covered): the screenshot and tree may be out of date, wheel input may be ignored, and the effect of an action cannot be seen until part of the window shows again. "
-            + (browser ? "Use the browser_* tools for its pages (they work in covered and background tabs)." : "Ask the user to uncover any corner of the window, or use run_in_front (asks the user).")
+        return "This window is completely covered by other windows. Chromium may stop drawing it and updating its accessibility tree: the screenshot and tree may be out of date, and wheel input may be ignored. Coverage alone does not prove a freeze; live rendering could not be confirmed. "
+            + (browser ? "Use the browser_* tools for its pages (they work in covered and background tabs)." : "Automatic background rendering requires an available Electron main-process inspector. This app's rendering could not be verified through that interface; no window was raised or activated. Ask the user to uncover any corner of the window, or use run_in_front (asks the user).")
     }
 
     /// A capture of `rect` as the model was shown it: with `window` (one

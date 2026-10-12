@@ -30,6 +30,35 @@ private let scenario: [LocatorCandidate] = [
 private func locator(_ object: [String: Any]) throws -> Locator { try Locator(object) }
 
 struct LocatorTests {
+    @Test func structuralTargetsDoNotGuessFromNearbyText() throws {
+        var bob = element("Edit", "button", 30, 100)
+        bob.rowLabels = ["Bob", "bob@example.test"]; bob.columnLabels = ["Action"]
+        bob.identifier = "edit-Bob"
+        var alice = bob
+        alice.rowLabels = ["Alice"]; alice.identifier = "edit-Alice"
+        let unrelated = text("Bob Action", 30, 90)
+        let row = try locator(["name": "Edit", "row": "Bob", "column": "Action"])
+        #expect(row.unique(row.matches([alice, bob, unrelated], bounds: window))?.candidate.identifier == "edit-Bob")
+        #expect(row.matches([alice, unrelated], bounds: window).isEmpty)
+        #expect(try locator(["column": "Email"]).matches([bob], bounds: window).isEmpty)
+        #expect(try locator(["row": "Bob"]).matches([unrelated], bounds: window).isEmpty)
+    }
+
+    @Test func unnamedControlsUseExactIdentifiersAndRemainAmbiguousWhenDuplicated() throws {
+        var icon = element("", "AXButton", 50, 50)
+        icon.identifier = "ArchiveIcon"
+        let id = try locator(["identifier": "ArchiveIcon"])
+        #expect(id.unique(id.matches([icon], bounds: window))?.candidate == icon)
+        #expect(try locator(["identifier": "archiveicon"]).matches([icon], bounds: window).isEmpty)
+        var duplicate = icon; duplicate.frame.origin.x += 200
+        #expect(id.unique(id.matches([icon, duplicate], bounds: window)) == nil)
+        #expect(try locator(["role": "button"]).matches([icon], bounds: window).count == 1)
+        for field in ["identifier", "row", "column", "name"] {
+            #expect(throws: ToolError.self) { try locator([field: 42]) }
+            #expect(throws: ToolError.self) { try locator([field: " "]) }
+        }
+    }
+
     @Test func parsesTargets() throws {
         #expect(try Locator.parse("Save")?.name == "Save")
         #expect(try Locator.parse(nil) == nil)

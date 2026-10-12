@@ -86,6 +86,18 @@ extension ComputerUse {
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
         var snapshot = try buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil,
                                          keeping: keeping?.elements)
+        if !appIsHidden(app), snapshot.shownWindow?.bool(kAXMinimizedAttribute) != true,
+           let window = snapshot.shownWindow.flatMap(windowID(of:)),
+           chromiumWindowFrozen(app, window: window) || electronRendering.isLive(pid: pid, window: window),
+           (try? refuseProtectedTarget(args)) != nil,
+           await electronRendering.prepare(app, window: window) {
+            // The initial tree may be frozen. Rebuild it after real frames have
+            // completed, with the same window and numbering rules as before.
+            accessibilityRefresh(pid)
+            await enableAccessibility(app, appElement)
+            snapshot = try buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil,
+                                         keeping: keeping?.elements)
+        }
         var screenshot: Screenshot?
         var captureNote: String?
         let shownWindow = snapshot.shownWindow
@@ -164,6 +176,8 @@ extension ComputerUse {
         sessions[pid]?.knownWindows = appWindowIDs(pid)
         if screenshot != nil, chromiumWindowFrozen(app, window: sessions[pid]?.windowID) {
             snapshot.header.append(frozenNote(app))
+        } else if let window = sessions[pid]?.windowID, electronRendering.isLive(pid: pid, window: window) {
+            snapshot.header.append("Background rendering: Electron completed fresh animation frames without activating or raising the window. Its original throttling policy is restored after the short rendering lease expires.")
         }
         let version = StateVersions.next()
         if args.string("find") == nil {

@@ -286,6 +286,8 @@ async function waitForLoad(tabId, timeout = 15000) {
 async function run(tabId, func, args, frameId = 0) {
   const [result] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args, world: 'ISOLATED' });
   if (!result) throw new Error('the page did not answer');
+  if (result.error || result.result?.skfiyError) throw new Error(result.result?.skfiyError || result.error.message || String(result.error));
+  if (result.result == null) throw new Error('the page action returned no result; inspect browser_state before continuing');
   return result.result;
 }
 
@@ -311,7 +313,7 @@ async function tabState({ tab_id: tabId, max_chars: maxChars, locate }) {
     if (!result || !result.ownFrame) continue;
     const base = map.length;
     // Positions are known for the top frame (and same-origin frames inside it) only.
-    if (frameId === 0) for (const item of result.items || []) items.push(item.index == null ? item : { ...item, index: item.index + base });
+    if (frameId === 0) for (const item of result.items || []) items.push(item.index == null ? item : { ...item, index: item.index + base, parents: (item.parents || []).map((n) => n + base) });
     if (frameId !== 0) lines.push(`--- frame ${result.url} ---`);
     for (const line of result.lines) lines.push(line.replace(/^\[(\d+)\]/, (_, n) => `[${Number(n) + base}]`));
     for (let local = 0; local < result.count; local++) map.push({ frameId, local });
@@ -339,7 +341,7 @@ function locateIndex(tabId, index) {
 async function screenshot({ tab_id: tabId, background }) {
   const tab = await tabById(tabId);
   const window = await chrome.windows.get(tab.windowId);
-  if (tab.active && window.state !== 'minimized') {
+  if (tab.active && window.state !== 'minimized' && !background) {
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
     return { jpeg: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
   }
@@ -390,6 +392,18 @@ async function act(params) {
   const inFrame = { ...params, index: local };
   if (params.action === 'hover') inFrame.css = await foreignStyles(tab.id, frameId);
   const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
+  if (params.action === 'scroll') {
+    // Hidden/occluded Chromium defers scroll events and animation frames. A
+    // compositor capture delivers a frame so virtual lists can render their
+    // new rows before the next snapshot. It never activates a tab or window.
+    try {
+      await withDebugger(tab.id, (send) => send('Page.captureScreenshot', {
+        format: 'jpeg', quality: 1, clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 }
+      }));
+    } catch (error) {
+      throw new Error(`Scroll was requested, but its rendered result could not be refreshed: ${error.message}. Inspect browser_state before continuing.`);
+    }
+  }
   if (result && result.openInBackground) {
     await openTab({ url: result.openInBackground });
     result.message += ' (opened in a new background tab in the "skfiy" group)';
@@ -506,6 +520,7 @@ async function trustedAct(tabId, params) {
 function pageSnapshot(maxChars, locate) {
   const state = (globalThis.__skfiy = globalThis.__skfiy || { elements: [] });
   state.elements = [];
+  state.identities = [];
   const lines = [];
   let chars = 0;
   let truncated = false;
@@ -513,7 +528,13 @@ function pageSnapshot(maxChars, locate) {
   // With locate: every element and block of text with its box (viewport CSS
   // pixels of the top frame) and the labels of the sections it is in.
   const items = [];
+  const parents = [];
   let blockNodes = [];
+  // Inside a button or link, text is the control's label, already on its line;
+  // lists, rows and scroll areas keep their text.
+  let inControl = false;
+  const LABELLED_BY_TEXT = new Set(['button', 'submit', 'reset', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem',
+    'menuitemcheckbox', 'menuitemradio', 'option', 'summary']);
 
   const INTERACTIVE_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemcheckbox',
     'menuitemradio', 'option', 'switch', 'textbox', 'combobox', 'searchbox', 'slider', 'spinbutton', 'treeitem']);
@@ -561,7 +582,56 @@ function pageSnapshot(maxChars, locate) {
   const kindOf = (el) => {
     const tag = el.tagName.toLowerCase();
     if (el.isContentEditable && tag !== 'input' && tag !== 'textarea') return 'editable';
-    return el.getAttribute('role') || (tag === 'input' ? (el.type || 'text') : tag === 'a' ? 'link' : tag);
+    const role = el.getAttribute('role');
+    if (role) return role;
+    if (['td', 'th'].includes(tag)) return 'cell';
+    if (tag === 'tr') return 'row';
+    if (['ul', 'ol'].includes(tag)) return 'list';
+    if (tag === 'input') return el.type || 'text';
+    if (['button', 'textarea', 'select'].includes(tag)) return tag;
+    if (tag === 'a') return 'link';
+    if (scrollable(el)) return 'scrollarea';
+    return tag;
+  };
+  const scrollable = (el) => {
+    const style = el.ownerDocument.defaultView.getComputedStyle(el);
+    return /(auto|scroll)/.test(style.overflowY) || /(auto|scroll)/.test(style.overflowX);
+  };
+  const structural = (el) => {
+    const parent = (node) => node.parentElement || node.getRootNode()?.host;
+    const closest = (node, selector) => {
+      for (let depth = 0; node && depth < 40; depth++, node = parent(node)) if (node.matches(selector)) return node;
+      return null;
+    };
+    const row = closest(el, 'tr,[role=row],li,[role=listitem],[role=option],[role=treeitem]');
+    const cell = closest(el, 'td,th,[role=cell],[role=gridcell],[role=rowheader],[role=columnheader]');
+    const table = cell && closest(parent(cell), 'table,[role=table],[role=grid],[role=treegrid]');
+    const rowLabels = row ? [clip(row.textContent, 1000)].filter(Boolean) : [];
+    const columnLabels = [];
+    if (cell && table) {
+      // Prefer explicit header associations. Do not pair cells across tables.
+      for (const id of (cell.getAttribute('headers') || '').split(/\s+/).filter(Boolean)) {
+        const header = cell.getRootNode().getElementById?.(id);
+        if (header && closest(parent(header), 'table,[role=table],[role=grid],[role=treegrid]') === table)
+          columnLabels.push(clip(header.textContent, 200));
+      }
+      const index = Number(cell.getAttribute('aria-colindex'));
+      if (!columnLabels.length && index > 0) {
+        for (const header of Array.from(table.querySelectorAll('[role=columnheader]')).slice(0, 200)) {
+          if (Number(header.getAttribute('aria-colindex')) === index && closest(parent(header), 'table,[role=table],[role=grid],[role=treegrid]') === table)
+            columnLabels.push(clip(header.textContent, 200));
+        }
+      }
+      if (!columnLabels.length && cell.tagName !== 'TH' && table.tagName === 'TABLE' && cell.parentElement?.tagName === 'TR') {
+        // Native single-span tables only; spanning layouts need headers/ARIA.
+        const rows = Array.from(table.rows).slice(0, 200);
+        if (rows.every((r) => Array.from(r.cells).every((c) => c.colSpan === 1 && c.rowSpan === 1))) {
+          const header = rows.find((r) => Array.from(r.cells).some((c) => c.tagName === 'TH' && c.scope !== 'row'))?.cells[cell.cellIndex];
+          if (header?.tagName === 'TH') columnLabels.push(clip(header.textContent, 200));
+        }
+      }
+    }
+    return { identifier: el.id || el.getAttribute('data-testid') || undefined, rowLabels, columnLabels: columnLabels.filter(Boolean) };
   };
   const flush = () => {
     const clean = text.replace(/\s+/g, ' ').trim();
@@ -597,6 +667,7 @@ function pageSnapshot(maxChars, locate) {
     const role = el.getAttribute('role');
     if (role && INTERACTIVE_ROLES.has(role)) return true;
     if (el.hasAttribute('onclick')) return true;
+    if (scrollable(el)) return true;
     const tabindex = el.getAttribute('tabindex');
     return tabindex !== null && Number(tabindex) >= 0 && tag !== 'BODY';
   };
@@ -605,7 +676,7 @@ function pageSnapshot(maxChars, locate) {
     if (aria) return aria;
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy) {
-      const text = labelledBy.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => n.innerText).join(' ');
+      const text = labelledBy.split(/\s+/).map((id) => el.getRootNode().getElementById?.(id)).filter(Boolean).map((n) => n.textContent).join(' ');
       if (text.trim()) return text;
     }
     if (el.labels && el.labels.length) {
@@ -619,7 +690,7 @@ function pageSnapshot(maxChars, locate) {
     if (el.tagName === 'IMG') return el.alt;
     const inner = el.innerText;
     if (inner && inner.trim()) return inner;
-    return el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('name') || '';
+    return el.getAttribute('title') || el.querySelector('svg > title')?.textContent || el.getAttribute('placeholder') || el.getAttribute('name') || '';
   };
   const describe = (el, index) => {
     const tag = el.tagName.toLowerCase();
@@ -652,10 +723,12 @@ function pageSnapshot(maxChars, locate) {
     if (document.activeElement === el) parts.push('focused');
     return parts.join(' ');
   };
+  state.identity = (el) => JSON.stringify([kindOf(el), clip(labelOf(el), 120), structural(el)]);
 
   const walk = (node) => {
     if (truncated) return;
     if (node.nodeType === Node.TEXT_NODE) {
+      if (inControl) return;
       text += node.textContent;
       if (locate && node.textContent.trim()) blockNodes.push(node);
       return;
@@ -666,20 +739,25 @@ function pageSnapshot(maxChars, locate) {
     if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD'].includes(tag)) return;
     if (!visible(el) && el.children.length === 0) return;
     if (el.getAttribute('aria-hidden') === 'true') return;
-    if (interactive(el) && visible(el)) {
+    if ((interactive(el) || (locate && ['cell', 'gridcell', 'row', 'table', 'grid', 'list', 'listbox'].includes(kindOf(el)))) && visible(el)) {
       flush();
       const index = state.elements.length;
       state.elements.push(el);
+      state.identities.push(state.identity(el));
       push(describe(el, index));
       if (locate && items.length < 3000) {
         items.push({ index, kind: kindOf(el), label: clip(labelOf(el), 120), rect: box(el.getBoundingClientRect(), el.ownerDocument),
-          sections: sectionsOf(el) });
+          sections: sectionsOf(el), ...structural(el), parents: [...parents] });
       }
       if (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return;
       // Nested controls (a button inside a link) still get their own index.
-      for (const child of el.children) {
-        if (child.querySelector && (interactive(child) || child.querySelector('a[href],button,input,select,textarea,[role=button],[role=link]'))) walk(child);
-      }
+      parents.push(index);
+      const outer = inControl;
+      inControl = LABELLED_BY_TEXT.has(kindOf(el));
+      for (const child of el.children) walk(child);
+      if (el.shadowRoot) for (const child of el.shadowRoot.childNodes) walk(child);
+      inControl = outer;
+      parents.pop();
       return;
     }
     const block = BLOCK.test(tag);
@@ -738,6 +816,8 @@ function pageAction(params, keyAliases = {}) {
     if (params.index == null) return null;
     const el = state.elements[Number(params.index)];
     if (!el || !el.isConnected) throw new Error(`element ${params.index} is gone; call browser_state again`);
+    if (state.identity && state.identities?.[Number(params.index)] !== state.identity(el))
+      throw new Error(`element ${params.index} changed or was recycled; locate it again before acting`);
     return el;
   };
   const center = (el) => {
@@ -831,7 +911,7 @@ function pageAction(params, keyAliases = {}) {
     style.textContent = rules.join('\n');
   };
 
-  switch (action) {
+  try { switch (action) {
     case 'hover': {
       const el = params.index != null ? pick() : document.elementFromPoint(Number(params.x), Number(params.y));
       if (!el) throw new Error(params.index != null || params.x == null ? 'index (or x and y) is required' : 'nothing at that point of the viewport');
@@ -1008,13 +1088,30 @@ function pageAction(params, keyAliases = {}) {
     }
     case 'scroll': {
       const el = pick();
-      const scroller = el || document.scrollingElement || document.documentElement;
+      if (params.direction === 'to') {
+        if (!el) throw new Error('scroll-to needs an element');
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+        return { message: 'Scrolled the element into view without changing the active tab or window' };
+      }
       const vertical = params.direction === 'up' || params.direction === 'down';
-      const size = vertical ? (el ? el.clientHeight : innerHeight) : (el ? el.clientWidth : innerWidth);
+      const doc = el?.ownerDocument || document;
+      const root = doc.scrollingElement || doc.documentElement;
+      // A button/row inside a scroller means that nearest scroller, not the
+      // button itself. At its boundary, stop; never spill into the outer page.
+      let scroller = el || root;
+      while (scroller !== root) {
+        const style = scroller.ownerDocument.defaultView.getComputedStyle(scroller);
+        if (/(auto|scroll)/.test(vertical ? style.overflowY : style.overflowX)) break;
+        scroller = scroller.parentElement || scroller.getRootNode()?.host || root;
+      }
+      const size = vertical ? scroller.clientHeight : scroller.clientWidth;
       const sign = params.direction === 'up' || params.direction === 'left' ? -1 : 1;
       const distance = sign * size * 0.85 * (Number(params.pages) || 1);
+      const before = vertical ? scroller.scrollTop : scroller.scrollLeft;
       scroller.scrollBy({ top: vertical ? distance : 0, left: vertical ? 0 : distance, behavior: 'instant' });
-      return { message: `Scrolled ${params.direction}` };
+      const after = vertical ? scroller.scrollTop : scroller.scrollLeft;
+      return { message: after === before ? `Scroll boundary reached (${params.direction}); position stayed ${Math.round(after)}`
+        : `Scrolled ${params.direction}: ${Math.round(before)} → ${Math.round(after)} px` };
     }
     case 'upload-chunk': {
       // Files arrive in base64 pieces, since native messages are size-limited.
@@ -1065,6 +1162,10 @@ function pageAction(params, keyAliases = {}) {
     }
     default:
       throw new Error(`unknown action ${action}`);
+  } } catch (error) {
+    // Chrome does not consistently propagate exceptions from executeScript.
+    // Return them explicitly so the native caller cannot mistake failure for Done.
+    return { skfiyError: String(error?.message || error) };
   }
 }
 

@@ -3,7 +3,8 @@
 
     SKFIY_TEST_BIN=/tmp/skfiy-wf4/bin python3 scripts/test_covered_chromium.py .build/debug/skfiy
 
-Chromium stops drawing a window that is fully covered, stops updating its
+With automatic Electron rendering disabled, Chromium may stop drawing a
+window that is fully covered, stop updating its
 accessibility tree and drops wheel input to it; with one corner showing it
 works normally. skfiy must say so instead of reporting "looks the same" or
 no_effect for an action it cannot observe, refuse wheel scrolling there, and
@@ -100,7 +101,7 @@ def main():
     started = server()
     if started:  # also when a check returns early
         atexit.register(started.terminate)
-    with Session('covered-chromium', window_guard=False, environment={'SKFIY_CURSOR': '0'}) as s:
+    with Session('covered-chromium', window_guard=False, environment={'SKFIY_CURSOR': '0', 'SKFIY_ELECTRON_RENDERING': '0'}) as s:
         if s.locked:
             s.check('the Mac is unlocked', False, 'skipped')
             return
@@ -131,10 +132,10 @@ def main():
                     {'coverage': share, 'visibility': page(run).get('visibility'), 'top': probe('front')['topOwner']})
 
             first = w.call('get_app_state', mine[0]['id'], app='Electron')
-            s.check('get_app_state of the fully covered window says Chromium is not updating it', not first['is_error'] and 'completely covered' in first['text'],
+            s.check('fallback get_app_state warns that covered rendering is unconfirmed', not first['is_error'] and 'completely covered' in first['text'],
                     first['text'][:300])
             capabilities = w.call('get_app_capabilities', None, app='Electron')
-            s.check('get_app_capabilities says the screenshot is stale while the window is covered', 'completely covered' in capabilities['text'],
+            s.check('fallback capabilities warn that the covered screenshot may be stale', 'completely covered' in capabilities['text'],
                     capabilities['text'][:300])
 
             if corner:
@@ -186,7 +187,7 @@ def main():
             waited = w.call('wait_for', mine[0]['id'], app='Electron', text=later, timeout=4)
             seen = page(run).get('later') == later
             s.check('wait_for on the covered page: found, or a timeout that says the window is not being updated',
-                    seen and (not waited['is_error'] or 'not been updating' in waited['text']), (seen, waited['text'][:200]))
+                    seen and (not waited['is_error'] or 'fresh Chromium rendering could not be confirmed' in waited['text']), (seen, waited['text'][:200]))
             w.finish()
         finally:
             control.write_text(json.dumps({'quit': True}))
