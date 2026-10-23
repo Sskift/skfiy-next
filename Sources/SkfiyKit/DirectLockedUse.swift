@@ -479,12 +479,18 @@ final class DirectLockedUse {
             observation.interruption = "the app quit"
             return (observation, previous)
         }
-        guard let windows = try? await directLockedWindows(pid: pid) else { return (observation, previous) }
+        guard let windows = try? await directLockedWindows(pid: pid) else {
+            observation.interruption = "the window list could not be read"
+            return (observation, previous)
+        }
         observation.windows = Dictionary(windows.map { (String($0.id), $0.title) }, uniquingKeysWith: { a, _ in a })
         guard let target = windows.first(where: { $0.id == window }) else { return (observation, previous) }
         observation.targetPresent = true
         guard let (image, geometry) = try? await captureDirectLockedImage(target, maxScale: wantText ? backingScale(for: target.frame) : 1),
-              let pixels = PixelFingerprint(image) else { return (observation, previous) }
+              let pixels = PixelFingerprint(image) else {
+            observation.unobservable = "the window could not be captured"
+            return (observation, previous)
+        }
         observation.pixels = pixels
         var cache = previous
         if wantText {
@@ -493,6 +499,8 @@ final class DirectLockedUse {
             } else if let lines = try? await TextRecognition.recognizeBoth(image, showing: geometry.rect) {
                 observation.text = TextRecognition.sorted(lines).map(\.text).joined(separator: "\n")
                 cache = (pixels, observation.text)
+            } else {
+                observation.unobservable = "the window's text could not be recognized"
             }
         }
         return (observation, cache)

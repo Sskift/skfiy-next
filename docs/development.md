@@ -9,6 +9,8 @@
 ```bash
 make build          # swift build
 make test           # 单元测试（swift-testing）
+python3 scripts/test_browser_lifecycle.py .build/debug/skfiy  # 两个真实 MCP 会话 + 临时无界面 Chrome；不碰用户浏览器
+node scripts/test_browser_sessions.mjs  # 浏览器快照绑定、跨会话引用与取消；不依赖桌面
 node scripts/test_electron_rendering_lease.mjs  # 不依赖桌面的渲染租约与恢复测试
 make test-install   # install.sh、skfiy setup / doctor / uninstall：在临时 HOME 里用假的 claude/codex 跑一遍，并核对你真实的配置没被改动；不碰界面
 make embed-extension  # 改了 browser-extension/ 之后：重新生成二进制里携带的插件副本（make release/install、源码安装和 release.sh 会自动做；不一致时 make test 失败）；内容变了而 manifest.json 的 version 没升时会提醒

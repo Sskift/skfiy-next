@@ -87,6 +87,7 @@ struct VerifyObservation {
 
 enum VerificationStatus: String {
     case verified
+    case alreadySatisfied = "already_satisfied"
     case noEffect = "no_effect"
     case targetChanged = "target_changed"
     case timeout
@@ -103,7 +104,7 @@ extension ActionExpectation {
         if let text, !TextMatch.contains(now.text, text) { return false }
         if let textGone, TextMatch.contains(now.text, textGone) { return false }
         if let value, now.value?.trimmingCharacters(in: .whitespacesAndNewlines) != value.trimmingCharacters(in: .whitespacesAndNewlines) { return false }
-        if valueChanges, now.value == before.value { return false }
+        if valueChanges, before.value == nil || now.value == nil || now.value == before.value { return false }
         if windowClosed, now.targetPresent { return false }
         if let windowOpened {
             let opened = now.windows.filter { before.windows[$0.key] == nil }
@@ -130,6 +131,10 @@ extension ActionExpectation {
     func verify(before: VerifyObservation, now: () -> Double, sleep: (Double) async throws -> Void,
                 observe: () async throws -> VerifyObservation, interval: Double = 0.25) async -> Verdict {
         let started = now()
+        if let interruption = before.interruption {
+            return Verdict(status: .targetChanged, detail: interruption, seconds: 0)
+        }
+        let satisfiedBefore = before.unobservable == nil && met(before: before, now: before)
         var changed = false
         while true {
             let current: VerifyObservation
@@ -141,12 +146,16 @@ extension ActionExpectation {
             } catch {
                 return Verdict(status: .targetChanged, detail: "\(error)", seconds: now() - started)
             }
-            changed = changed || current.differs(from: before)
-            if met(before: before, now: current) {
-                return Verdict(status: .verified, detail: summary, seconds: now() - started)
-            }
+            // Missing observations (lock, exit, lost window) cannot prove a
+            // disappearance, value change, or success message.
             if let change = targetChange(before: before, now: current) {
                 return Verdict(status: .targetChanged, detail: change, seconds: now() - started)
+            }
+            changed = changed || current.differs(from: before)
+            if current.unobservable == nil, met(before: before, now: current) {
+                return Verdict(status: satisfiedBefore ? .alreadySatisfied : .verified,
+                               detail: satisfiedBefore ? "the expected condition was already satisfied before the action; this does not prove the action took effect" : summary,
+                               seconds: now() - started)
             }
             if now() - started >= timeout {
                 if changed {
@@ -173,6 +182,8 @@ extension Verdict {
         switch status {
         case .verified:
             return "Verification: verified — \(detail) (after \(seconds) s)."
+        case .alreadySatisfied:
+            return "Verification: already_satisfied — \(detail)." + (risky ? " Do not repeat this action without checking its effect." : "")
         case .noEffect:
             return "Verification: no_effect — \(detail) within \(seconds) s; the action probably did not take."
                 + (risky ? " It may still have been received: look at the current state before trying again, and do not repeat it blindly." : " Try another way (element_index, keyboard, focus) rather than the same input.")

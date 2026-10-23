@@ -27,10 +27,15 @@ public final class MCPServer {
     private var clientCapabilities: [String: Any] = [:]
     /// Requests this server sent to the client, waiting for their responses.
     private var pending: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
+    private var timeouts: [String: Task<Void, Never>] = [:]
     private var nextRequest = 0
     /// Tool calls in progress, by request id, so the client can cancel them.
     private var running: [String: Task<ToolResult, Never>] = [:]
     private var cancelled: Set<String> = []
+    private var queued: Set<String> = []
+    private var lines: [String] = []
+    private var draining: Task<Void, Never>?
+    private var disconnected = false
 
     /// The browser tools are left out when no browser can connect: users
     /// without the extension do not carry their definitions in every request.
@@ -58,43 +63,57 @@ public final class MCPServer {
     /// Reads stdin until EOF, then exits. Call from the main thread, which
     /// must keep running its run loop (AppKit state and main-actor work need it).
     public func start() {
-        let lines = AsyncStream<String> { continuation in
-            let thread = Thread {
-                while let line = readLine(strippingNewline: true) {
-                    // Answers to our own requests (such as asking the user) arrive
-                    // while a tool call is still running, so they skip the queue.
-                    if let response = Self.clientResponse(line) {
-                        Task { @MainActor in self.deliver(response) }
-                    } else if let cancelled = Self.cancellation(line) {
-                        // Requests run one at a time, so this cannot wait its turn.
-                        Task { @MainActor in self.cancel(cancelled) }
-                    } else {
-                        continuation.yield(line)
-                    }
+        Thread {
+            while let line = readLine(strippingNewline: true) {
+                // One FIFO admission path: a cancellation cannot overtake the
+                // registration of the request it cancels, even before execution.
+                DispatchQueue.main.async { self.receive(line: line) }
+            }
+            DispatchQueue.main.async {
+                self.disconnect()
+                Task { @MainActor in
+                    await self.draining?.value
+                    exit(0)
                 }
-                // EOF must revoke desktop authorization immediately, including
-                // while a tool or user-confirmation request is still awaiting.
-                Task { @MainActor in self.disconnect() }
-                continuation.finish()
             }
-            thread.start()
+        }.start()
+    }
+
+    /// Admit requests in wire order, while replies and cancellations bypass
+    /// the execution queue. Also used by protocol lifecycle tests.
+    func receive(line: String) {
+        guard !disconnected else { return }
+        if let response = Self.clientResponse(line) { deliver(response); return }
+        if let id = Self.cancellation(line) { cancel(id); return }
+        if let data = line.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) {
+            let messages = (json as? [[String: Any]]) ?? (json as? [String: Any]).map { [$0] } ?? []
+            for message in messages where message["method"] as? String == "tools/call" {
+                if let id = message["id"], !(id is NSNull) { queued.insert("\(id)") }
+            }
         }
-        Task { @MainActor in
-            for await line in lines {
-                await self.handle(line: line)
+        lines.append(line)
+        guard draining == nil else { return }
+        draining = Task { @MainActor in
+            while !disconnected, !lines.isEmpty {
+                await self.handle(line: lines.removeFirst())
             }
-            exit(0)
+            draining = nil
         }
     }
 
     func disconnect() {
+        guard !disconnected else { return }
+        disconnected = true
+        for task in running.values { task.cancel() }
+        lines.removeAll()
+        queued.removeAll()
+        cancelled.removeAll()
         executor.disconnect()
-        let waiting = Array(pending.values)
-        pending.removeAll()
-        for continuation in waiting { continuation.resume(returning: nil) }
+        for id in Array(pending.keys) { finishRequest(id, response: nil) }
     }
 
     public func handle(line: String) async {
+        guard !disconnected else { return }
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let data = trimmed.data(using: .utf8),
@@ -121,6 +140,7 @@ public final class MCPServer {
 
     /// Returns the response for a request, or nil for notifications.
     public func respond(to message: [String: Any]) async -> [String: Any]? {
+        guard !disconnected else { return nil }
         let id = message["id"]
         let method = message["method"] as? String ?? ""
         let params = message["params"] as? [String: Any] ?? [:]
@@ -154,6 +174,9 @@ public final class MCPServer {
         case "tools/list":
             return result(["tools": tools])
         case "tools/call":
+            let key = "\(id)"
+            queued.remove(key)
+            if cancelled.remove(key) != nil { return nil }
             guard let name = params["name"] as? String else {
                 return failure(-32602, "tools/call needs a tool name.")
             }
@@ -161,14 +184,16 @@ public final class MCPServer {
                 return failure(-32602, "Unknown tool: \(name)")
             }
             let arguments = params["arguments"] as? [String: Any] ?? [:]
-            let key = "\(id)"
             let executor = self.executor
-            let task = Task { @MainActor in await executor.call(name, arguments) }
+            let task = Task { @MainActor in
+                guard !Task.isCancelled else { return ToolResult(text: "Cancelled.", isError: true) }
+                return await executor.call(name, arguments)
+            }
             running[key] = task
             let outcome = await task.value
             running[key] = nil
             // A cancelled request gets no response (MCP cancellation).
-            if cancelled.remove(key) != nil { return nil }
+            if cancelled.remove(key) != nil || disconnected { return nil }
             var content: [[String: Any]] = [["type": "text", "text": outcome.text]]
             if let image = outcome.image {
                 content.append([
@@ -197,7 +222,7 @@ public final class MCPServer {
     public func confirm(_ message: String, field: String = "Allow", timeout: TimeInterval = 180) async -> Bool? {
         guard clientCanAsk else { return nil }
         guard let response = await request("elicitation/create", ["message": message, "requestedSchema": Self.approvalSchema(field: field)], timeout: timeout),
-              let result = response["result"] as? [String: Any] else {
+              !Task.isCancelled, let result = response["result"] as? [String: Any] else {
             return nil
         }
         return Self.approval(result)
@@ -222,29 +247,44 @@ public final class MCPServer {
 
     /// Sends a request to the client and waits for its response.
     func request(_ method: String, _ params: [String: Any], timeout: TimeInterval) async -> [String: Any]? {
+        guard !disconnected, !Task.isCancelled else { return nil }
         nextRequest += 1
         let id = "skfiy-\(nextRequest)"
-        return await withCheckedContinuation { continuation in
-            pending[id] = continuation
-            send(["jsonrpc": "2.0", "id": id, "method": method, "params": params])
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                self.pending.removeValue(forKey: id)?.resume(returning: nil)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !disconnected, !Task.isCancelled else { continuation.resume(returning: nil); return }
+                pending[id] = continuation
+                send(["jsonrpc": "2.0", "id": id, "method": method, "params": params])
+                timeouts[id] = Task { @MainActor in
+                    do { try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)) } catch { return }
+                    self.finishRequest(id, response: nil, notifyCancellation: true)
+                }
             }
+        } onCancel: {
+            Task { @MainActor in self.finishRequest(id, response: nil, notifyCancellation: true) }
         }
+    }
+
+    private func finishRequest(_ id: String, response: [String: Any]?, notifyCancellation: Bool = false) {
+        guard let continuation = pending.removeValue(forKey: id) else { return }
+        timeouts.removeValue(forKey: id)?.cancel()
+        if notifyCancellation {
+            send(["jsonrpc": "2.0", "method": "notifications/cancelled", "params": ["requestId": id]])
+        }
+        continuation.resume(returning: response)
     }
 
     private func deliver(_ response: [String: Any]) {
         guard let id = response["id"].map({ "\($0)" }) else { return }
-        pending.removeValue(forKey: id)?.resume(returning: response)
+        finishRequest(id, response: response)
     }
 
     /// Stops a tool call the client no longer wants: waits end at once, and
     /// input stops before its next event.
     func cancel(_ requestID: String) {
-        guard let task = running[requestID] else { return }
+        guard running[requestID] != nil || queued.contains(requestID) else { return }
         cancelled.insert(requestID)
-        task.cancel()
+        running[requestID]?.cancel()
     }
 
     /// The request id of a notifications/cancelled line, if it is one.
@@ -266,6 +306,7 @@ public final class MCPServer {
     }
 
     private func send(_ object: [String: Any]) {
+        guard !disconnected else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes]) else {
             return
         }

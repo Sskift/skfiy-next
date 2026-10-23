@@ -14,6 +14,43 @@ private func look(_ text: String = "status: ready", windows: [String: String] = 
 }
 
 struct VerificationTests {
+    @Test func interruptionCannotSatisfyDisappearanceOrValueChange() async {
+        var gone = ActionExpectation(); gone.textGone = "Loading"
+        for reason in ["the screen locked", "the app quit", "the window list could not be read"] {
+            let verdict = await run(gone, before: look("Loading")) { _ in look("", interruption: reason) }
+            #expect(verdict.status == .targetChanged && verdict.detail == reason)
+            var closed = ActionExpectation(); closed.windowClosed = true
+            let missing = await run(closed, before: look()) { _ in look(windows: [:], target: false, interruption: reason) }
+            #expect(missing.status == .targetChanged && missing.detail == reason)
+        }
+        var value = ActionExpectation(); value.valueChanges = true
+        #expect(!value.met(before: look(value: "old"), now: look(value: nil)))
+        #expect(!value.met(before: look(value: nil), now: look(value: "new")))
+        var changed = ActionExpectation(); changed.anyChange = true
+        let window = await run(changed, before: look()) { _ in look(windows: [:], target: false) }
+        #expect(window.status == .targetChanged)
+    }
+
+    @Test func staleOrUnreadableObservationCannotProveSuccess() async {
+        var gone = ActionExpectation(); gone.textGone = "Loading"; gone.timeout = 0.5
+        let verdict = await run(gone, before: look("Loading")) { _ in
+            var observation = look("")
+            observation.unobservable = "capture unavailable"
+            return observation
+        }
+        #expect(verdict.status == .timeout)
+    }
+
+    @Test func preexistingConditionDoesNotVerifyTheAction() async {
+        var text = ActionExpectation(); text.text = "Saved"
+        let verdict = await run(text, before: look("Saved")) { _ in look("Saved") }
+        #expect(verdict.status == .alreadySatisfied)
+        #expect(verdict.line(risky: true).contains("Do not repeat"))
+        var value = ActionExpectation(); value.value = "42"
+        let exact = await run(value, before: look(value: "42")) { _ in look(value: "42") }
+        #expect(exact.status == .alreadySatisfied)
+    }
+
     @Test func parsesExpectations() throws {
         #expect(try ActionExpectation("Saved")?.text == "Saved")
         let full = try #require(try ActionExpectation(["text_gone": "Loading", "window_opened": true, "timeout": 2]))

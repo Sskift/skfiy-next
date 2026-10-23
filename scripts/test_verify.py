@@ -47,9 +47,14 @@ def main():
         s.check('real success: verified', verdict(result) == 'verified' and not result['is_error'] and counters().get('apply') == 1,
                 result['text'].splitlines()[0])
 
+        result = s.call('click', app=app, expect={'text': 'apply 1'}, **target('Noop'))
+        s.check('preexisting success text does not verify another action', verdict(result) == 'already_satisfied'
+                and result['is_error'] and counters().get('apply') == 1 and counters().get('noop') == 1,
+                result['text'].splitlines()[0])
+
         result = s.call('click', app=app, expect={'text': 'noop 1', 'timeout': 2}, **target('Noop'))
         s.check('click without effect: no_effect', verdict(result) == 'no_effect' and result['is_error'], result['text'].splitlines()[0])
-        s.check('...although the app received it', counters().get('noop') == 1, counters())
+        s.check('...although the app received it', counters().get('noop') == 2, counters())
         s.check('failure brings the current state', 'Current state:' in result['text'] and result['images'], result['text'][-200:])
 
         result = s.call('click', app=app, expect={'text': f'never {s.nonce}', 'timeout': 2}, **target('Apply'))

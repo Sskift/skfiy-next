@@ -5,6 +5,23 @@
 const HOST = 'com.skfiy.bridge';
 const GROUP_TITLE = 'skfiy';
 let port = null;
+const requests = new Map();
+const tabQueues = new Map();
+
+// Serialize each tab through the bridge, including snapshots and debugger
+// leases. Cancellation bypasses this queue and is checked before input.
+function dispatchRequest(method, params, control) {
+  const key = params.tab_id == null ? 'browser' : Number(params.tab_id);
+  const previous = tabQueues.get(key) || Promise.resolve();
+  const task = previous.catch(() => {}).then(() => {
+    control.check();
+    return handle(method, params, control);
+  });
+  tabQueues.set(key, task);
+  const cleanup = () => { if (tabQueues.get(key) === task) tabQueues.delete(key); };
+  task.then(cleanup, cleanup);
+  return task;
+}
 
 function connect() {
   if (port) return;
@@ -16,22 +33,33 @@ function connect() {
     setTimeout(connect, 5000);
     return;
   }
+  const connectedPort = port;
   port.onMessage.addListener(async (message) => {
+    if (message.method === 'cancel') {
+      const request = requests.get(message.params?.request_id);
+      if (request) request.cancelled = true;
+      return;
+    }
+    const control = { cancelled: false, port: connectedPort,
+      check() { if (this.cancelled) throw new Error('Request cancelled. Input already sent may have taken effect; inspect state before retrying.'); } };
+    requests.set(message.id, control);
     let reply;
     try {
-      reply = { id: message.id, result: await handle(message.method, message.params || {}) };
+      reply = { id: message.id, result: await dispatchRequest(message.method, message.params || {}, control) };
     } catch (error) {
       reply = { id: message.id, error: String((error && error.message) || error) };
     }
-    if (port) port.postMessage(reply);
+    if (requests.get(message.id) === control) requests.delete(message.id);
+    if (port === connectedPort && !control.cancelled) connectedPort.postMessage(reply);
   });
   port.onDisconnect.addListener(() => {
+    for (const request of requests.values()) if (request.port === connectedPort) request.cancelled = true;
     port = null;
     // The host is missing or restarting; keep trying quietly.
     showStatus(false);
     setTimeout(connect, 5000);
   });
-  port.postMessage({ event: 'hello', browser: browserName(), version: chrome.runtime.getManifest().version });
+  port.postMessage({ event: 'hello', browser: browserName(), version: chrome.runtime.getManifest().version, snapshotProtocol: 1 });
   showStatus(true);
 }
 
@@ -70,11 +98,13 @@ async function markOwnTab(tabId) {
 }
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  frameIndex.delete(tabId);
   const ids = await ownTabs();
   if (ids.delete(tabId)) await chrome.storage.session.set({ ownTabs: [...ids] });
 });
 
 chrome.webNavigation.onCommitted.addListener(async ({ tabId }) => {
+  frameIndex.delete(tabId);
   if ((await ownTabs()).has(tabId)) await hookDialogs(tabId);
 });
 
@@ -162,19 +192,21 @@ async function getDownload({ id }) {
   return describeDownload(await ownDownload(id));
 }
 
-async function startDownload({ url, filename }) {
+async function startDownload({ url, filename }, control) {
   if (!url) throw new Error('url is required');
   const starts = await sessionList('pendingStarts');
   await chrome.storage.session.set({ pendingStarts: [...starts, url] });
   const options = { url, conflictAction: 'uniquify', saveAs: false };
   if (filename) options.filename = filename;
+  control.check();
   const id = await chrome.downloads.download(options);
   await markOwnDownload(id);
   return { id };
 }
 
-async function cancelDownload({ id }) {
+async function cancelDownload({ id }, control) {
   const item = await ownDownload(id);
+  control.check();
   if (item.state === 'in_progress') await chrome.downloads.cancel(item.id);
   const [after] = await chrome.downloads.search({ id: item.id });
   return describeDownload(after || item);
@@ -182,20 +214,23 @@ async function cancelDownload({ id }) {
 
 // ---------------------------------------------------------------- requests
 
-async function handle(method, params) {
+async function handle(method, params, control) {
+  if (method !== 'tabs' && (typeof params.session_id !== 'string' || !params.session_id)) {
+    throw new Error('Update and restart skfiy: this extension requires session-bound requests. Nothing was done.');
+  }
   switch (method) {
     case 'tabs': return listTabs();
-    case 'open': return openTab(params);
-    case 'navigate': return navigate(params);
-    case 'close': return closeTab(params);
-    case 'state': return tabState(params);
+    case 'open': return openTab(params, control);
+    case 'navigate': return navigate(params, control);
+    case 'close': return closeTab(params, control);
+    case 'state': return tabState(params, control);
     case 'screenshot': return screenshot(params);
-    case 'act': return act(params);
+    case 'act': return act(params, control);
     case 'probe': return probe(params);
     case 'downloads': return listDownloads(params);
     case 'download_get': return getDownload(params);
-    case 'download_start': return startDownload(params);
-    case 'download_cancel': return cancelDownload(params);
+    case 'download_start': return startDownload(params, control);
+    case 'download_cancel': return cancelDownload(params, control);
     default: throw new Error(`unknown method ${method}`);
   }
 }
@@ -228,18 +263,22 @@ async function skfiyGroup(windowId) {
   return groups.length ? groups[0].id : null;
 }
 
-async function openTab({ url, tab_id: tabId }) {
+async function openTab({ url, tab_id: tabId }, control) {
   if (!url) throw new Error('url is required');
   if (tabId != null) {
     await noteAct({ id: Number(tabId), url });
+    control.check();
+    frameIndex.delete(Number(tabId));
     const tab = await chrome.tabs.update(Number(tabId), { url });
-    await waitForLoad(tab.id);
+    await waitForLoad(tab.id, 15000, control);
     return { tabId: tab.id };
   }
   // A background tab in the user's last window, gathered in a "skfiy" group.
   const window = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+  control.check();
   const tab = await chrome.tabs.create({ url: 'about:blank', active: false, ...(window ? { windowId: window.id } : {}) });
   await markOwnTab(tab.id);
+  control.check();
   await chrome.tabs.update(tab.id, { url });
   await noteAct({ id: tab.id, url });
   try {
@@ -249,23 +288,26 @@ async function openTab({ url, tab_id: tabId }) {
   } catch {
     // Tab groups are cosmetic.
   }
-  await waitForLoad(tab.id);
+  await waitForLoad(tab.id, 15000, control);
   return { tabId: tab.id };
 }
 
-async function navigate({ tab_id: tabId, action }) {
+async function navigate({ tab_id: tabId, action }, control) {
   const tab = await tabById(tabId);
+  control.check();
+  frameIndex.delete(tab.id);
   if (action === 'back') await chrome.tabs.goBack(tab.id);
   else if (action === 'forward') await chrome.tabs.goForward(tab.id);
   else if (action === 'reload') await chrome.tabs.reload(tab.id);
   else throw new Error('action must be back, forward, or reload');
   await delay(300);
-  await waitForLoad(tab.id);
+  await waitForLoad(tab.id, 15000, control);
   return { tabId: tab.id };
 }
 
-async function closeTab({ tab_id: tabId }) {
+async function closeTab({ tab_id: tabId }, control) {
   const tab = await tabById(tabId);
+  control.check();
   await chrome.tabs.remove(tab.id);
   return { closed: tab.id };
 }
@@ -274,10 +316,11 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForLoad(tabId, timeout = 15000) {
+async function waitForLoad(tabId, timeout = 15000, control) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
+    control?.check();
     if (!tab || tab.status === 'complete') return;
     await delay(150);
   }
@@ -296,11 +339,12 @@ async function run(tabId, func, args, frameId = 0) {
 // their own elements, which are numbered after the page's.
 const frameIndex = new Map();
 
-async function tabState({ tab_id: tabId, max_chars: maxChars, locate }) {
+async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id }, control) {
   const tab = await tabById(tabId);
-  await waitForLoad(tab.id, 5000);
+  await waitForLoad(tab.id, 5000, control);
+  const binding = { session_id, snapshot_id: crypto.randomUUID() };
   const frames = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate)], world: 'ISOLATED'
+    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding], world: 'ISOLATED'
   });
   const top = frames.find((f) => f.frameId === 0);
   if (!top || !top.result) throw new Error('the page did not answer');
@@ -320,20 +364,22 @@ async function tabState({ tab_id: tabId, max_chars: maxChars, locate }) {
     dialogs.push(...result.dialogs);
     truncated = truncated || result.truncated;
   }
-  frameIndex.set(tab.id, map);
+  frameIndex.set(tab.id, { ...binding, map });
   const notes = dialogs.map((d) => d.type === 'alert'
     ? `(page dialog) alert ${JSON.stringify(d.message)}, dismissed`
     : `(page dialog) ${d.type} ${JSON.stringify(d.message)}, answered ${JSON.stringify(d.answer)}`);
   return { tabId: tab.id, title: tab.title, url: tab.url, active: tab.active, ...top.result, lines: [...notes, ...lines], truncated,
-    items: locate ? items : undefined };
+    items: locate ? items : undefined, ...binding };
 }
 
 /// The frame and frame-local index of a page element index.
-function locateIndex(tabId, index) {
+function locateIndex(tabId, index, binding) {
+  const snapshot = frameIndex.get(tabId);
+  if (!snapshot || snapshot.session_id !== binding.session_id || snapshot.snapshot_id !== binding.snapshot_id) {
+    throw new Error('The tab snapshot expired or was replaced by another session. Call browser_state again; nothing was sent.');
+  }
   if (index == null) return { frameId: 0, local: null };
-  const map = frameIndex.get(tabId);
-  if (!map) return { frameId: 0, local: index };
-  const entry = map[Number(index)];
+  const entry = snapshot.map[Number(index)];
   if (!entry) throw new Error(`no element ${index}; call browser_state again`);
   return entry;
 }
@@ -383,15 +429,16 @@ function pageProbe(text) {
   return { found, quietMs: Date.now() - quiet.last };
 }
 
-async function act(params) {
+async function act(params, control) {
   const tab = await tabById(params.tab_id);
   await noteAct(tab);
-  const { frameId, local } = locateIndex(tab.id, params.index);
+  const { frameId, local } = locateIndex(tab.id, params.index, params);
   if ((await ownTabs()).has(tab.id)) await hookDialogs(tab.id);
   if (params.trusted && frameId !== 0) throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
   const inFrame = { ...params, index: local };
   if (params.action === 'hover') inFrame.css = await foreignStyles(tab.id, frameId);
-  const result = params.trusted ? await trustedAct(tab.id, params) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
+  control.check();
+  const result = params.trusted ? await trustedAct(tab.id, inFrame, control) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
   if (params.action === 'scroll') {
     // Hidden/occluded Chromium defers scroll events and animation frames. A
     // compositor capture delivers a frame so virtual lists can render their
@@ -405,11 +452,12 @@ async function act(params) {
     }
   }
   if (result && result.openInBackground) {
-    await openTab({ url: result.openInBackground });
+    control.check();
+    await openTab({ url: result.openInBackground }, control);
     result.message += ' (opened in a new background tab in the "skfiy" group)';
   }
   await delay(250);
-  await waitForLoad(tab.id, 8000);
+  await waitForLoad(tab.id, 8000, control);
   return result;
 }
 
@@ -478,37 +526,52 @@ async function cdpKey(send, combo) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code, modifiers });
 }
 
-async function trustedAct(tabId, params) {
+async function trustedAct(tabId, params, control) {
   const tab = await chrome.tabs.get(tabId);
   const window = await chrome.windows.get(tab.windowId);
+  control.check();
   if ((params.action === 'click' || params.action === 'key') && (!tab.active || window.state === 'minimized')) {
     // Chrome drops debugger mouse and key events for hidden tabs.
     throw new Error('trusted clicks and keys only reach the tab shown in its window, and this tab is in the background. Use the default events (trusted: false); trusted typing works in any tab.');
   }
   if (params.action === 'click') {
+    await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
     const point = params.index == null
       ? { x: Number(params.x), y: Number(params.y) }
       : await run(tabId, pageAction, [{ ...params, action: 'locate' }]);
     await withDebugger(tabId, async (send) => {
+      control.check();
+      await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
+      control.check();
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+      control.check();
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     });
     return { message: `Clicked ${params.index == null ? `at (${Math.round(point.x)}, ${Math.round(point.y)})` : `[${params.index}]`} with real input events` };
   }
   if (params.action === 'type') {
+    control.check();
     await run(tabId, pageAction, [{ ...params, action: 'focus' }]);
     await withDebugger(tabId, async (send) => {
+      await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
+      control.check();
       await send('Input.insertText', { text: String(params.text || '') });
-      if (params.submit) await cdpKey(send, 'Enter');
+      if (params.submit) { control.check(); await cdpKey(send, 'Enter'); }
     });
     return { message: `Typed ${String(params.text || '').length} character(s) with real input events${params.submit ? ' and submitted' : ''}` };
   }
   if (params.action === 'key') {
+    control.check();
     if (params.index != null) await run(tabId, pageAction, [{ ...params, action: 'focus', keep: true }]);
-    await withDebugger(tabId, (send) => cdpKey(send, params.key));
+    await withDebugger(tabId, async (send) => {
+      await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
+      control.check();
+      return cdpKey(send, params.key);
+    });
     return { message: `Pressed ${params.key} with real input events` };
   }
+  control.check();
   return run(tabId, pageAction, [params]);
 }
 
@@ -517,10 +580,10 @@ async function trustedAct(tabId, params) {
 // page, installDialogHooks (below) in the page's own. Each must be
 // self-contained: executeScript serializes only the function body.
 
-function pageSnapshot(maxChars, locate) {
-  const state = (globalThis.__skfiy = globalThis.__skfiy || { elements: [] });
-  state.elements = [];
-  state.identities = [];
+function pageSnapshot(maxChars, locate, binding) {
+  const previous = globalThis.__skfiy;
+  const state = globalThis.__skfiy = { ...binding, url: location.href, elements: [], identities: [],
+    hovered: previous?.hovered };
   const lines = [];
   let chars = 0;
   let truncated = false;
@@ -806,6 +869,9 @@ function pageSnapshot(maxChars, locate) {
 
 function pageAction(params, keyAliases = {}) {
   const state = globalThis.__skfiy || { elements: [] };
+  if (!params.session_id || !params.snapshot_id || state.session_id !== params.session_id || state.snapshot_id !== params.snapshot_id || state.url !== location.href) {
+    return { skfiyError: 'The page snapshot expired or belongs to another session. Call browser_state again; nothing was sent.' };
+  }
   const { action } = params;
   // How the page's next confirm() or prompt() is answered (see installDialogHooks).
   if (params.dialog) {
@@ -941,6 +1007,10 @@ function pageAction(params, keyAliases = {}) {
       applyHoverStyles(params.css || []);
       state.hovered = el;
       return { message: params.index != null ? `Hovered [${params.index}]` : `Hovered at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${el.tagName.toLowerCase()}>` };
+    }
+    case 'validate': {
+      if (params.index != null) pick();
+      return { message: 'snapshot valid' };
     }
     case 'locate': {
       const el = pick();

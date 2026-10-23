@@ -244,8 +244,10 @@ struct ArgumentsTests {
 
 @MainActor
 final class SlowExecutor: ToolExecutor {
+    var started = false
     var sawCancellation = false
     func call(_ name: String, _ arguments: [String: Any]) async -> ToolResult {
+        started = true
         for _ in 0..<500 {
             if Task.isCancelled { sawCancellation = true; return ToolResult(text: "cancelled", isError: true) }
             try? await Task.sleep(nanoseconds: 10_000_000)
@@ -256,13 +258,77 @@ final class SlowExecutor: ToolExecutor {
 
 @MainActor
 struct MCPCancellationTests {
+    private func callLine(_ id: Int, _ tool: String) -> String {
+        "{\"jsonrpc\":\"2.0\",\"id\":\(id),\"method\":\"tools/call\",\"params\":{\"name\":\"\(tool)\"}}"
+    }
+
+    @Test func queuedCancellationNeverReachesTheExecutor() async throws {
+        let executor = LifecycleExecutor()
+        var responses: [[String: Any]] = []
+        let server = MCPServer(executor: executor, write: {
+            responses.append((try? JSONSerialization.jsonObject(with: $0) as? [String: Any]) ?? [:])
+        })
+        server.receive(line: callLine(1, "wait_for"))
+        server.receive(line: callLine(2, "click"))
+        server.receive(line: #"{"method":"notifications/cancelled","params":{"requestId":2}}"#)
+        while executor.calls.isEmpty { await Task.yield() }
+        server.receive(line: #"{"method":"notifications/cancelled","params":{"requestId":1}}"#)
+        server.receive(line: callLine(3, "list_apps"))
+        for _ in 0..<100 where responses.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(executor.calls == ["wait_for", "list_apps"])
+        #expect(responses.compactMap { $0["id"] as? Int } == [3])
+        #expect(executor.cancelled)
+    }
+
+    @Test func disconnectCancelsRunningAndDropsQueuedAndFutureCalls() async throws {
+        let executor = LifecycleExecutor()
+        var responses = 0
+        let server = MCPServer(executor: executor, write: { _ in responses += 1 })
+        server.receive(line: callLine(1, "wait_for"))
+        server.receive(line: callLine(2, "click"))
+        while executor.calls.isEmpty { await Task.yield() }
+        server.disconnect()
+        server.receive(line: callLine(3, "click"))
+        #expect(await server.respond(to: ["id": 4, "method": "tools/call", "params": ["name": "click"]]) == nil)
+        for _ in 0..<100 where !executor.cancelled { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(executor.disconnected && executor.cancelled)
+        #expect(executor.calls == ["wait_for"])
+        #expect(responses == 0)
+    }
+
+    @Test func cancellationClosesConfirmationAndIgnoresLateApproval() async throws {
+        let executor = LifecycleExecutor()
+        var messages: [[String: Any]] = []
+        let server = MCPServer(executor: executor, write: {
+            messages.append((try? JSONSerialization.jsonObject(with: $0) as? [String: Any]) ?? [:])
+        })
+        _ = await server.respond(to: ["id": 0, "method": "initialize", "params": ["capabilities": ["elicitation": [:]]]])
+        var approval: Bool?
+        executor.ask = { approval = await server.confirm("Upload?", timeout: 60) }
+        server.receive(line: callLine(1, "click"))
+        for _ in 0..<100 where messages.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        let prompt = try #require(messages.first?["id"] as? String)
+        let started = Date()
+        server.cancel("1")
+        server.receive(line: callLine(2, "list_apps"))
+        for _ in 0..<100 where !messages.contains(where: { $0["id"] as? Int == 2 }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(Date().timeIntervalSince(started) < 1)
+        #expect(approval == nil)
+        #expect(messages.contains { $0["method"] as? String == "notifications/cancelled" })
+        server.receive(line: "{\"id\":\"\(prompt)\",\"result\":{\"action\":\"accept\",\"content\":{\"allow\":true}}}")
+        #expect(approval == nil)
+        #expect(executor.calls == ["click", "list_apps"])
+    }
+
     @Test func cancelledCallStopsAndGetsNoResponse() async throws {
         let executor = SlowExecutor()
         let server = MCPServer(executor: executor, write: { _ in })
         let started = Date()
         let call = Task { await server.respond(to: ["jsonrpc": "2.0", "id": 7, "method": "tools/call",
                                                     "params": ["name": "wait_for", "arguments": ["app": "X"]]]) }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        while !executor.started { await Task.yield() }
         let line = #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7,"reason":"user"}}"#
         let id = try #require(MCPServer.cancellation(line))
         server.cancel(id)
@@ -273,5 +339,22 @@ struct MCPCancellationTests {
         // Other lines are not cancellations; unknown ids are ignored.
         #expect(MCPServer.cancellation(#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#) == nil)
         server.cancel("12345")
+    }
+}
+
+@MainActor
+private final class LifecycleExecutor: ToolExecutor {
+    var calls: [String] = []
+    var cancelled = false
+    var disconnected = false
+    var ask: (() async -> Void)?
+    func disconnect() { disconnected = true }
+    func call(_ name: String, _ arguments: [String: Any]) async -> ToolResult {
+        calls.append(name)
+        if name == "wait_for" {
+            do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { cancelled = true }
+        }
+        if name == "click" { await ask?() }
+        return ToolResult(text: "done")
     }
 }

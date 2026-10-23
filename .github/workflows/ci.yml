@@ -17,5 +17,7 @@ jobs:
         run: swift build
       - name: Unit tests
         run: swift test
+      - name: Browser session isolation and cancellation
+        run: node scripts/test_browser_sessions.mjs
       - name: One-step install, setup and uninstall (throwaway HOME, fake claude/codex)
         run: make test-install

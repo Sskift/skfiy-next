@@ -6,6 +6,13 @@ import UniformTypeIdentifiers
 /// id, so they work on background tabs and never switch what the user sees.
 @MainActor
 final class BrowserTools {
+    private let sessionID = UUID().uuidString
+    private struct TabKey: Hashable {
+        let socket: String
+        let pid: Int
+        let tab: Int
+    }
+    private var snapshots: [TabKey: String] = [:]
     /// Viewport CSS pixels per screenshot pixel, per tab, from its last screenshot.
     private var screenshotScale: [Int: Double] = [:]
 
@@ -365,11 +372,31 @@ final class BrowserTools {
     // MARK: Browsers and requests
 
     private func send(_ browser: ConnectedBrowser, _ method: String, _ params: [String: Any], timeout: TimeInterval = 20) async throws -> Any {
-        let path = browser.socketPath
-        let box = UncheckedBox(params)
-        return try await Task.detached {
-            try BrowserBridge.request(path, method: method, params: box.value, timeout: timeout)
-        }.value
+        try Task.checkCancellation()
+        guard !EmergencyStop.isStopped else { throw ToolError(EmergencyStop.refusal) }
+        if method != "tabs", browser.snapshotProtocol != 1 {
+            throw ToolError("Reload the skfiy browser extension before continuing (chrome://extensions → skfiy → reload). This connection does not support session-bound snapshots; nothing was sent.")
+        }
+        var params = params
+        params["session_id"] = sessionID
+        let key = (params["tab_id"] as? Int).map { TabKey(socket: browser.socketPath, pid: browser.pid, tab: $0) }
+        if method == "act" {
+            guard let key, let snapshot = snapshots[key] else {
+                throw ToolError("Read this tab with browser_state before acting; there is no snapshot for this session.")
+            }
+            params["snapshot_id"] = snapshot
+        }
+        let result = try await BrowserBridge.requestAsync(browser.socketPath, method: method, params: params, timeout: timeout)
+        try Task.checkCancellation()
+        if method == "state", let key {
+            guard let snapshot = (result as? [String: Any])?["snapshot_id"] as? String else {
+                snapshots[key] = nil
+                throw ToolError("The browser returned no snapshot identity. Reload the extension and read the tab again.")
+            }
+            snapshots[key] = snapshot
+        }
+        if ["open", "navigate", "close"].contains(method), let key { snapshots[key] = nil }
+        return result
     }
 
     private func connected() async -> [ConnectedBrowser] {
@@ -378,6 +405,7 @@ final class BrowserTools {
 
     private func browser(for args: Arguments, tabID: Int?) async throws -> ConnectedBrowser {
         let browsers = await connected()
+        try Task.checkCancellation()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
         if let wanted = args.string("browser"), !wanted.isEmpty {
             return try Self.matching(wanted, in: browsers)[0]
@@ -520,11 +548,6 @@ struct DownloadInfo: Equatable {
         default: return "it was interrupted"
         }
     }
-}
-
-private struct UncheckedBox<T>: @unchecked Sendable {
-    let value: T
-    init(_ value: T) { self.value = value }
 }
 
 // MARK: - Formatting (pure)

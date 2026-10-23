@@ -15,6 +15,7 @@ release: embed-extension
 
 test:
 	swift test $(TEST_FLAGS)
+	@if command -v node >/dev/null; then node scripts/test_browser_sessions.mjs; else echo "Skipping browser session tests: Node is not installed."; fi
 
 # install.sh, `skfiy setup` and `skfiy uninstall` in a throwaway HOME with fake
 # claude/codex CLIs; checks that the real setup is untouched. No UI.

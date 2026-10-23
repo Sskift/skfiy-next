@@ -140,6 +140,7 @@ public final class ComputerUse {
 
     /// Runs a tool and records what it changed in the action log.
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
+        guard !Task.isCancelled else { return ToolResult(text: "The request was cancelled.", isError: true) }
         if DirectLockedUse.enabled {
             if directLockedUse.observeTransition() { forgetApps() }
             if name == "locked_use_end" { return directLockedUse.status(end: true) }
@@ -202,6 +203,7 @@ public final class ComputerUse {
     private static let answeringWhileStopped = ToolSchemas.names(.whileStopped)
 
     func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
+        guard !Task.isCancelled else { return ToolResult(text: "The request was cancelled.", isError: true) }
         let args = Arguments(raw)
         if DirectLockedUse.isActive, name == "type_text" || name == "press_key" || name == "set_value" {
             lastInputWasSecret = true

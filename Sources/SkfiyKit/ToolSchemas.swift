@@ -72,7 +72,7 @@ public enum ToolSchemas {
 
     /// Outcome checking, offered on every action that changes something.
     private static let verification: [String: Any] = [
-        "expect": ["type": "object", "description": "Check the outcome, e.g. {\"text\": \"Saved\"}: text appears, text_gone, value_changes or value (of the element or focused field), window_closed, window_opened (a title or true), changed; timeout in seconds (default 5). The result says verified, no_effect, target_changed or timeout"],
+        "expect": ["type": "object", "description": "Check the outcome, e.g. {\"text\": \"Saved\"}: text appears, text_gone, value_changes or value (of the element or focused field), window_closed, window_opened (a title or true), changed; timeout in seconds (default 5). The result says verified, already_satisfied (condition held before input; effect unproven), no_effect, target_changed or timeout"],
         "idempotent": ["type": "boolean", "description": "false: must not happen twice (submit, send, pay); such buttons and Return already count"],
         "confirm_repeat": ["type": "boolean", "description": "Repeat an unverified risky action after the state showed it did nothing"],
         "window_id": ["type": "string", "description": "The window id from get_app_state; refused if the latest screenshot is of another window, or it moved, closed or was recreated"]

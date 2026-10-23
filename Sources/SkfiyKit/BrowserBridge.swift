@@ -86,6 +86,37 @@ private func readLine(_ fd: Int32, timeout: TimeInterval) -> Data? {
     }
 }
 
+/// Owns shutdown, not just Task cancellation: a detached socket reader must
+/// actually wake up. The lock keeps shutdown from touching a reused fd.
+final class BrowserRequestCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32?
+    private var cancelled = false
+
+    func attach(_ descriptor: Int32) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { throw CancellationError() }
+        fd = descriptor
+    }
+
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
+        if let fd { _ = shutdown(fd, SHUT_RDWR) }
+    }
+
+    func check() throws {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { throw CancellationError() }
+    }
+
+    func close(_ descriptor: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        fd = nil
+        Darwin.close(descriptor)
+    }
+}
+
 // MARK: - Host (launched by the browser)
 
 extension BrowserBridge {
@@ -180,7 +211,15 @@ extension BrowserBridge {
                 lock.unlock()
             }
             lock.lock()
+            let abandoned = pending.filter { $0.value.fd == client }.map(\.key)
             pending = pending.filter { $0.value.fd != client }
+            // A cancelled caller closes its socket. Withdraw work still
+            // waiting in the extension before its next input is dispatched.
+            for id in abandoned {
+                if let data = try? JSONSerialization.data(withJSONObject: ["method": "cancel", "params": ["request_id": id]]) {
+                    FileHandle.standardOutput.write(NativeMessage.encode(data))
+                }
+            }
             lock.unlock()
             close(client)
         }
@@ -228,19 +267,24 @@ public struct ConnectedBrowser {
     public let pid: Int
     /// The extension's version, as its hello message reported it.
     public var version: String? = nil
+    public var snapshotProtocol: Int? = nil
 }
 
 extension BrowserBridge {
     /// One request to one browser host; blocking, so call off the main actor.
-    static func request(_ socketPath: String, method: String, params: [String: Any] = [:], timeout: TimeInterval = 30) throws -> Any {
+    static func request(_ socketPath: String, method: String, params: [String: Any] = [:], timeout: TimeInterval = 30,
+                        cancellation: BrowserRequestCancellation? = nil) throws -> Any {
+        try cancellation?.check()
         guard var address = socketAddress(socketPath) else { throw ToolError("Bad browser socket path.") }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ToolError("Could not open a socket.") }
-        defer { close(fd) }
+        defer { if let cancellation { cancellation.close(fd) } else { close(fd) } }
+        try cancellation?.attach(fd)
         noSigPipe(fd)
         let connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
+        try cancellation?.check()
         guard connected == 0 else {
             // Stale only when its browser is gone; a live one may just be busy.
             if errno == ECONNREFUSED || errno == ENOENT, !browserAlive(socketPath) { unlink(socketPath) }
@@ -248,8 +292,11 @@ extension BrowserBridge {
         }
         let request: [String: Any] = ["id": 1, "method": method, "params": params]
         let data = try JSONSerialization.data(withJSONObject: request)
+        try cancellation?.check()
         guard writeAll(fd, data + Data([0x0A])) else { throw ToolError("The browser bridge closed the connection.") }
-        guard let line = readLine(fd, timeout: timeout),
+        let line = readLine(fd, timeout: timeout)
+        try cancellation?.check()
+        guard let line,
               let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw ToolError("The browser did not answer within \(Int(timeout)) s.")
         }
@@ -257,6 +304,20 @@ extension BrowserBridge {
             throw ToolError("Browser: \(error)")
         }
         return response["result"] ?? NSNull()
+    }
+
+    static func requestAsync(_ socketPath: String, method: String, params: [String: Any] = [:], timeout: TimeInterval = 30) async throws -> Any {
+        let cancellation = BrowserRequestCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let result = try await Task.detached {
+                try request(socketPath, method: method, params: params, timeout: timeout, cancellation: cancellation)
+            }.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 
     /// Sockets are named after the browser's pid.
@@ -274,7 +335,8 @@ extension BrowserBridge {
             let pid = info["pid"] as? Int ?? Int(file.dropLast(5)) ?? 0
             let name = (info["browser"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 ?? NSRunningApplication(processIdentifier: pid_t(pid))?.localizedName ?? "Browser"
-            return ConnectedBrowser(socketPath: path, name: name, pid: pid, version: info["version"] as? String)
+            return ConnectedBrowser(socketPath: path, name: name, pid: pid, version: info["version"] as? String,
+                                    snapshotProtocol: info["snapshotProtocol"] as? Int)
         }
     }
 }

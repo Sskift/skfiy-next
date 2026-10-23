@@ -3,7 +3,7 @@ import ApplicationServices
 import Foundation
 
 /// Actions with an `expect`: the outcome is checked after the action and
-/// reported as verified, no_effect, target_changed or timeout. Actions that
+/// reported as verified, already_satisfied, no_effect, target_changed or timeout. Actions that
 /// can only happen once (submit, send, pay…) are never retried by skfiy, and
 /// an identical one right after an unverified one is refused until the state
 /// has been looked at again.
@@ -56,6 +56,10 @@ extension ComputerUse {
             return await unlockedObservation(target, wantText: wantText)
         }
         let before = await observe()
+        if Task.isCancelled { return ToolResult(text: "The request was cancelled. Nothing was sent.", isError: true) }
+        if let interruption = before.interruption {
+            return ToolResult(text: "Verification: target_changed — \(interruption). Nothing was sent.", isError: true)
+        }
         var result = await perform(name, raw)
         guard !result.isError else { return result }
         let started = Date()
@@ -69,6 +73,7 @@ extension ComputerUse {
         result.text = verdict.line(risky: risky) + "\n" + result.text
         if verdict.status != .verified {
             result.isError = true
+            if Task.isCancelled { return result }
             // The state now, not as it was right after the input.
             var stateArguments: [String: Any] = ["app": raw["app"] ?? ""]
             if locked { stateArguments["ocr"] = true }
@@ -126,7 +131,11 @@ extension ComputerUse {
         }
         let appElement = AXUIElementCreateApplication(target.pid)
         AXUIElementSetMessagingTimeout(appElement, 1)
-        for window in appElement.elements(kAXWindowsAttribute) where window.string(kAXRoleAttribute) == kAXWindowRole {
+        guard let windows = appElement.value(kAXWindowsAttribute) as? [AXUIElement] else {
+            observation.interruption = "the window list could not be read"
+            return observation
+        }
+        for window in windows where window.string(kAXRoleAttribute) == kAXWindowRole {
             let title = window.string(kAXTitleAttribute) ?? ""
             observation.windows[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
@@ -142,6 +151,11 @@ extension ComputerUse {
                let lines = try? await recognizeView(pid: target.pid, window: snapshot.chosenWindow, rect: region) {
                 observation.text += "\n" + lines.map(\.text).joined(separator: "\n")
             }
+            if wantText, snapshot.opaque, observation.text == snapshot.text {
+                observation.unobservable = "the window's text could not be recognized"
+            }
+        } else if observation.targetPresent {
+            observation.unobservable = "the window's accessibility state could not be read"
         }
         // The value of the element acted on, or else of the field typing went
         // to; not of a field in another window that happens to have focus.

@@ -3,6 +3,26 @@ import Testing
 @testable import SkfiyKit
 
 struct RemoteDesktopTests {
+    @Test func cancelledExchangeCannotLaunchAndStopsAnExistingProcess() async throws {
+        let before = RemoteExchangeCancellation()
+        before.cancel()
+        let neverStarted = Process()
+        neverStarted.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        #expect(throws: CancellationError.self) { try before.start(neverStarted) }
+        #expect(!neverStarted.isRunning)
+
+        let running = RemoteExchangeCancellation()
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        try running.start(sleeper)
+        defer { if sleeper.isRunning { sleeper.terminate() }; running.finish() }
+        running.cancel()
+        for _ in 0..<100 where sleeper.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(!sleeper.isRunning)
+        #expect(throws: CancellationError.self) { try running.check() }
+    }
+
     let frame = String(repeating: "a", count: 32)
 
     @Test func sshHasNoInteractiveFallbackOrShellInterpolation() throws {

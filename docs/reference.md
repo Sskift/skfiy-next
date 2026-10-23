@@ -32,7 +32,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `click` | 按元素编号或截图像素坐标点击；支持右键、中键、双击/三击、修饰键 |
 | `target`（参数） | `click`、`scroll`、`set_value`、`perform_secondary_action`、`select_text` 和网页的 `browser_click` / `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` / `browser_hover` / `browser_upload` 可以不给编号或坐标，而是描述控件：名称、类型（button、text field…）、窗口区域（`bottom-right`、`右下角`…或截图像素矩形）、所在分组（`within`：分组框、fieldset、标题下的区块）、邻近文字（`near` / `below` / `right_of`），以及精确的 `identifier`（AXIdentifier、DOM id 或 data-testid）、`row`（同一行中的文字）、`column`（列标题）。行列条件只使用实际公开的表格结构，不用视觉距离猜测。执行时按当下的界面重新查找（解锁用辅助功能树，树里没有时补上截图识别文字；锁屏用当场截图的识别文字及其位置；网页用页面元素），恰好一个时才操作；几个同样符合时不挑，什么都不做并列出候选 |
 | `locate` | 只查找不操作：按同样的描述列出当下符合的控件，各带元素编号（以及最新截图里的 x/y）、区域、所在分组；没有符合的时说明名称相同的控件现在在哪里；没有唯一结果时附窗口截图，方便区分无文字图标，也可传 `screenshot: true`。未命名控件保留为候选，工具提示可作为名称；完全遮挡的 Chromium 截图仍会提示可能过期 |
-| `expect`（参数） | `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag` 等操作都可带 `expect`：文字出现/消失、值改变、窗口打开/关闭、有变化。结果首行给出“已验证完成（verified）／未观察到效果（no_effect）／目标变化（target_changed）／超时（timeout）”，未验证时附当前状态。提交、发送、付款等只能发生一次的操作 skfiy 从不自动重试；上一次未验证时，再原样重复会被拒绝，直到重新查看过状态（或明确 `confirm_repeat`） |
+| `expect`（参数） | `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag` 等操作都可带 `expect`：文字出现/消失、值改变、窗口打开/关闭、有变化。结果首行给出“已验证完成（verified）／操作前条件已满足、效果待确认（already_satisfied）／未观察到效果（no_effect）／目标变化（target_changed）／超时（timeout）”，未验证时附当前状态。提交、发送、付款等只能发生一次的操作 skfiy 从不自动重试；上一次未验证时，再原样重复会被拒绝，直到重新查看过状态（或明确 `confirm_repeat`） |
 | `perform_secondary_action` | 执行元素的辅助功能动作（Increment、ShowMenu、Confirm…） |
 | `set_value` | 直接设置文本框、滑块等可设值元素 |
 | `select_text` | 在文本元素中选中文字或把光标放在其前后（可用 prefix/suffix 消歧） |
@@ -217,3 +217,10 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 
 skfiy 自己的文件（插件、急停标记、流程、操作日志、实例链接）都放在 `$HOME/Library` 下并跟随 `HOME` 变量，所以 `HOME=$(mktemp -d) skfiy setup` 这样的试装不会碰到真实的配置。例外：`run_in_front` 的批准文件仍按真实用户目录定位；测试隔离时需设置 `SKFIY_FRONT_GRANT_FILE`。
 
+### 请求取消与浏览器快照
+
+浏览器元素编号绑定当前 MCP 会话和一次页面快照。其他会话重新读取同一标签页、页面导航或当前会话刷新编号后，旧引用会被拒绝；重新调用 `browser_state` 或按 `target` 定位后再操作。更新后请在扩展页面重新加载 skfiy，并重启 MCP 连接。新客户端会拒绝不支持快照绑定的扩展，新扩展也会拒绝旧客户端的未绑定请求。
+
+取消会移除尚未开始的调用、结束等待用户确认，并通知浏览器停止尚未发送的后续步骤。MCP 断线也会取消正在执行的调用并丢弃队列。已经发给应用或网页的输入不能撤销，重试前仍须查看实际状态。
+
+`expect` 在锁屏状态发生变化、应用退出、目标意外变化或无法可靠观察时不会报告成功。如果条件在输入前就已成立，返回 `already_satisfied`（未验证本次动作效果），重复操作保护仍然生效。

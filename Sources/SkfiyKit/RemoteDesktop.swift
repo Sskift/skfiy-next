@@ -6,6 +6,38 @@ struct RemoteHost: Codable {
     var user: String
 }
 
+/// Stop an SSH exchange when its MCP request is cancelled, including the
+/// race before the detached worker launches. Already delivered remote input
+/// cannot be recalled; the next call must inspect a fresh remote frame.
+final class RemoteExchangeCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    func start(_ process: Process) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { throw CancellationError() }
+        try process.run()
+        self.process = process
+    }
+
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
+        if let process, process.isRunning { process.terminate() }
+    }
+
+    func check() throws {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { throw CancellationError() }
+    }
+
+    func finish() {
+        lock.lock(); defer { lock.unlock() }
+        process = nil
+    }
+}
+
 /// An explicit SSH binding, never guessed from RustDesk's window title or pixels.
 public enum RemoteDesktop {
     static var configURL: URL { SkfiyPaths.support.appendingPathComponent("remote-desktops.json") }
@@ -40,37 +72,49 @@ public enum RemoteDesktop {
         let arguments = try sshArguments(host: host)
         var input = try JSONSerialization.data(withJSONObject: payload)
         input.append(10)
-        return try await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            process.arguments = arguments
-            let output = Pipe(), errors = Pipe(), stdin = Pipe()
-            process.standardOutput = output; process.standardError = errors; process.standardInput = stdin
-            try process.run()
-            // Drain stderr independently: SSH must never block behind a full pipe.
-            let errorRead = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
-            let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 35, execute: timeout)
-            defer { timeout.cancel() }
-            DispatchQueue.global().async {
-                try? stdin.fileHandleForWriting.write(contentsOf: input)
-                try? stdin.fileHandleForWriting.close()
-            }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let diagnostic = await errorRead.value
-            guard process.terminationStatus == 0 else {
-                let detail = String(data: diagnostic, encoding: .utf8).map { String($0.prefix(600)) } ?? ""
-                throw ToolError("SSH failed or timed out. A submitted input may have executed; inspect remote state before retrying. \(detail)")
-            }
-            guard let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any], response["protocol"] as? Int == 1 else {
-                throw ToolError("Invalid remote response. A submitted input may have executed; inspect state before retrying.")
-            }
-            guard response["ok"] as? Bool == true else {
-                throw ToolError(response["error"] as? String ?? "Remote operation failed.")
-            }
-            return response
-        }.value
+        let cancellation = RemoteExchangeCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let result = try await Task.detached {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                process.arguments = arguments
+                let output = Pipe(), errors = Pipe(), stdin = Pipe()
+                process.standardOutput = output; process.standardError = errors; process.standardInput = stdin
+                try cancellation.start(process)
+                defer { cancellation.finish() }
+                // Drain stderr independently: SSH must never block behind a full pipe.
+                let errorRead = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
+                let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 35, execute: timeout)
+                defer { timeout.cancel() }
+                DispatchQueue.global().async {
+                    if (try? cancellation.check()) != nil {
+                        try? stdin.fileHandleForWriting.write(contentsOf: input)
+                    }
+                    try? stdin.fileHandleForWriting.close()
+                }
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let diagnostic = await errorRead.value
+                try cancellation.check()
+                guard process.terminationStatus == 0 else {
+                    let detail = String(data: diagnostic, encoding: .utf8).map { String($0.prefix(600)) } ?? ""
+                    throw ToolError("SSH failed or timed out. A submitted input may have executed; inspect remote state before retrying. \(detail)")
+                }
+                guard let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any], response["protocol"] as? Int == 1 else {
+                    throw ToolError("Invalid remote response. A submitted input may have executed; inspect state before retrying.")
+                }
+                guard response["ok"] as? Bool == true else {
+                    throw ToolError(response["error"] as? String ?? "Remote operation failed.")
+                }
+                return response
+            }.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 
     /// Installation is an explicit CLI operation; MCP calls never deploy code.
