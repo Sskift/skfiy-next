@@ -40,8 +40,8 @@ function connect() {
       if (request) request.cancelled = true;
       return;
     }
-    const control = { cancelled: false, port: connectedPort,
-      check() { if (this.cancelled) throw new Error('Request cancelled. Input already sent may have taken effect; inspect state before retrying.'); } };
+    const control = { cancelled: false, port: connectedPort, deadline: message.params?.deadline_at,
+      check() { if (this.cancelled || (this.deadline != null && Date.now() >= this.deadline)) throw new Error('Request cancelled or timed out. Input already sent may have taken effect; inspect state before retrying.'); } };
     requests.set(message.id, control);
     let reply;
     try {
@@ -451,9 +451,12 @@ async function probe({ tab_id: tabId, text }) {
     target: { tabId: tab.id, allFrames: true }, func: pageProbe, args: [String(text || '').toLowerCase()], world: 'ISOLATED', injectImmediately: true
   }).catch(() => []);
   const answers = frames.map((f) => f.result).filter(Boolean);
+  const latest = await tabById(tab.id);
+  const readable = tab.status === 'complete' && latest.status === 'complete' && tab.url === latest.url
+    && frames.some(f => f.frameId === 0 && f.result) && answers.length === frames.length;
   return {
-    loading: tab.status !== 'complete' || !answers.length,
-    found: answers.some((a) => a.found),
+    loading: !readable,
+    found: readable ? answers.some((a) => a.found) : null,
     quietMs: answers.length ? Math.min(...answers.map((a) => a.quietMs)) : 0
   };
 }
@@ -598,6 +601,7 @@ async function trustedAct(tabId, params, control) {
       await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
       control.check();
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+      await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
       control.check();
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
@@ -641,14 +645,35 @@ function pageSnapshot(maxChars, locate, binding) {
       if (records.some(r => r.type !== 'attributes' || !r.attributeName?.startsWith('data-skfiy-'))) context.revision++;
     };
     context.observer = new MutationObserver(context.changed);
-    context.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+    context.roots = new WeakSet();
+    context.scrollers = new Map();
+    context.watch = root => {
+      if (context.roots.has(root)) return;
+      context.roots.add(root);
+      context.observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+      // scroll does not bubble, and is not a DOM mutation. Capture it in
+      // every visited document/shadow root, including same-origin frames.
+      root.addEventListener('scroll', () => { context.revision++; }, true);
+    };
+    context.watch(document);
     context.geometry = () => {
       context.changed(context.observer.takeRecords());
+      // A programmatic scroll may precede delivery of its scroll event.
+      // Read positions synchronously at the final input/capture boundary.
+      for (const [el, position] of context.scrollers) {
+        const next = [el.scrollLeft || 0, el.scrollTop || 0];
+        if (next[0] !== position[0] || next[1] !== position[1]) {
+          context.revision++;
+          context.scrollers.set(el, next);
+        }
+      }
       const scroller = document.scrollingElement || document.documentElement;
       return { document: context.id, url: location.href, width: innerWidth, height: innerHeight,
         x: scroller.scrollLeft || 0, y: scroller.scrollTop || 0, scale: globalThis.devicePixelRatio || 1, revision: context.revision };
     };
   }
+  context.geometry();
+  context.scrollers.clear();
   const previous = globalThis.__skfiy;
   const state = globalThis.__skfiy = { ...binding, url: location.href, elements: [], identities: [],
     hovered: previous?.hovered };
@@ -866,6 +891,10 @@ function pageSnapshot(maxChars, locate, binding) {
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const el = node;
+    context.watch(el.getRootNode());
+    if (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth || el.scrollTop || el.scrollLeft) {
+      context.scrollers.set(el, [el.scrollLeft || 0, el.scrollTop || 0]);
+    }
     const tag = el.tagName;
     if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD'].includes(tag)) return;
     if (!visible(el) && el.children.length === 0) return;
@@ -947,6 +976,11 @@ function pageAction(params, keyAliases = {}) {
     if (!now || Object.keys(now).some(key => now[key] !== params.coordinate_geometry[key])) {
       return { skfiyError: 'The screenshot geometry or page content changed. Read browser_state with a screenshot again; nothing was sent.' };
     }
+  }
+  if (params.coordinate_target != null) {
+    const at = document.elementFromPoint(Number(params.x), Number(params.y));
+    if (!at || state.identity?.(at) !== params.coordinate_target)
+      return { skfiyError: 'The target at the screenshot coordinate changed. Read browser_state again; nothing was sent.' };
   }
   const { action } = params;
   // How the page's next confirm() or prompt() is answered (see installDialogHooks).

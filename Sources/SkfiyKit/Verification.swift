@@ -135,16 +135,32 @@ extension ActionExpectation {
             return Verdict(status: .targetChanged, detail: interruption, seconds: 0)
         }
         let satisfiedBefore = before.unobservable == nil && met(before: before, now: before)
+        func expired(_ current: VerifyObservation, changed: Bool) -> Verdict {
+            if changed {
+                let stale = current.unobservable.map { "; but \($0), so what it shows may be out of date" } ?? ""
+                return Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))\(stale)", seconds: now() - started)
+            }
+            // Not no_effect: the action may well have worked unseen.
+            if let reason = current.unobservable {
+                return Verdict(status: .timeout, detail: "nothing could be observed (\(reason)), so whether it took effect is unknown", seconds: now() - started)
+            }
+            return Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started)
+        }
         var changed = false
         while true {
             let current: VerifyObservation
             do {
                 try Task.checkCancellation()
                 current = try await observe()
+            } catch is BrowserDeadlineExceeded {
+                return Verdict(status: .timeout, detail: "verification exhausted its time budget", seconds: now() - started)
             } catch is CancellationError {
                 return Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started)
             } catch {
                 return Verdict(status: .targetChanged, detail: "\(error)", seconds: now() - started)
+            }
+            if now() - started > timeout {
+                return Verdict(status: .timeout, detail: "the observation arrived after the verification deadline", seconds: now() - started)
             }
             // Missing observations (lock, exit, lost window) cannot prove a
             // disappearance, value change, or success message.
@@ -157,20 +173,11 @@ extension ActionExpectation {
                                detail: satisfiedBefore ? "the expected condition was already satisfied before the action; this does not prove the action took effect" : summary,
                                seconds: now() - started)
             }
-            if now() - started >= timeout {
-                if changed {
-                    let stale = current.unobservable.map { "; but \($0), so what it shows may be out of date" } ?? ""
-                    return Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))\(stale)", seconds: now() - started)
-                }
-                // Not no_effect: the action may well have worked unseen.
-                if let reason = current.unobservable {
-                    return Verdict(status: .timeout, detail: "nothing could be observed (\(reason)), so whether it took effect is unknown", seconds: now() - started)
-                }
-                return Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started)
-            }
-            do { try await sleep(interval) } catch {
+            if now() - started >= timeout { return expired(current, changed: changed) }
+            do { try await sleep(min(interval, max(0, timeout - (now() - started)))) } catch {
                 return Verdict(status: .timeout, detail: "verification was cancelled", seconds: now() - started)
             }
+            if now() - started >= timeout { return expired(current, changed: changed) }
         }
     }
 }

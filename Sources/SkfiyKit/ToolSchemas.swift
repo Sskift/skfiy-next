@@ -567,7 +567,7 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_upload",
-            "Attach a local file to a file input of a tab (by index), without the file picker. The index may also be the button or drop zone a site hides its file input behind. This sends the file to the website, so the user is asked to approve every upload first (unless SKFIY_APPROVE=all); uploads are refused when the client cannot ask. Up to 20 MB in all.",
+            "Attach a local file to a file input of a tab (by index), without the file picker. The index may also be the button or drop zone a site hides its file input behind. This sends the file to the website, so the user is asked to approve every upload first (unless SKFIY_APPROVE=all); uploads are refused when the client cannot ask. Up to 20 MB in all. The action receipt survives a failed follow-up page read; inspect browser_state before retrying an unknown upload.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
                 "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"],
@@ -603,7 +603,7 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_wait",
-            "Wait, sending nothing to the page, until a text appears in a tab (page text, title and field values, in all frames), or disappears with gone: true; without a text, until the page has finished loading and stopped changing for half a second. Returns the page state, or an error with it after timeout.",
+            "Wait, sending nothing to the page, until a text appears in a tab (page text, title and field values, in all frames), or disappears with gone: true; without a text, until the page has finished loading and stopped changing for half a second. Loading or unreadable pages cannot prove disappearance. Returns page state on success; timeout covers discovery and page reads, and returns an error without an extra read or clearing repeat protection.",
             properties: [
                 "tab_id": tab, "browser": browserName,
                 "text": ["type": "string", "description": "Text to wait for, case-insensitive"],

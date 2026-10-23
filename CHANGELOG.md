@@ -1,5 +1,14 @@
 # Release notes
 
+## Unreleased
+
+- Screenshot coordinates expire when nested containers scroll, including before delivery of the scroll event. The target is checked again before dispatch.
+- An unreadable or navigating page cannot prove that text disappeared. Failed waits retain repeat protection.
+- Uploads preserve their execution receipt when the following page read fails; a lost acknowledgement remains unknown and must be inspected before retrying.
+- Browser bridge replies use independent bounded client queues and write deadlines. One slow reader no longer blocks other sessions.
+- Browser calls share monotonic time budgets across discovery, socket connection/write/read, observation and capture. Optional `SKFIY_BROWSER_TRACE=1` emits phase timings to stderr without page content.
+- CI runs disposable Chrome integration and transport fault tests and retains diagnostic artifacts. Bundled extension: 0.9.3; reload it after updating.
+
 ## 0.9.0 — 2026-10-12
 
 Find controls by table row, column and identifier, search virtual lists, and keep working in Electron windows that are completely covered. Approval prompts work with one click, or can be turned off.

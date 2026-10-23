@@ -196,6 +196,8 @@ struct WaitEngine {
                 try await sleep(wait)
             } catch let stop as WaitStopped {
                 return .stopped(seconds: now() - started, reason: stop.description)
+            } catch is BrowserDeadlineExceeded {
+                return .timedOut(seconds: now() - started)
             } catch is CancellationError {
                 return .cancelled(seconds: now() - started)
             } catch {

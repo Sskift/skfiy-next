@@ -4,6 +4,7 @@ Checks independent page receipts; no user tabs, profiles, or windows.
 Usage: python3 scripts/test_browser_lifecycle.py .build/debug/skfiy [all|lifecycle|outcomes]
 """
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from compat_baseline import chrome_app
-from harness import APPROVE, Client, ROOT, require, wait_until
+from harness import APPROVE, Client, Evidence, ROOT, require, wait_until
 
 HTML = b'''<!doctype html><meta charset="utf-8"><title>Lifecycle fixture</title>
 <div id="buttons"><button id="approve" onclick="report('approve')">Approve</button><button id="delete" onclick="report('delete')">Delete</button></div>
@@ -27,6 +28,7 @@ HTML = b'''<!doctype html><meta charset="utf-8"><title>Lifecycle fixture</title>
 <iframe src="/frame"></iframe>
 <script>function report(name){fetch('/receipt?name='+name)}</script>'''
 receipts = {}
+scroll_enabled = False
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -36,6 +38,19 @@ class Handler(BaseHTTPRequestHandler):
             name = parse_qs(route.query)['name'][0]
             receipts[name] = receipts.get(name, 0) + 1
             body = b'ok'
+        elif route.path == '/scroll-status':
+            body = b'yes' if scroll_enabled else b'no'
+        elif route.path == '/nested-scroll':
+            body = b'''<style>button{display:block;height:50px;width:150px}</style>
+<div id="pane" style="position:absolute;top:100px;left:100px;height:50px;width:170px;overflow:auto">
+<button onclick="fetch('/receipt?name=inner-approve')">Approve</button>
+<button onclick="fetch('/receipt?name=inner-delete')">Delete</button></div>
+<script>let moved=false;setInterval(async()=>{if(!moved && await(await fetch('/scroll-status')).text()==='yes'){
+pane.scrollTop=50;moved=true;fetch('/receipt?name=inner-scrolled')}},30)</script>'''
+        elif route.path == '/upload-unreadable':
+            body = b'''<label>Upload<input type="file" onchange="fetch('/receipt?name=upload-destroy');document.documentElement.remove()"></label>'''
+        elif route.path == '/probe-unavailable':
+            body = b'<div>Processing</div>'
         elif route.path == '/destroy':
             body = b'<button onclick="fetch(\'/receipt?name=destroy\');document.documentElement.remove()">Submit and clear view</button>'
         elif route.path == '/coordinates':
@@ -53,6 +68,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global scroll_enabled
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT/'.build/debug/skfiy').resolve()
     suite = sys.argv[2] if len(sys.argv) > 2 else 'all'
     require(suite in ('all', 'lifecycle', 'outcomes'), 'suite must be all, lifecycle, or outcomes')
@@ -69,18 +85,37 @@ def main():
         checks.append(name); print('PASS ' + name, flush=True)
     with tempfile.TemporaryDirectory(prefix='skfiy-lifecycle-') as folder:
         root = Path(folder)
-        log = (root/'chrome.log').open('w')
+        evidence_path = Path(os.environ.get('SKFIY_TEST_EVIDENCE', str(root/'evidence')))
+        evidence_path.mkdir(parents=True, exist_ok=True)
+        log = (evidence_path/'chrome.log').open('w')
+        def evidence(name):
+            folder = evidence_path/name
+            folder.mkdir()
+            return Evidence(folder)
+        extension = root/'extension'
+        shutil.copytree(ROOT/'browser-extension', extension)
+        # Test-only transport fault: real Chrome runs the production extension;
+        # only pageProbe injection on this dedicated fixture URL is rejected.
+        background = extension/'background.js'
+        background.write_text(background.read_text() + """
+const executeForFixture = chrome.scripting.executeScript.bind(chrome.scripting);
+chrome.scripting.executeScript = async options => {
+  if (options.func?.name === 'pageProbe' && (await chrome.tabs.get(options.target.tabId)).url.includes('/probe-unavailable'))
+    throw new Error('fixture renderer unavailable');
+  return executeForFixture(options);
+};
+""")
         try:
             host = root/'host'; shutil.copy2(binary, host)
             profile = root/'profile'
             subprocess.run([str(host), 'install-browser-bridge', '--user-data-dir', str(profile)], check=True, capture_output=True)
             chrome = subprocess.Popen([str(chrome_path/'Contents/MacOS/Google Chrome for Testing'),
                 f'--user-data-dir={profile}', '--headless=new', '--window-size=1000,800', '--no-first-run', '--no-default-browser-check',
-                '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={ROOT/"browser-extension"}', 'about:blank'],
+                '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'],
                 stdout=log, stderr=subprocess.STDOUT)
-            env = {'SKFIY_CURSOR': '0', 'SKFIY_APPROVE': 'ask'}
-            a = Client(binary, env=env, answer=APPROVE); clients.append(a)
-            b = Client(binary, env=env); clients.append(b)
+            env = {'SKFIY_CURSOR': '0', 'SKFIY_APPROVE': 'ask', 'SKFIY_BROWSER_TRACE': '1'}
+            a = Client(binary, evidence=evidence('a'), env=env, answer=APPROVE); clients.append(a)
+            b = Client(binary, evidence=evidence('b'), env=env); clients.append(b)
             browser = {'browser': str(chrome.pid)}
             require(wait_until(lambda: not a.call('browser_tabs', allow_error=True, **browser)['is_error'], timeout=30), 'extension connected')
             opened = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/', **browser)
@@ -153,9 +188,10 @@ def main():
             check('browser expect verifies a new success message', verified['structured']['verification']['status'] == 'verified' and receipts.get('submit') == 2)
             existing = a.call('browser_click', target='Noop', expect={'text': 'Saved 2'}, allow_error=True, **target)
             check('browser preexisting condition stays unverified', existing['is_error'] and existing['structured']['verification']['status'] == 'already_satisfied')
+            # A late final observation now times out instead of overrunning the budget.
             no_effect = a.call('browser_click', target='Noop', expect={'changed': True, 'timeout': .3}, allow_error=True, **target)
-            check('browser no-effect receipt still records sent', no_effect['is_error'] and no_effect['structured']['action']['status'] == 'sent'
-                  and no_effect['structured']['verification']['status'] == 'no_effect', no_effect)
+            check('browser no-op remains unverified and still records sent', no_effect['is_error'] and no_effect['structured']['action']['status'] == 'sent'
+                  and no_effect['structured']['verification']['status'] in ('no_effect', 'timeout'), no_effect)
             typed = a.call('browser_type', target='Message', text='verified value', clear=True, expect={'value': 'verified value'}, **target)
             check('browser field value is verified after typing', typed['structured']['verification']['status'] == 'verified')
 
@@ -170,7 +206,7 @@ def main():
             subprocess.run([str(host), 'install-browser-bridge', '--user-data-dir', str(profile2)], check=True, capture_output=True)
             chrome2 = subprocess.Popen([str(chrome_path/'Contents/MacOS/Google Chrome for Testing'),
                 f'--user-data-dir={profile2}', '--headless=new', '--window-size=2000,1000', '--no-first-run', '--no-default-browser-check',
-                '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={ROOT/"browser-extension"}', 'about:blank'], stdout=log, stderr=subprocess.STDOUT)
+                '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'], stdout=log, stderr=subprocess.STDOUT)
             other_browser = {'browser': str(chrome2.pid)}
             require(wait_until(lambda: not a.call('browser_tabs', allow_error=True, **other_browser)['is_error'], timeout=30), 'second extension connected')
             # IDs are process-local and may be randomized by Chrome. The
@@ -204,13 +240,36 @@ def main():
             a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/', **left)
             stale = a.call('browser_click', x=20, y=20, allow_error=True, **left)
             check('navigation invalidates old screenshot coordinates', stale['is_error'] and stale['structured']['action']['status'] == 'not_sent')
+            a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/nested-scroll', **left)
+            page = screenshot(left)
+            scale = int(re.search(r'Screenshot: (\d+)', page['text'])[1]) / int(re.search(r'Viewport (\d+)', page['text'])[1])
+            scroll_enabled = True
+            require(wait_until(lambda: receipts.get('inner-scrolled') == 1), 'nested container scrolled')
+            stale = a.call('browser_click', x=125*scale, y=125*scale, allow_error=True, **left)
+            check('nested scrolling refuses stale screenshot input', stale['is_error'] and stale['structured']['action']['status'] == 'not_sent'
+                  and receipts.get('inner-approve', 0) == 0 and receipts.get('inner-delete', 0) == 0)
+            screenshot(left)
+            a.call('browser_click', x=125*scale, y=125*scale, **left)
+            check('fresh screenshot coordinates work after nested scrolling', wait_until(lambda: receipts.get('inner-delete') == 1))
+
+            a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/probe-unavailable', **left)
+            started = time.monotonic()
+            unreadable = a.call('browser_wait', text='Processing', gone=True, timeout=.5, allow_error=True, **left)
+            check('renderer probe failure cannot prove text disappeared', unreadable['is_error'] and 'was gone' not in unreadable['text'])
+            check('wait respects its total budget', time.monotonic()-started < 2)
+
+            a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/upload-unreadable', **left)
+            upload = root/'post-upload.txt'; upload.write_text('fixture upload')
+            uploaded = a.call('browser_upload', target='Upload', path=str(upload), allow_error=True, **left)
+            check('upload receipt survives an unreadable result page', uploaded['is_error'] and uploaded['structured']['action']['status'] == 'sent'
+                  and 'state_error' in uploaded['structured'] and wait_until(lambda: receipts.get('upload-destroy') == 1))
             # Both browsers/profiles belong to this fixture and are disposed
             # in finally. Closing the last headless tab can stop its native
             # host before Chrome acknowledges tabs.remove().
             print(f'PASS {len(checks)}/{len(checks)} browser {suite} checks', flush=True)
         except BaseException:
             log.flush()
-            print((root/'chrome.log').read_text()[-1000:], file=sys.stderr)
+            print((evidence_path/'chrome.log').read_text()[-1000:], file=sys.stderr)
             raise
         finally:
             for client in clients: client.close()

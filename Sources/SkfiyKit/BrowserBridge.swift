@@ -60,15 +60,89 @@ private func noSigPipe(_ fd: Int32) {
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
 }
 
-private func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+private func nonblocking(_ fd: Int32) {
+    _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+}
+
+private func socketReady(_ fd: Int32, event: Int16, deadline: BrowserDeadline) -> Bool {
+    while deadline.remaining > 0 {
+        var descriptor = pollfd(fd: fd, events: event, revents: 0)
+        let ready = poll(&descriptor, 1, Int32(ceil(min(3600, deadline.remaining) * 1000)))
+        if ready < 0 && errno == EINTR { continue }
+        return ready > 0 && descriptor.revents & event != 0
+    }
+    return false
+}
+
+private func writeAll(_ fd: Int32, _ data: Data, deadline: BrowserDeadline) -> Bool {
     data.withUnsafeBytes { raw in
         var offset = 0
-        while offset < raw.count {
+        while offset < raw.count, deadline.remaining > 0 {
             let written = write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset)
-            if written <= 0 { return false }
+            if written < 0 && errno == EINTR { continue }
+            if written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if socketReady(fd, event: Int16(POLLOUT), deadline: deadline) { continue }
+                return false
+            }
+            guard written > 0 else { return false }
             offset += written
         }
-        return true
+        return offset == raw.count
+    }
+}
+
+/// Replies never run on the native browser reader. A stalled peer has a
+/// bounded queue and write deadline. Strong ownership keeps the descriptor
+/// alive until both the reader and any in-flight write have finished.
+final class BridgeClient: @unchecked Sendable {
+    let fd: Int32
+    private let lock = NSLock()
+    private var queue: [Data] = []
+    private var queuedBytes = 0
+    private var writing = false
+    private var stopped = false
+    private let timeout: TimeInterval
+    private let maximumQueuedBytes: Int
+    init(_ fd: Int32, timeout: TimeInterval = 5, maximumQueuedBytes: Int = NativeMessage.maximumBytes * 2 + 2) {
+        self.fd = fd; self.timeout = timeout; self.maximumQueuedBytes = maximumQueuedBytes
+        noSigPipe(fd); nonblocking(fd)
+    }
+    deinit { Darwin.close(fd) }
+
+    func stop() {
+        lock.lock(); defer { lock.unlock() }
+        guard !stopped else { return }
+        stopped = true; queue.removeAll(); queuedBytes = 0
+        _ = shutdown(fd, SHUT_RDWR)
+    }
+
+    func reply(_ object: [String: Any]) {
+        guard let json = try? JSONSerialization.data(withJSONObject: object) else { return }
+        let data = json + Data([10])
+        lock.lock()
+        if stopped { lock.unlock(); return }
+        guard data.count <= NativeMessage.maximumBytes + 1, queue.count < 16,
+              queuedBytes + data.count <= maximumQueuedBytes else {
+            lock.unlock(); stop(); return
+        }
+        queue.append(data); queuedBytes += data.count
+        let start = !writing
+        writing = true
+        lock.unlock()
+        if start { DispatchQueue.global(qos: .userInitiated).async { self.drain() } }
+    }
+
+    private func next() -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        guard !stopped, !queue.isEmpty else { writing = false; return nil }
+        return queue.removeFirst()
+    }
+
+    private func drain() {
+        while let data = next() {
+            guard writeAll(fd, data, deadline: BrowserDeadline(seconds: timeout)) else { stop(); return }
+            lock.lock(); if !stopped { queuedBytes -= data.count }; lock.unlock()
+        }
     }
 }
 
@@ -95,7 +169,7 @@ final class BridgeLineReader {
             let remaining = timeout - (ProcessInfo.processInfo.systemUptime - started)
             guard remaining > 0 else { return nil }
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&poller, 1, Int32(min(remaining, 3600) * 1000))
+            let ready = poll(&poller, 1, Int32(ceil(min(remaining, 3600) * 1000)))
             if ready < 0 && errno == EINTR { continue }
             guard ready > 0 else { return nil }
             let count = read(fd, &chunk, chunk.count)
@@ -151,7 +225,7 @@ extension BrowserBridge {
 
     private final class Host: @unchecked Sendable {
         private let lock = NSLock()
-        private var pending: [Int: (fd: Int32, id: Any)] = [:]
+        private var pending: [Int: (client: BridgeClient, id: Any)] = [:]
         private var nextID = 1
         private var hello: [String: Any] = [:]
         private var socketPath = ""
@@ -166,6 +240,7 @@ extension BrowserBridge {
             if server >= 0 {
                 Thread { self.acceptLoop(server) }.start()
             }
+            nonblocking(STDOUT_FILENO)
             readBrowser()
             removeOwnSocket()
             exit(0)
@@ -203,15 +278,15 @@ extension BrowserBridge {
             while true {
                 let client = accept(server, nil, nil)
                 guard client >= 0 else { continue }
-                noSigPipe(client)
-                Thread { self.serve(client) }.start()
+                let connection = BridgeClient(client)
+                Thread { self.serve(connection) }.start()
             }
         }
 
         /// One JSON request per line; the reply comes back on the same connection.
-        private func serve(_ client: Int32) {
+        private func serve(_ client: BridgeClient) {
             let reader = BridgeLineReader()
-            while let line = try? reader.line(client, timeout: 3600) {
+            while let line = try? reader.line(client.fd, timeout: 3600) {
                 guard let request = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
                 let clientID = request["id"] ?? NSNull()
                 let method = request["method"] as? String ?? ""
@@ -219,7 +294,7 @@ extension BrowserBridge {
                     lock.lock()
                     let info = hello
                     lock.unlock()
-                    reply(client, ["id": clientID, "result": info])
+                    client.reply(["id": clientID, "result": info])
                     continue
                 }
                 lock.lock()
@@ -230,26 +305,21 @@ extension BrowserBridge {
                 let message: [String: Any] = ["id": hostID, "method": method, "params": request["params"] ?? [:]]
                 guard let payload = try? JSONSerialization.data(withJSONObject: message) else { continue }
                 lock.lock()
-                FileHandle.standardOutput.write(NativeMessage.encode(payload))
+                guard writeAll(STDOUT_FILENO, NativeMessage.encode(payload), deadline: BrowserDeadline(seconds: 5)) else { exit(1) }
                 lock.unlock()
             }
             lock.lock()
-            let abandoned = pending.filter { $0.value.fd == client }.map(\.key)
-            pending = pending.filter { $0.value.fd != client }
+            let abandoned = pending.filter { $0.value.client === client }.map(\.key)
+            pending = pending.filter { $0.value.client !== client }
             // A cancelled caller closes its socket. Withdraw work still
             // waiting in the extension before its next input is dispatched.
             for id in abandoned {
                 if let data = try? JSONSerialization.data(withJSONObject: ["method": "cancel", "params": ["request_id": id]]) {
-                    FileHandle.standardOutput.write(NativeMessage.encode(data))
+                    guard writeAll(STDOUT_FILENO, NativeMessage.encode(data), deadline: BrowserDeadline(seconds: 5)) else { exit(1) }
                 }
             }
             lock.unlock()
-            close(client)
-        }
-
-        private func reply(_ fd: Int32, _ object: [String: Any]) {
-            guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
-            _ = writeAll(fd, data + Data([0x0A]))
+            client.stop()
         }
 
         private func readBrowser() {
@@ -276,7 +346,7 @@ extension BrowserBridge {
                     guard let waiter else { continue }
                     var response: [String: Any] = ["id": waiter.id]
                     if let error = message["error"] { response["error"] = error } else { response["result"] = message["result"] ?? NSNull() }
-                    reply(waiter.fd, response)
+                    waiter.client.reply(response)
                 }
             }
         }
@@ -298,28 +368,50 @@ extension BrowserBridge {
     /// One request to one browser host; blocking, so call off the main actor.
     static func request(_ socketPath: String, method: String, params: [String: Any] = [:], timeout: TimeInterval = 30,
                         cancellation: BrowserRequestCancellation? = nil) throws -> Any {
+        let budget = BrowserDeadline(seconds: min(timeout, BrowserOperation.deadline?.remaining ?? timeout))
+        var phase = "transport.connect"
+        var stageStarted = ProcessInfo.processInfo.systemUptime
+        var completed = false
+        defer { if !completed { BrowserOperation.record(phase, started: stageStarted, outcome: "error") } }
+        try budget.check()
         try cancellation?.check()
         guard var address = socketAddress(socketPath) else { throw ToolError("Bad browser socket path.") }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ToolError("Could not open a socket.") }
         defer { if let cancellation { cancellation.close(fd) } else { close(fd) } }
         try cancellation?.attach(fd)
-        noSigPipe(fd)
-        let connected = withUnsafePointer(to: &address) {
+        noSigPipe(fd); nonblocking(fd)
+        var connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
+        if connected != 0 && [EINPROGRESS, EAGAIN, EWOULDBLOCK].contains(errno) {
+            if socketReady(fd, event: Int16(POLLOUT), deadline: budget) {
+                var error: Int32 = 0
+                var size = socklen_t(MemoryLayout<Int32>.size)
+                if getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0 && error == 0 { connected = 0 }
+            }
+        }
         try cancellation?.check()
+        try budget.check()
         guard connected == 0 else {
             // Stale only when its browser is gone; a live one may just be busy.
             if errno == ECONNREFUSED || errno == ENOENT, !browserAlive(socketPath) { unlink(socketPath) }
             throw ToolError("The browser bridge at \(socketPath) is not running.")
         }
+        BrowserOperation.record(phase, started: stageStarted, outcome: "ok")
+        phase = "transport.write"; stageStarted = ProcessInfo.processInfo.systemUptime
         let request: [String: Any] = ["id": 1, "method": method, "params": params]
         let data = try JSONSerialization.data(withJSONObject: request)
         try cancellation?.check()
-        guard writeAll(fd, data + Data([0x0A])) else { throw ToolError("The browser bridge closed the connection.") }
-        let line = try BridgeLineReader().line(fd, timeout: timeout)
+        guard writeAll(fd, data + Data([0x0A]), deadline: budget) else {
+            try cancellation?.check(); try budget.check()
+            throw ToolError("The browser bridge closed the connection.")
+        }
+        BrowserOperation.record(phase, started: stageStarted, outcome: "ok")
+        phase = "transport.read"; stageStarted = ProcessInfo.processInfo.systemUptime
+        let line = try BridgeLineReader().line(fd, timeout: budget.remaining)
         try cancellation?.check()
+        try budget.check()
         guard let line,
               let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw ToolError("The browser did not answer within \(Int(timeout)) s.")
@@ -327,15 +419,21 @@ extension BrowserBridge {
         if let error = response["error"] {
             throw ToolError("Browser: \(error)")
         }
+        BrowserOperation.record(phase, started: stageStarted, outcome: "ok"); completed = true
         return response["result"] ?? NSNull()
     }
 
     static func requestAsync(_ socketPath: String, method: String, params: [String: Any] = [:], timeout: TimeInterval = 30) async throws -> Any {
         let cancellation = BrowserRequestCancellation()
+        let trace = BrowserOperation.traceID, budget = BrowserOperation.deadline
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             let result = try await Task.detached {
-                try request(socketPath, method: method, params: params, timeout: timeout, cancellation: cancellation)
+                try BrowserOperation.$traceID.withValue(trace) {
+                    try BrowserOperation.$deadline.withValue(budget) {
+                        try request(socketPath, method: method, params: params, timeout: timeout, cancellation: cancellation)
+                    }
+                }
             }.value
             try Task.checkCancellation()
             return result
@@ -351,11 +449,14 @@ extension BrowserBridge {
     }
 
     /// Live browsers with the extension connected; stale sockets are removed.
-    public static func connectedBrowsers() -> [ConnectedBrowser] {
+    public static func connectedBrowsers() -> [ConnectedBrowser] { connectedBrowsers(deadline: nil) }
+
+    static func connectedBrowsers(deadline: BrowserDeadline?) -> [ConnectedBrowser] {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: socketDirectory.path)) ?? []
         return files.filter { $0.hasSuffix(".sock") }.compactMap { file in
             let path = socketDirectory.appendingPathComponent(file).path
-            guard let info = try? request(path, method: "hello", timeout: 3) as? [String: Any] else { return nil }
+            guard (deadline?.remaining ?? 3) > 0,
+                  let info = try? request(path, method: "hello", timeout: min(3, deadline?.remaining ?? 3)) as? [String: Any] else { return nil }
             let pid = info["pid"] as? Int ?? Int(file.dropLast(5)) ?? 0
             let name = (info["browser"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 ?? NSRunningApplication(processIdentifier: pid_t(pid))?.localizedName ?? "Browser"

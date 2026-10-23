@@ -21,3 +21,31 @@ jobs:
         run: node scripts/test_browser_sessions.mjs
       - name: One-step install, setup and uninstall (throwaway HOME, fake claude/codex)
         run: make test-install
+
+  browser-integration:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      CFT_CACHE: ${{ runner.temp }}/skfiy-chrome
+      SKFIY_TEST_EVIDENCE: ${{ runner.temp }}/browser-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build
+        run: swift build
+      - name: Install disposable Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable --path "$CFT_CACHE"
+      - name: Native bridge slow-client isolation
+        run: python3 scripts/test_bridge_backpressure.py .build/debug/skfiy
+      - name: Real Chrome lifecycle and injected failures
+        run: python3 scripts/test_browser_lifecycle.py .build/debug/skfiy
+      - name: Preserve browser, MCP and phase timing logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-integration-evidence
+          path: ${{ env.SKFIY_TEST_EVIDENCE }}
+          if-no-files-found: warn
+          retention-days: 7

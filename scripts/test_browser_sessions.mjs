@@ -9,7 +9,8 @@ const event = () => ({ addListener(fn) { this.listener = fn; } });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function setup() {
   const clicks = [], effects = [], replies = [];
-  const document = { activeElement: null, defaultView: null };
+  const listeners = {};
+  const document = { activeElement: null, defaultView: null, addEventListener(name, fn) { listeners[name] = fn; } };
   class Element {
     constructor(tag, label = '') {
       Object.assign(this, { nodeType: 1, tagName: tag, innerText: label, textContent: label, children: [], childNodes: [],
@@ -61,7 +62,7 @@ function setup() {
   const context = vm.createContext({ chrome, navigator: {}, crypto: { randomUUID }, URL, setTimeout: fn => { queueMicrotask(fn); }, console });
   vm.runInContext(source, context);
   const control = () => ({ cancelled: false, check() { if (this.cancelled) throw new Error('cancelled'); } });
-  return { page, context, chrome, tab, clicks, effects, replies, approve, remove, setButtons, nativePort, control,
+  return { page, context, chrome, tab, clicks, effects, replies, approve, remove, setButtons, nativePort, control, listeners,
     state: (session = 'A') => context.dispatchRequest('state', { tab_id: 7, session_id: session }, control()),
     act: (state, params = {}, owner = control()) => context.dispatchRequest('act', { tab_id: 7, session_id: state.session_id,
       snapshot_id: state.snapshot_id, action: 'click', index: 0, ...params }, owner).then(result => { if (result.error) throw new Error(result.error); return result; }),
@@ -177,5 +178,42 @@ await test('changed observes checkbox state even when its text stays the same', 
   const after = await s.context.dispatchRequest('observe', params, s.control());
   assert.equal(before.text, after.text);
   assert.notEqual(before.treeText, after.treeText);
+});
+await test('inner scrolling invalidates coordinates even before the scroll event arrives', async () => {
+  const s = setup();
+  s.approve.scrollHeight = 300;
+  s.page.document.elementFromPoint = () => s.approve.scrollTop ? s.remove : s.approve;
+  const state = await s.state();
+  s.approve.scrollTop = 100;
+  await assert.rejects(s.act(state, { index: null, x: 5, y: 5, coordinate_geometry: state.geometry }), /geometry|content changed/);
+  assert.deepEqual(s.clicks, []);
+});
+await test('capture scroll events invalidate a previously untracked container', async () => {
+  const s = setup(), state = await s.state();
+  s.listeners.scroll();
+  await assert.rejects(s.act(state, { index: null, x: 5, y: 5, coordinate_geometry: state.geometry }), /geometry|content changed/);
+});
+await test('failed, incomplete and navigating probes never report absent text', async () => {
+  for (const mode of ['failed', 'missing-top', 'frame-error', 'navigating', 'readable']) {
+    const s = setup();
+    s.chrome.scripting.executeScript = async () => {
+      if (mode === 'failed') throw new Error('renderer unavailable');
+      if (mode === 'missing-top') return [{ frameId: 2, result: { found: false, quietMs: 1000 } }];
+      if (mode === 'navigating') s.tab.url += 'next';
+      const frames = [{ frameId: 0, result: { found: false, quietMs: 1000 } }];
+      if (mode === 'frame-error') frames.push({ frameId: 2, error: { message: 'unreadable' } });
+      return frames;
+    };
+    const result = await s.context.dispatchRequest('probe', { tab_id: 7, session_id: 'A', text: 'Processing' }, s.control());
+    assert.equal(result.found, mode === 'readable' ? false : null);
+    assert.equal(result.loading, mode !== 'readable');
+  }
+});
+await test('expired native request cannot dispatch input', async () => {
+  const s = setup(), state = await s.state();
+  await s.nativePort.onMessage.listener({ id: 99, method: 'act', params: { tab_id: 7, session_id: 'A',
+    snapshot_id: state.snapshot_id, action: 'click', index: 0, deadline_at: Date.now() - 1 } });
+  assert.deepEqual(s.clicks, []);
+  assert.match(s.replies.find(r => r.id === 99).error, /timed out/);
 });
 console.log(`PASS ${passed}/${passed} browser session tests`);

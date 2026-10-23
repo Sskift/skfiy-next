@@ -11,6 +11,7 @@ make build          # swift build
 make test           # 单元测试（swift-testing）
 python3 scripts/test_browser_lifecycle.py .build/debug/skfiy  # 两个真实 MCP 会话 + 两个临时 Chrome：跨会话取消、同名 tab、坐标缓存、结果验证及防重复提交
 python3 scripts/test_browser_lifecycle.py .build/debug/skfiy outcomes  # 单独验证结果回执与多浏览器；lifecycle 单独跑生命周期，默认 all
+python3 scripts/test_bridge_backpressure.py .build/debug/skfiy  # 临时 HOME 中的真实 host/socket：慢客户端隔离和写入超时
 python3 scripts/test_read_modes.py .build/debug/skfiy  # 自建原生应用：纯树/增量读取、缓存失效和完整刷新；输出 P50/P95
 node scripts/test_browser_sessions.mjs  # 浏览器快照绑定、坐标版本、动作回执、跨会话引用与取消；不依赖桌面
 node scripts/test_electron_rendering_lease.mjs  # 不依赖桌面的渲染租约与恢复测试
@@ -30,6 +31,12 @@ python3 eval/run_eval.py            # 真实任务：交给无头 `claude -p`（
 skfiy call get_app_state '{"app":"Finder"}'   # 单次调用调试，截图存到 /tmp/skfiy-screenshot.jpg
 swift scripts/make_extension_icons.swift browser-extension   # 重新画插件图标（browser-extension/icon-*.png，已入库）；之后跑 make embed-extension
 ```
+
+浏览器 CI 另起 `browser-integration` 任务，下载 Chrome for Testing，用全新 profile 跑真实页面和受控故障：内层列表滚动、探测失败、上传后页面不可读、重复提交与多会话取消。Swift 测试另外覆盖丢失上传回执、写入堵塞和共享超时预算；Node 测试覆盖滚动事件尚未送达、导航中及子 frame 读取失败。它们不会连接个人浏览器。`CFT_CACHE` 可指定测试浏览器缓存，兼容 Intel 和 Apple Silicon。
+
+设置 `SKFIY_TEST_EVIDENCE` 为一个空目录可保存这次浏览器集成测试的 Chrome 日志、MCP 记录和截图；CI 无论成功或失败都上传该目录。测试只在临时复制的扩展中注入页面探测故障，生产扩展没有故障开关。
+
+排查延迟可用 `SKFIY_BROWSER_TRACE=1`：stderr 输出每次调用的 request ID、阶段、耗时和剩余预算，包括 discover、transport.connect/write/read、state、act、observe、screenshot。阶段日志不包含网址、页面文字、输入或文件路径；默认关闭。`browser_wait.timeout` 包含发现浏览器、探测和最终读取；预算耗尽时不再额外读取页面，也不解除重复提交保护。`expect.timeout` 限制动作后的验证阶段；最后一次观察来不及时返回 timeout，已发送回执保持不变。普通浏览器调用共享 60 秒执行预算，带 expect 时加入其验证预算，下载等待使用指定的 timeout；上传征求用户同意所花的时间不计入执行预算。
 
 `make smoke-web` / `make smoke-browser` 先运行 `python3 scripts/compat_baseline.py <skfiy> --test-browser`：第一次会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，然后在后台用全新的临时 profile 启动它（加载插件、打开本地测试页服务 `scripts/compat_server.py` 上的 `scripts/fixtures/web.html`），不碰你自己的浏览器。`eval/run_eval.py` 也用这个测试浏览器。测试脚本共用 `scripts/harness.py` 里的 MCP 客户端：它不写你的操作日志；需要你同意的操作（例如上传文件），由测试按脚本里写好的回答答复。
 

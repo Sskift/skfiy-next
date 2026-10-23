@@ -49,7 +49,7 @@ CASES = ['textedit', 'preview', 'finder', 'chrome', 'chrome-extension', 'electro
 RESULTS = ROOT / 'eval/results'
 DOCS = ROOT / 'docs'
 GUARDED = ['TextEdit', 'Preview', 'Finder', 'Google Chrome for Testing', 'Electron']
-CFT_GLOB = 'chrome/*/chrome-mac-arm64/Google Chrome for Testing.app'
+CFT_GLOB = 'chrome/*/chrome-mac-*/Google Chrome for Testing.app'
 ELECTRON = Path.home() / '.cache/skfiy-test/electron/node_modules/electron/dist/Electron.app'
 
 
@@ -699,7 +699,7 @@ def launch_chrome(binary, url='about:blank', restart=False, fresh=False):
 
 
 def chrome_app():
-    found = sorted((Path.home() / '.cache/skfiy-test').glob(CFT_GLOB))
+    found = sorted(Path(os.environ.get('CFT_CACHE', str(Path.home() / '.cache/skfiy-test'))).glob(CFT_GLOB))
     return found[-1] if found else None
 
 

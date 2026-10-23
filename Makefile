@@ -46,6 +46,7 @@ smoke-web: build
 # Web pages through the browser bridge extension, in a throwaway Chrome for Testing.
 smoke-browser: build
 	python3 scripts/test_bridge_host.py .build/debug/skfiy
+	python3 scripts/test_bridge_backpressure.py .build/debug/skfiy
 	python3 scripts/compat_baseline.py .build/debug/skfiy --test-browser
 	python3 scripts/smoke_browser.py .build/debug/skfiy
 

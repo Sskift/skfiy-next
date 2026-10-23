@@ -14,7 +14,10 @@ final class BrowserTools {
     private let discover: () async -> [ConnectedBrowser]
     private let request: (ConnectedBrowser, String, [String: Any], TimeInterval) async throws -> Any
 
-    init(discover: @escaping () async -> [ConnectedBrowser] = { await Task.detached { BrowserBridge.connectedBrowsers() }.value },
+    init(discover: @escaping () async -> [ConnectedBrowser] = {
+             let budget = BrowserOperation.deadline
+             return await Task.detached { BrowserBridge.connectedBrowsers(deadline: budget) }.value
+         },
          request: @escaping (ConnectedBrowser, String, [String: Any], TimeInterval) async throws -> Any = { browser, method, params, timeout in
              try await BrowserBridge.requestAsync(browser.socketPath, method: method, params: params, timeout: timeout)
          }) {
@@ -33,9 +36,29 @@ final class BrowserTools {
     """
 
     func call(_ name: String, _ args: Arguments) async throws -> ToolResult {
+        let seconds: Double
+        if name == "browser_wait" { seconds = try WaitEngine(args).timeout }
+        else if name == "browser_downloads", ["wait", "start"].contains(args.string("action") ?? "list") {
+            seconds = try args.double("timeout") ?? 30
+            guard seconds.isFinite, (0.5...600).contains(seconds) else { throw ToolError("timeout must be between 0.5 and 600 seconds.") }
+        } else { seconds = 60 + ((try? ActionExpectation(args.values["expect"]))?.timeout ?? 0) }
+        let trace = ProcessInfo.processInfo.environment["SKFIY_BROWSER_TRACE"] == "1" ? UUID().uuidString : nil
+        return try await BrowserOperation.$traceID.withValue(trace) {
+            try await BrowserOperation.$deadline.withValue(BrowserDeadline(seconds: seconds)) {
+                let started = ProcessInfo.processInfo.systemUptime
+                var outcome = "error"
+                defer { BrowserOperation.record(name, started: started, outcome: outcome) }
+                let result = try await callWithReceipt(name, args)
+                outcome = result.isError ? "error" : "ok"
+                return result
+            }
+        }
+    }
+
+    private func callWithReceipt(_ name: String, _ args: Arguments) async throws -> ToolResult {
         do { return try await callUnchecked(name, args) }
         catch {
-            guard ["browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover"].contains(name) else { throw error }
+            guard ["browser_click", "browser_type", "browser_select", "browser_press_key", "browser_scroll", "browser_hover", "browser_upload"].contains(name) else { throw error }
             return BrowserActionOutcome(status: "not_sent", detail: "\(error)").result
         }
     }
@@ -161,6 +184,7 @@ final class BrowserTools {
         }
         let tab = BrowserTab(browser, tabID)
         let before = try await observe(browser, params: params, includeTarget: true)
+        if params["coordinate_geometry"] != nil { params["coordinate_target"] = before.raw["identity"] }
         let label = before.raw["label"] as? String ?? ""
         let signatureParts: [String: Any] = ["action": name, "identity": before.raw["identity"] ?? "", "text": params["text"] ?? "",
             "key": params["key"] ?? "", "submit": params["submit"] ?? false, "option": params["option"] ?? "",
@@ -199,22 +223,28 @@ final class BrowserTools {
             // value only when requested; otherwise page text/fields are the
             // stable baseline even if navigation removes that target.
             if !observeValue { baseline.value = nil }
-            let verdict = await expectation.verify(before: baseline, now: { Date().timeIntervalSince(started) },
-                sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
-                observe: { try await self.observe(browser, params: params, includeTarget: observeValue).observation })
+            let verdict = await BrowserOperation.$deadline.withValue(BrowserDeadline(seconds: min(expectation.timeout, BrowserOperation.deadline?.remaining ?? expectation.timeout))) {
+                await expectation.verify(before: baseline, now: { Date().timeIntervalSince(started) },
+                    sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+                    observe: { try await self.observe(browser, params: params, includeTarget: observeValue).observation })
+            }
             outcome.verification = verdict.status.rawValue
             outcome.detail = verdict.line(risky: risky) + "\n" + outcome.detail
             if risky { repeatGuard.performed(app: tab.guardKey, signature: signature, label: name + " " + label, verified: verdict.status == .verified) }
         } else if risky {
             outcome.detail += "\nThis action can submit or send twice. Read browser_state before repeating it; pass expect to verify its effect."
         }
-        var result = outcome.result
+        return await followingState(outcome.result, browser: browser, tabID: tabID)
+    }
+
+    private func followingState(_ receipt: ToolResult, browser: ConnectedBrowser, tabID: Int) async -> ToolResult {
+        var result = receipt
         if Task.isCancelled { return result }
         do {
             let latest = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
             result.text += "\n" + latest.text
         } catch {
-            result.text += "\nThe input was sent, but the following state could not be read: \(error). Inspect browser_state before retrying."
+            result.text += "\nThe acknowledged action is unchanged, but the following state could not be read: \(error). Inspect browser_state before retrying."
             result.isError = true
             result.structuredContent?["state_error"] = "\(error)"
         }
@@ -335,7 +365,9 @@ final class BrowserTools {
         let names = files.map(\.name).joined(separator: ", ")
         let size = ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)
         let from = files.count == 1 ? files[0].path : (files[0].path as NSString).deletingLastPathComponent
+        let approvalStarted = ProcessInfo.processInfo.systemUptime
         let allowed = await askUser?("skfiy wants to upload \(names) (\(size), from \(from)) to \(site).")
+        BrowserOperation.deadline?.exclude(ProcessInfo.processInfo.systemUptime - approvalStarted)
         switch allowed {
         case nil: throw ToolError("Uploading sends a file to a website, so the user must approve it, and this client cannot ask them. Tell the user which file to attach.")
         case false?: throw ToolError("The user declined uploading \(names). Do not ask again; tell them what is left to do.")
@@ -355,14 +387,20 @@ final class BrowserTools {
             let mime = UTType(filenameExtension: (file.name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             parts.append(["token": token, "name": file.name, "mime": mime])
         }
-        let result = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-commit",
-                                                     "files": parts], timeout: 30) as? [String: Any] ?? [:]
-        if let error = result["error"] as? String { throw ToolError("\(names) was not attached: \(error).") }
-        // No message means the page never confirmed it; saying "attached" then would be a guess.
-        guard let attached = result["message"] as? String else {
-            throw ToolError("The page did not confirm that \(names) was attached. Check the tab with browser_state before trying again.")
+        let result: [String: Any]
+        do {
+            result = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-commit",
+                                                      "files": parts], timeout: 30) as? [String: Any] ?? [:]
+        } catch {
+            return BrowserActionOutcome(status: (error as? BrowserActionFailure)?.status ?? "unknown",
+                detail: "Upload acknowledgement unavailable: \(error). Inspect browser_state before retrying; the file may already be attached.").result
         }
-        return try await state(browser, tabID: tabID, prefix: attached + ", with the user's approval.", screenshot: false)
+        let attached = result["message"] as? String
+        let receipt = BrowserActionOutcome(status: result["action_status"] as? String ?? "unknown",
+            verification: attached == nil ? "unknown" : "not_requested",
+            detail: attached.map { $0 + ", with the user's approval." }
+                ?? "The page did not confirm attachment. Inspect browser_state before retrying.").result
+        return await followingState(receipt, browser: browser, tabID: tabID)
     }
 
     /// Asks the page a few times a second, sending it nothing, until a text
@@ -375,20 +413,27 @@ final class BrowserTools {
         engine.interval = 0.25
         let text = engine.text ?? ""
         let browser = try await browser(for: args, tabID: tabID)
+        engine.timeout = min(engine.timeout, BrowserOperation.deadline?.remaining ?? engine.timeout)
         let started = Date()
         let result = await engine.run(
             now: { Date().timeIntervalSince(started) },
             sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
-            check: { if EmergencyStop.isStopped { throw WaitStopped(EmergencyStop.refusal) } },
+            check: {
+                if EmergencyStop.isStopped { throw WaitStopped(EmergencyStop.refusal) }
+                try BrowserOperation.deadline?.check()
+            },
             observe: {
                 let probe = (try? await self.send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
                 let quiet = probe["loading"] as? Bool == false && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
-                return WaitObservation(found: probe["found"] as? Bool, settled: quiet)
+                return WaitObservation(found: probe["loading"] as? Bool == false ? probe["found"] as? Bool : nil, settled: quiet)
             })
         if case .cancelled = result { throw CancellationError() }
         if case .stopped(_, let reason) = result { throw ToolError(reason) }
-        var state = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
         let met = if case .met = result { true } else { false }
+        // A timed-out wait must not start another full state request or clear
+        // the repeat guard. The caller can explicitly read state next.
+        guard met else { return ToolResult(text: engine.describe(result), isError: true) }
+        var state = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
         let waited = formatNumber((result.seconds * 10).rounded() / 10)
         state.text = (!text.isEmpty ? engine.describe(result)
             : met ? "The page finished loading and stopped changing after \(waited) s." : "The page was still loading or changing after \(waited) s.")
@@ -485,7 +530,11 @@ final class BrowserTools {
             }
             params["snapshot_id"] = snapshot
         }
-        let result = try await request(browser, method, params, timeout)
+        let limit = min(timeout, BrowserOperation.deadline?.remaining ?? timeout)
+        params["deadline_at"] = Date().timeIntervalSince1970 * 1000 + limit * 1000
+        let result = try await BrowserOperation.phase(method, requireTimelyResult: method != "act") {
+            try await request(browser, method, params, limit)
+        }
         try Task.checkCancellation()
         if method == "act", let receipt = result as? [String: Any], let error = receipt["error"] as? String {
             throw BrowserActionFailure(status: receipt["action_status"] as? String ?? "unknown", description: error)
@@ -505,12 +554,12 @@ final class BrowserTools {
         return result
     }
 
-    private func connected() async -> [ConnectedBrowser] {
-        await discover()
+    private func connected() async throws -> [ConnectedBrowser] {
+        try await BrowserOperation.phase("discover") { await discover() }
     }
 
     private func browser(for args: Arguments, tabID: Int?) async throws -> ConnectedBrowser {
-        let browsers = await connected()
+        let browsers = try await connected()
         try Task.checkCancellation()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
         if let wanted = args.string("browser"), !wanted.isEmpty {
@@ -561,7 +610,7 @@ final class BrowserTools {
     }
 
     private func tabs(_ args: Arguments) async throws -> ToolResult {
-        var browsers = await connected()
+        var browsers = try await connected()
         guard !browsers.isEmpty else { throw ToolError(Self.notConnected) }
         if let wanted = args.string("browser"), !wanted.isEmpty {
             browsers = try Self.matching(wanted, in: browsers)

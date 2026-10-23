@@ -4,6 +4,15 @@ import Testing
 @testable import SkfiyKit
 
 struct BridgeReaderTests {
+    @Test func replyQueueOverflowClosesOnlyThatConnection() throws {
+        let (peer, fd) = try pair()
+        defer { Darwin.close(peer) }
+        let client = BridgeClient(fd, maximumQueuedBytes: 100)
+        client.reply(["result": String(repeating: "x", count: 1000)])
+        #expect(try BridgeLineReader().line(peer, timeout: 1) == nil)
+        withExtendedLifetime(client) {}
+    }
+
     private func pair() throws -> (Int32, Int32) {
         var pair: [Int32] = [0, 0]
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
