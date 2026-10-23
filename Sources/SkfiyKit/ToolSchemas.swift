@@ -19,6 +19,8 @@ struct Tool {
         static let whileStopped = Traits(rawValue: 1 << 5)
         /// Recorded in the action log: by default the tools that are not read only.
         static let recorded = Traits(rawValue: 1 << 6)
+        /// Browser outcome checks, handled by BrowserTools (no native window_id).
+        static let browserVerifiable = Traits(rawValue: 1 << 7)
     }
 
     let name: String
@@ -89,6 +91,13 @@ public enum ToolSchemas {
     ) -> Tool {
         var traits = traits
         if recorded ?? !readOnly { traits.insert(.recorded) }
+        var properties = properties
+        if traits.contains(.browserVerifiable) {
+            var browserVerification = verification
+            browserVerification.removeValue(forKey: "window_id")
+            browserVerification["expect"] = ["type": ["object", "string"], "description": "Verify text, text_gone, value, value_changes or changed in the page; optional timeout 0.2–30 s. The result separates action.status (sent/not_sent/unknown) from verification.status. Unknown effects must be inspected before retrying; passwords cannot be verified by value."]
+            properties.merge(browserVerification) { current, _ in current }
+        }
         return Tool(name: name, traits: traits, definition: [
             "name": name,
             "description": description,
@@ -156,6 +165,8 @@ public enum ToolSchemas {
             properties: [
                 "app": app,
                 "window": ["type": "string", "description": "Optional window id (as shown in the state) or title (or part of it) to inspect instead of the focused window; it is not raised, and actions then go to it. Windows sharing a title need the id"],
+                "screenshot": ["type": "boolean", "description": "Defaults to true. false reads only the accessibility tree and skips capture (unless ocr:true); screenshot coordinates are then invalid. While locked a screenshot is still required to observe the app"],
+                "incremental": ["type": "boolean", "description": "Opt in to reusing recent unchanged AX nodes with since; value notifications refresh individual nodes, structural notifications force a full read. A full read is forced after 2 s or 4 looks. Omit for a full tree; ignored while locked"],
                 "find": ["type": "string", "description": "Optional text: list only the tree lines containing it (with their containers), to keep large trees short. Indices stay those of the full tree"],
                 "ocr": ["type": "boolean", "description": "Also list the text recognized in the screenshot, with x/y to click it. On by default for windows that publish no accessibility (custom-drawn apps such as WeChat); pass true for text drawn in a canvas or image elsewhere"],
                 "since": ["type": "string", "description": "The State version of an earlier get_app_state or wait_for of this app (e.g. \"v12\"): return only what changed since — lines changed, added or removed, windows opened or closed — keeping that look's element indices; \"unchanged\" without a screenshot when nothing changed. Falls back to the full state when the version is unknown or most of the window changed"]
@@ -506,7 +517,7 @@ public enum ToolSchemas {
                 "prompt_text": ["type": "string", "description": "Text to answer a prompt() with (default: the prompt's own default)"]
             ],
             required: ["tab_id"],
-            traits: [.target]
+            traits: [.target, .browserVerifiable]
         ),
         tool(
             "browser_type",
@@ -519,21 +530,21 @@ public enum ToolSchemas {
                 "trusted": trusted
             ],
             required: ["tab_id", "text"],
-            traits: [.target]
+            traits: [.target, .browserVerifiable]
         ),
         tool(
             "browser_select",
             "Choose an option of a <select> element by its visible text or value.",
             properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "option": ["type": "string", "description": "Option text or value"]],
             required: ["tab_id", "option"],
-            traits: [.target]
+            traits: [.target, .browserVerifiable]
         ),
         tool(
             "browser_press_key",
             "Press a key in a tab, on an element by index or the focused element: Enter, Escape, Tab, Backspace, Delete, arrows, PageDown/PageUp, Home/End, single characters, or combos like cmd+a. Enter submits forms.",
             properties: ["tab_id": tab, "index": pageIndex, "browser": browserName, "key": ["type": "string", "description": "Key or combination"], "trusted": trusted],
             required: ["tab_id", "key"],
-            traits: [.target]
+            traits: [.target, .browserVerifiable]
         ),
         tool(
             "browser_scroll",
@@ -546,7 +557,7 @@ public enum ToolSchemas {
                 "max_scrolls": ["type": "integer", "minimum": 1, "maximum": 20, "description": "With until: maximum scroll attempts, defaults to 5; target optionally identifies the container, index is not allowed"]
             ],
             required: ["tab_id", "direction"],
-            traits: [.target]
+            traits: [.target, .browserVerifiable]
         ),
         tool(
             "browser_close_tab",

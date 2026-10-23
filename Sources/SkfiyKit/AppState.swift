@@ -81,11 +81,24 @@ extension ComputerUse {
         let base = since.flatMap { version in stateHistory[pid]?.last { $0.version == version } }
         let keeping = base.flatMap { base in sessions[pid].flatMap { $0.epoch == base.epoch ? $0 : nil } }
 
+        let includeScreenshot = args.bool("screenshot") ?? true
+        let incremental = args.bool("incremental") ?? false
+        if incremental, args.string("find") != nil { throw ToolError("incremental and find cannot be combined.") }
+        var readCache: TreeReadCache?
+        if incremental {
+            for (cachedPID, observed) in stateReadCaches where NSRunningApplication(processIdentifier: cachedPID)?.isTerminated != false {
+                observed.events.stop(); stateReadCaches[cachedPID] = nil
+            }
+            if stateReadCaches[pid] == nil { stateReadCaches[pid] = ObservedTreeCache(pid: pid) }
+            readCache = stateReadCaches[pid]?.cache
+            readCache?.begin(reuse: keeping != nil)
+        } else { stateReadCaches[pid]?.cache.invalidate() }
+
         // Hidden or minimized windows are left alone: unhiding would restack
         // the user's windows. The tree still works; only pixels are missing.
         let windowQuery = args.string("window")?.trimmingCharacters(in: .whitespaces)
         var snapshot = try buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil,
-                                         keeping: keeping?.elements)
+                                         keeping: keeping?.elements, cache: readCache)
         if !appIsHidden(app), snapshot.shownWindow?.bool(kAXMinimizedAttribute) != true,
            let window = snapshot.shownWindow.flatMap(windowID(of:)),
            chromiumWindowFrozen(app, window: window) || electronRendering.isLive(pid: pid, window: window),
@@ -94,9 +107,10 @@ extension ComputerUse {
             // The initial tree may be frozen. Rebuild it after real frames have
             // completed, with the same window and numbering rules as before.
             accessibilityRefresh(pid)
+            readCache?.invalidate()
             await enableAccessibility(app, appElement)
             snapshot = try buildSnapshot(app: app, appElement: appElement, windowQuery: windowQuery?.isEmpty == false ? windowQuery : nil,
-                                         keeping: keeping?.elements)
+                                         keeping: keeping?.elements, cache: readCache)
         }
         var screenshot: Screenshot?
         var captureNote: String?
@@ -107,7 +121,9 @@ extension ComputerUse {
         let inspected = snapshot.chosenWindow.flatMap { independentWindow($0, pid: pid) }
         let hidden = appIsHidden(app)
         let inspectedPresence = inspected.map { presence(of: $0.id, app: app) }
-        if hidden || minimized {
+        if !includeScreenshot && args.bool("ocr") != true {
+            captureNote = "Tree only: pixels were not captured or compared; screenshot coordinates are unavailable."
+        } else if hidden || minimized {
             captureNote = "No screenshot: " + (hidden ? "the app is hidden" : "the window is minimized") + ", and skfiy does not bring windows forward (that would put them over the user's screen). Accessibility actions by element_index still work" + (hidden ? ", and so does the keyboard." : ".")
         } else if inspectedPresence == .otherDesktop {
             captureNote = "No screenshot: the window is on another desktop (Space) or in a full-screen space, and skfiy does not switch desktops. Accessibility actions by element_index still work."
@@ -133,7 +149,9 @@ extension ComputerUse {
             guard comparable, let then = base?.fingerprint, let now = fingerprint else { return false }
             return !now.changed(from: then)
         }()
-        let shotLine = screenshot.map { screenshotLine($0.geometry) } ?? captureNote ?? ""
+        let shotLine = !includeScreenshot && screenshot != nil
+            ? "Pixels were captured for OCR only; no screenshot is attached and screenshot coordinates are unavailable."
+            : screenshot.map { screenshotLine($0.geometry) } ?? captureNote ?? ""
         // Text only in the pixels: the whole window when it publishes no
         // accessibility, or on request (canvas, images). Unchanged pixels
         // read the same: the last recognition is reused.
@@ -166,13 +184,13 @@ extension ComputerUse {
             snapshot.body = found.lines
         }
         let previousZoom = sessions[pid]?.zoom
-        sessions[pid] = AppSession(elements: snapshot.elements, geometry: screenshot?.geometry, window: snapshot.chosenWindow, epoch: keeping?.epoch)
+        sessions[pid] = AppSession(elements: snapshot.elements, geometry: includeScreenshot ? screenshot?.geometry : nil, window: snapshot.chosenWindow, epoch: keeping?.epoch)
         // An older zoom_id is then refused as belonging to an older screenshot.
         sessions[pid]?.zoom = previousZoom
         sessions[pid]?.windowID = shownWindow.flatMap(windowID(of:))
         sessions[pid]?.windowFrame = shownWindow?.frame
-        sessions[pid]?.shownFingerprint = fingerprint
-        sessions[pid]?.independent = inspected != nil && screenshot != nil
+        sessions[pid]?.shownFingerprint = includeScreenshot ? fingerprint : nil
+        sessions[pid]?.independent = includeScreenshot && inspected != nil && screenshot != nil
         sessions[pid]?.knownWindows = appWindowIDs(pid)
         if screenshot != nil, chromiumWindowFrozen(app, window: sessions[pid]?.windowID) {
             snapshot.header.append(frozenNote(app))
@@ -186,11 +204,18 @@ extension ComputerUse {
         }
         snapshot.header.append("State: \(version)" + (since == nil ? "" : " (compared with \(since!))") + ". Pass since: \"\(version)\" next time to get only what changed.")
 
+        if incremental {
+            snapshot.header.append(readCache == nil ? "Incremental reads unavailable: the app has no accessibility notifications; a full tree was read."
+                : "Incremental tree: unchanged nodes may be reused for up to 2 s; a full read is forced at least every 4 looks. Omit incremental for a full read.")
+        }
+        var metrics: [String: Any] = ["tree": ["cached_nodes": readCache?.attributes.hits ?? 0, "fresh_nodes": readCache?.attributes.misses ?? snapshot.elements.count],
+            "capture": screenshot != nil, "screenshot_attached": includeScreenshot && screenshot != nil]
+
         let full = { (note: String?) -> ToolResult in
             var snapshot = snapshot
             snapshot.header.append(shotLine)
             if let note { snapshot.header.append(note) }
-            return ToolResult(text: snapshot.text, image: screenshot?.data, imageMimeType: screenshot?.mimeType ?? "image/jpeg")
+            return ToolResult(text: snapshot.text, image: includeScreenshot ? screenshot?.data : nil, imageMimeType: screenshot?.mimeType ?? "image/jpeg", structuredContent: metrics)
         }
         guard let since else { return full(nil) }
         guard let base else {
@@ -201,10 +226,13 @@ extension ComputerUse {
                         + "; the full state follows.")
         }
         let diff = StateDiff.compare(old: base.lines, new: snapshot.body, oldWindows: base.windows, newWindows: snapshot.windows)
-        if diff.isEmpty, pixelsSame {
+        if diff.isEmpty, pixelsSame || (!includeScreenshot && args.bool("ocr") != true) {
+            metrics["screenshot_attached"] = false
             var header = snapshot.header
-            header.append("Unchanged since \(since): the tree, the windows and the pixels are the same, so no screenshot is attached. Element indices of \(since) still hold.")
-            return ToolResult(text: header.filter { !$0.isEmpty }.joined(separator: "\n"))
+            header.append(pixelsSame
+                ? "Unchanged since \(since): the tree, the windows and the pixels are the same, so no screenshot is attached. Element indices of \(since) still hold."
+                : "Unchanged tree and windows since \(since); pixels were not captured or compared. Element indices still hold.")
+            return ToolResult(text: header.filter { !$0.isEmpty }.joined(separator: "\n"), structuredContent: metrics)
         }
         if diff.isLarge(comparedTo: snapshot.body.count) {
             return full("Most of the window changed since \(since) (\(diff.summary)); the full state follows. Elements that stayed kept their indices.")
@@ -213,7 +241,8 @@ extension ComputerUse {
         header.append(pixelsSame ? "The pixels are the same as in \(since); no screenshot is attached." : shotLine)
         header.append("Changes since \(since): \(diff.summary). Lines not listed are unchanged, with the same indices; new elements got new indices.")
         let text = (header.filter { !$0.isEmpty } + [""] + diff.render()).joined(separator: "\n")
-        return ToolResult(text: text, image: pixelsSame ? nil : screenshot?.data, imageMimeType: screenshot?.mimeType ?? "image/jpeg")
+        metrics["screenshot_attached"] = includeScreenshot && !pixelsSame && screenshot != nil
+        return ToolResult(text: text, image: pixelsSame || !includeScreenshot ? nil : screenshot?.data, imageMimeType: screenshot?.mimeType ?? "image/jpeg", structuredContent: metrics)
     }
 
     /// A window as the window server knows it, for capturing it on its own.
@@ -266,9 +295,9 @@ extension ComputerUse {
         var text: String { (header.filter { !$0.isEmpty } + [""] + body).joined(separator: "\n") }
     }
 
-    func buildSnapshot(app: NSRunningApplication, appElement: AXUIElement, windowQuery: String?, keeping: [AXUIElement]? = nil) throws -> Snapshot {
+    func buildSnapshot(app: NSRunningApplication, appElement: AXUIElement, windowQuery: String?, keeping: [AXUIElement]? = nil, cache: TreeReadCache? = nil) throws -> Snapshot {
         let pid = app.processIdentifier
-        let builder = AXTreeBuilder()
+        let builder = AXTreeBuilder(cache: cache)
         let values = appElement.multipleValues([
             kAXWindowsAttribute, kAXFocusedWindowAttribute, kAXMainWindowAttribute,
             kAXMenuBarAttribute, kAXChildrenAttribute, kAXFocusedUIElementAttribute
@@ -289,12 +318,15 @@ extension ComputerUse {
 
         var renderer = TreeRenderer { ref, info in
             let element = builder.elements[ref]
-            let settable = Self.settableRoles.contains(info.role) && element.isSettable(kAXValueAttribute)
-            var scroll: Double?
-            if info.role == "AXScrollArea", let bar = element.element(kAXVerticalScrollBarAttribute) {
-                scroll = (bar.value(kAXValueAttribute) as? NSNumber)?.doubleValue
+            let read = { () -> NodeDetails in
+                let settable = Self.settableRoles.contains(info.role) && element.isSettable(kAXValueAttribute)
+                var scroll: Double?
+                if info.role == "AXScrollArea", let bar = element.element(kAXVerticalScrollBarAttribute) {
+                    scroll = (bar.value(kAXValueAttribute) as? NSNumber)?.doubleValue
+                }
+                return NodeDetails(actions: element.actionNames(), settable: settable, verticalScroll: scroll)
             }
-            return NodeDetails(actions: element.actionNames(), settable: settable, verticalScroll: scroll)
+            return cache?.details.read(ElementKey(element), read) ?? read()
         }
         // Keeping an earlier numbering: elements seen then keep their index,
         // new ones are numbered after all of them.

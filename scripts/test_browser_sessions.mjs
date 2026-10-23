@@ -35,7 +35,8 @@ function setup() {
   const setButtons = buttons => { body.children = body.childNodes = buttons; for (const el of buttons) el.parentElement = body; };
   setButtons([approve, remove]);
   const page = vm.createContext({ document, window, location: { href: 'https://fixture.invalid/' }, Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
-    innerWidth: 800, innerHeight: 600, getComputedStyle: style, PointerEvent: class {}, MouseEvent: class {}, HTMLElement: Element });
+    innerWidth: 800, innerHeight: 600, getComputedStyle: style, PointerEvent: class {}, MouseEvent: class {}, HTMLElement: Element, crypto: { randomUUID },
+    MutationObserver: class { observe() {} takeRecords() { return []; } } });
   const nativePort = { onMessage: event(), onDisconnect: event(), postMessage: message => replies.push(message) };
   const tab = { id: 7, windowId: 1, status: 'complete', active: true, url: 'https://fixture.invalid/' };
   const stored = {};
@@ -63,7 +64,7 @@ function setup() {
   return { page, context, chrome, tab, clicks, effects, replies, approve, remove, setButtons, nativePort, control,
     state: (session = 'A') => context.dispatchRequest('state', { tab_id: 7, session_id: session }, control()),
     act: (state, params = {}, owner = control()) => context.dispatchRequest('act', { tab_id: 7, session_id: state.session_id,
-      snapshot_id: state.snapshot_id, action: 'click', index: 0, ...params }, owner),
+      snapshot_id: state.snapshot_id, action: 'click', index: 0, ...params }, owner).then(result => { if (result.error) throw new Error(result.error); return result; }),
     gateSnapshot() { return scriptGate = deferred(); }, gateDebugger() { return captureGate = deferred(); },
     gateAction() { return actGate = deferred(); } };
 }
@@ -133,5 +134,48 @@ await test('cancellation during debugger attachment stops trusted input', async 
   const owner = s.control(); const action = s.act(state, { trusted: true }, owner);
   await new Promise(resolve => setImmediate(resolve)); owner.cancelled = true; gate.resolve();
   await assert.rejects(action, /cancelled/); assert.deepEqual(s.effects, []);
+});
+await test('coordinates expire after a resize, scroll or content change', async () => {
+  for (const mutate of [s => { s.page.innerWidth = 900; }, s => { s.page.document.scrollingElement.scrollTop = 50; }, s => { s.page.__skfiyDocument.revision++; }]) {
+    const s = setup(); const state = await s.state(); mutate(s);
+    const receipt = await s.context.dispatchRequest('act', { tab_id: 7, session_id: state.session_id, snapshot_id: state.snapshot_id,
+      action: 'click', x: 5, y: 5, coordinate_geometry: state.geometry }, s.control());
+    assert.equal(receipt.action_status, 'not_sent'); assert.match(receipt.error, /geometry|content changed/); assert.deepEqual(s.clicks, []);
+  }
+});
+await test('an acknowledged input is distinct from an uncertain injection', async () => {
+  const s = setup(); const state = await s.state();
+  const result = await s.act(state); assert.equal(result.action_status, 'sent');
+  s.approve.click = () => { s.clicks.push('received then failed'); throw new Error('page callback failed'); };
+  const receipt = await s.context.dispatchRequest('act', { tab_id: 7, session_id: state.session_id, snapshot_id: state.snapshot_id,
+    action: 'click', index: 0 }, s.control());
+  assert.equal(receipt.action_status, 'unknown'); assert.match(receipt.error, /callback failed/);
+  assert.deepEqual(s.clicks, ['Approve', 'received then failed']);
+});
+await test('observation orders frames consistently and marks loading as unobservable', async () => {
+  const s = setup(), state = await s.state();
+  let reversed = false;
+  s.chrome.scripting.executeScript = async () => {
+    const frames = [{ frameId: 0, result: { text: 'Ready', url: s.tab.url } }, { frameId: 2, result: { text: 'Frame' } }];
+    reversed = !reversed;
+    return reversed ? frames.reverse() : frames;
+  };
+  const params = { tab_id: 7, session_id: state.session_id, snapshot_id: state.snapshot_id };
+  const first = await s.context.dispatchRequest('observe', params, s.control());
+  s.tab.status = 'loading';
+  const second = await s.context.dispatchRequest('observe', params, s.control());
+  assert.equal(first.treeText, second.treeText);
+  assert.equal(first.loading, false); assert.equal(second.loading, true);
+});
+await test('changed observes checkbox state even when its text stays the same', async () => {
+  const s = setup(), state = await s.state();
+  s.approve.checked = false;
+  s.page.document.querySelectorAll = () => [s.approve];
+  const params = { tab_id: 7, session_id: state.session_id, snapshot_id: state.snapshot_id };
+  const before = await s.context.dispatchRequest('observe', params, s.control());
+  s.approve.checked = true;
+  const after = await s.context.dispatchRequest('observe', params, s.control());
+  assert.equal(before.text, after.text);
+  assert.notEqual(before.treeText, after.treeText);
 });
 console.log(`PASS ${passed}/${passed} browser session tests`);

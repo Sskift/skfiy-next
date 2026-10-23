@@ -202,7 +202,9 @@ public final class MCPServer {
                     "mimeType": outcome.imageMimeType
                 ])
             }
-            return result(["content": content, "isError": outcome.isError])
+            var response: [String: Any] = ["content": content, "isError": outcome.isError]
+            if let structured = outcome.structuredContent { response["structuredContent"] = structured }
+            return result(response)
         case "resources/list":
             return result(["resources": []])
         case "prompts/list":

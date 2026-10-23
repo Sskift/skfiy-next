@@ -63,7 +63,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `browser_tabs` | 列出窗口和标签页，`[shown]` 标出你正在看的那个 |
 | `browser_open` | 在后台新标签页打开网址（归入名为 "skfiy" 的标签组），或导航指定标签页；用 `action` 代替网址时让该标签页后退、前进或刷新 |
 | `browser_locate` | 按描述（名称、类型、视口区域、所在 fieldset/标题区块、邻近文字）在页面当下的元素和文字里查找，列出候选及刷新后的编号，不挑、不操作 |
-| `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页或被遮挡窗口要截图（canvas、图表、图片）传 `background_screenshot: true`，始终经 Chrome 调试接口截取，即使目标是该窗口的活动标签页；截图后重读元素编号，之后可按截图坐标点击 |
+| `browser_state` | 以文本读取页面：标题与正文按文档顺序，所有可交互元素带编号。标签页正显示时附截图；后台标签页或被遮挡窗口要截图（canvas、图表、图片）传 `background_screenshot: true`，始终经 Chrome 调试接口截取，即使目标是该窗口的活动标签页。仅当捕获前后的页面版本、视口和滚动位置与当前状态一致时附图，之后可按截图坐标点击；`screenshot: false` 只读页面 |
 | `browser_click` | 按编号点击（或按截图坐标）；`target=_blank` 链接改为后台新标签页打开 |
 | `browser_type` / `browser_select` / `browser_press_key` | 输入（可清空、可提交）、选下拉项、按键 |
 | `browser_scroll` | 滚动页面或目标最近的滚动容器，到内层边界即停；`direction: "to"` 将目标滚入视口。`until` 描述要找的项目、`target` 描述列表容器，逐次滚动并重新读取，最多 `max_scrolls` 次（默认 5，范围 1–20），找到后不点击。滚动后短暂调用调试接口刷新一帧，使后台虚拟列表收到滚动事件并渲染新项目；不切换标签页或本机焦点，Chrome 可能短暂显示调试提示条 |
@@ -199,6 +199,7 @@ skfiy 做过的每个改动类操作（点击、输入、按键、文件打开�
 | `SKFIY_APPROVE` | `ask` | `all`：需要你同意的操作——上传文件（`browser_upload`）、`run_in_front`、`read_clipboard`、短暂应用内聚焦——全部直接放行，不再弹确认框。`hand_over`（登录、验证码等要你本人做的步骤）照旧等你；模型仍按说明在付款、发消息、删除前先问你 |
 | `SKFIY_ALLOW_TERMINALS` | 关 | `1` 允许向终端类应用输入（承载 skfiy 的应用仍然不行） |
 | `SKFIY_CURSOR` | 开 | `0`：不显示 skfiy 自己的光标（见“自己的光标”） |
+| `SKFIY_CURSOR_WAIT` | 关 | 光标动画默认与输入并行，到达时再播放点击等反馈；`1` 等待光标到达后才发送输入 |
 | `SKFIY_CURSOR_IDLE` | `20` | 没有操作多少秒后光标淡出 |
 | `SKFIY_ACTION_LOG` | `~/Library/Logs/skfiy/actions.jsonl` | 操作日志的路径；`off` 不记录 |
 | `SKFIY_FLOW_DIR` | `~/Library/Application Support/skfiy/flows` | 流程检查点（`flow_*`）存放的位置 |
@@ -224,3 +225,17 @@ skfiy 自己的文件（插件、急停标记、流程、操作日志、实例�
 取消会移除尚未开始的调用、结束等待用户确认，并通知浏览器停止尚未发送的后续步骤。MCP 断线也会取消正在执行的调用并丢弃队列。已经发给应用或网页的输入不能撤销，重试前仍须查看实际状态。
 
 `expect` 在锁屏状态发生变化、应用退出、目标意外变化或无法可靠观察时不会报告成功。如果条件在输入前就已成立，返回 `already_satisfied`（未验证本次动作效果），重复操作保护仍然生效。
+
+浏览器标签页的完整身份是浏览器进程加标签页 ID。不同浏览器出现相同 ID，或 `browser` 名称匹配多个进程时，工具会拒绝选择并列出候选；从 `browser_tabs` 取进程号作为 `browser` 即可区分。截图坐标也按此身份保存，并绑定文档、DOM 版本、视口、缩放及滚动位置；超过 30 秒或任一项变化后须重新截图。发送坐标前由页面再次核对，因此旧图不会沿用到导航后的新页面。
+
+`browser_click`、`browser_type`、`browser_select`、`browser_press_key` 和 `browser_scroll` 支持 `expect` 的 `text`、`text_gone`、`value`、`value_changes`、`changed`，超时范围 0.2–30 秒。结果同时返回文本与 MCP `structuredContent`：`action.status` 为 `sent`（已确认发送）、`not_sent`（发送前拒绝）或 `unknown`（输入可能已发送，回执不确定）；`verification.status` 单独表示效果是否验证，无条件时为 `not_requested`。后续读取失败仍保留已发送的回执，并给出 `state_error`；它不表示可以安全重试。加载中的空白页不能证明文字消失，密码值不参与读取或验证。
+
+浏览器提交、发送及 `idempotent: false` 的操作，在发送前记录重复保护；丢失回执、取消或验证不通过也保留保护。动作自带的状态读取和 `target` 定位不会解除它；须显式成功调用 `browser_state`、满足条件的 `browser_wait`，或传 `confirm_repeat: true`。已验证的动作允许下一次有意提交，工具本身不自动重试。
+
+### 原生状态读取的开销
+
+解锁时 `get_app_state(screenshot: false)` 只读取辅助功能树，跳过截图和自动 OCR；显式 `ocr: true` 仍捕获识别所需像素，但不附图。该结果不提供可操作的截图坐标，先前截图坐标也随之失效。`since` 仍可比较树和窗口，结果会明确说明没有比较像素。锁屏 direct 模式依靠像素观察，仍须截图。
+
+频繁读取同一窗口时，可同时传 `incremental: true` 和 `since`：值变化通知使对应节点失效，结构变化通知使全部节点失效；本会话发送原生输入前也清空缓存。即使应用漏发通知，也会在缓存满 2 秒或下一轮超过 4 次读取时做一次完整读取。未收到通知的变化在此期限内可能尚未反映，因此需要当下完整状态时省略 `incremental`。应用不支持通知时退回完整读取。`structuredContent` 的 `tree.cached_nodes` / `tree.fresh_nodes`、`capture`、`screenshot_attached` 可检查实际路径。
+
+原生动作后的固定等待改为在辅助功能变化静默 60 ms 后继续；没有可用通知时仍保留 `SKFIY_SETTLE_SECONDS` 的兜底等待。只读操作不再额外等待 150 ms，输入后的前台守护等待保留。

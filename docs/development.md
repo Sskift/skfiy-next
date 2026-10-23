@@ -9,8 +9,10 @@
 ```bash
 make build          # swift build
 make test           # 单元测试（swift-testing）
-python3 scripts/test_browser_lifecycle.py .build/debug/skfiy  # 两个真实 MCP 会话 + 临时无界面 Chrome；不碰用户浏览器
-node scripts/test_browser_sessions.mjs  # 浏览器快照绑定、跨会话引用与取消；不依赖桌面
+python3 scripts/test_browser_lifecycle.py .build/debug/skfiy  # 两个真实 MCP 会话 + 两个临时 Chrome：跨会话取消、同名 tab、坐标缓存、结果验证及防重复提交
+python3 scripts/test_browser_lifecycle.py .build/debug/skfiy outcomes  # 单独验证结果回执与多浏览器；lifecycle 单独跑生命周期，默认 all
+python3 scripts/test_read_modes.py .build/debug/skfiy  # 自建原生应用：纯树/增量读取、缓存失效和完整刷新；输出 P50/P95
+node scripts/test_browser_sessions.mjs  # 浏览器快照绑定、坐标版本、动作回执、跨会话引用与取消；不依赖桌面
 node scripts/test_electron_rendering_lease.mjs  # 不依赖桌面的渲染租约与恢复测试
 make test-install   # install.sh、skfiy setup / doctor / uninstall：在临时 HOME 里用假的 claude/codex 跑一遍，并核对你真实的配置没被改动；不碰界面
 make embed-extension  # 改了 browser-extension/ 之后：重新生成二进制里携带的插件副本（make release/install、源码安装和 release.sh 会自动做；不一致时 make test 失败）；内容变了而 manifest.json 的 version 没升时会提醒
@@ -32,6 +34,10 @@ swift scripts/make_extension_icons.swift browser-extension   # 重新画插件�
 `make smoke-web` / `make smoke-browser` 先运行 `python3 scripts/compat_baseline.py <skfiy> --test-browser`：第一次会把 Chrome for Testing 下载到 `~/.cache/skfiy-test`，然后在后台用全新的临时 profile 启动它（加载插件、打开本地测试页服务 `scripts/compat_server.py` 上的 `scripts/fixtures/web.html`），不碰你自己的浏览器。`eval/run_eval.py` 也用这个测试浏览器。测试脚本共用 `scripts/harness.py` 里的 MCP 客户端：它不写你的操作日志；需要你同意的操作（例如上传文件），由测试按脚本里写好的回答答复。
 
 `test_electron_rendering.py` 需要 `~/.cache/skfiy-test/electron` 内的 Electron 32+、clang 和 Node 的 N-API 头文件（可用 `SKFIY_NODE_INCLUDE` 指定）。这是测试夹具的依赖，发布二进制不依赖 Node 或该 addon。Swift 测试在检测到 Node 时还会运行一次无界面的真实调试协议清理检查；没有 Node 时该项明确跳过。脚本只在自己创建的 Electron 内加载 `scripts/fixtures/electron-rendering/occlusion.mm`：覆盖测试窗口的 AppKit 遮挡状态并发送系统通知，避免录屏或不同系统版本令自然遮挡无法稳定复现。必须先看到页面 hidden 且动画帧停止，随后通过 MCP 恢复出帧，并由页面回报、截图 OCR 和独立窗口采样验收。`test_covered_chromium.py` 则显式关闭自动恢复，继续验证接口不可用时的保守提示。
+
+2026-10-23 状态读取与浏览器结果验证回归（macOS 26.6.1）：Swift 217 项、Node 页面脚本 14 项、真实 Chrome 全套 17 项、原生读取模式 29 项、原生动作结果 14 项、宿主重连 2 项、安装 94 项通过。两个 Chrome 的标签页 ID 可能随机生成，因此 ID 冲突由确定性 Swift 用例保证覆盖，真实测试在实际碰撞时另加一项；两个浏览器的不同截图比例始终检查。验证途中真实 Chrome 曾间歇超时，已推送的 P1 版本也复现同类失败；最终全套通过，并未通过放宽动作或取消判定获得通过。
+
+本机 5 次样本的原生读取 P50：完整截图与树 204.89 ms、纯树 47.74 ms、增量纯树 39.55 ms（P95 分别为 495.84 / 50.96 / 51.97 ms）。`test_read_modes.py` 同时断言不截图、变化可见、坐标失效和强制完整刷新，结果在 `eval/results/read-modes-*/read-performance.json`。桥接单元基准用相同的 256 KiB 消息比较逐字节与分块读取；最终一次运行的 P50 为 314.13 / 2.64 ms（P95 为 378.01 / 2.81 ms）。这里只比较本机的特定阶段，不代表整个 computer-use 任务的提速；测试不以机器相关的毫秒阈值决定通过。
 
 历史测试记录（2026-09-29，macOS 26.6.1；后续结果见 [roadmap](roadmap.md)）：
 
@@ -64,6 +70,7 @@ Sources/SkfiyKit/
   AXTree.swift        辅助功能树的遍历、裁剪与文本渲染
   AXElement.swift     AXUIElement 薄封装、文本元素的光标与选区
   StateChanges.swift / ChangeEvents.swift   状态版本与变化摘要、辅助功能通知
+  StateReadCache.swift    可选增量读取：节点缓存、通知失效和定期完整刷新
   TextRecognition.swift   Vision 文字识别
   Input.swift         投递到进程的键盘/鼠标/滚轮事件，SkyLight 入口
   Windows.swift       窗口查找、最上层窗口、前台守护（FrontGuard）与 run_in_front 的批准文件
@@ -76,6 +83,7 @@ Sources/SkfiyKit/
   FilePanel.swift     打开/存储面板
   BrowserBridge.swift native messaging 宿主 ⇄ Unix socket ⇄ MCP 的桥接、安装
   BrowserTools.swift  browser_* 工具
+  BrowserState.swift  浏览器实例/标签页身份、截图版本和动作回执
   RemoteDesktop.swift / RemoteDesktopScripts.swift  SSH Windows 桌面工具、显式安装/移除、内嵌脚本
   EmergencyStop.swift / ActionLog.swift / Instance.swift   急停、操作日志、每个 MCP 服务独立的可执行文件链接
   Arguments.swift     工具参数的类型化读取

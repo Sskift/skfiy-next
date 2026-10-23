@@ -59,7 +59,7 @@ function connect() {
     showStatus(false);
     setTimeout(connect, 5000);
   });
-  port.postMessage({ event: 'hello', browser: browserName(), version: chrome.runtime.getManifest().version, snapshotProtocol: 1 });
+  port.postMessage({ event: 'hello', browser: browserName(), version: chrome.runtime.getManifest().version, snapshotProtocol: 2 });
   showStatus(true);
 }
 
@@ -225,6 +225,7 @@ async function handle(method, params, control) {
     case 'close': return closeTab(params, control);
     case 'state': return tabState(params, control);
     case 'screenshot': return screenshot(params);
+    case 'observe': return observePage(params);
     case 'act': return act(params, control);
     case 'probe': return probe(params);
     case 'downloads': return listDownloads(params);
@@ -327,7 +328,7 @@ async function waitForLoad(tabId, timeout = 15000, control) {
 }
 
 async function run(tabId, func, args, frameId = 0) {
-  const [result] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args, world: 'ISOLATED' });
+  const [result] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func, args, world: 'ISOLATED', injectImmediately: true });
   if (!result) throw new Error('the page did not answer');
   if (result.error || result.result?.skfiyError) throw new Error(result.result?.skfiyError || result.error.message || String(result.error));
   if (result.result == null) throw new Error('the page action returned no result; inspect browser_state before continuing');
@@ -344,7 +345,7 @@ async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id
   await waitForLoad(tab.id, 5000, control);
   const binding = { session_id, snapshot_id: crypto.randomUUID() };
   const frames = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding], world: 'ISOLATED'
+    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding], world: 'ISOLATED', injectImmediately: true
   });
   const top = frames.find((f) => f.frameId === 0);
   if (!top || !top.result) throw new Error('the page did not answer');
@@ -384,19 +385,62 @@ function locateIndex(tabId, index, binding) {
   return entry;
 }
 
-async function screenshot({ tab_id: tabId, background }) {
-  const tab = await tabById(tabId);
+async function screenshot(params) {
+  const tab = await tabById(params.tab_id);
+  locateIndex(tab.id, null, params);
+  const before = await run(tab.id, pageGeometry, []);
   const window = await chrome.windows.get(tab.windowId);
-  if (tab.active && window.state !== 'minimized' && !background) {
+  let jpeg, debuggerUsed = false;
+  if (tab.active && window.state !== 'minimized' && !params.background) {
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
-    return { jpeg: dataUrl.replace(/^data:image\/jpeg;base64,/, '') };
+    jpeg = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+    if (!(await tabById(tab.id)).active) throw new Error('The visible tab changed during capture. Read browser_state again.');
+  } else if (params.background) {
+    const shot = await withDebugger(tab.id, (send) => send('Page.captureScreenshot', { format: 'jpeg', quality: 70 }));
+    jpeg = shot.data; debuggerUsed = true;
+  } else {
+    return { unavailable: 'Only the tab shown in its window can be captured without Chrome\'s debugger.' };
   }
-  if (!background) {
-    return { unavailable: 'Only the tab shown in its window can be captured without Chrome\'s debugger, and skfiy does not switch the user\'s tabs.' };
+  locateIndex(tab.id, null, params);
+  const after = await run(tab.id, pageGeometry, []);
+  if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error('The page changed during capture. Read browser_state again.');
+  return { jpeg, debugger: debuggerUsed, geometry: after };
+}
+
+function pageGeometry() {
+  const context = globalThis.__skfiyDocument;
+  if (!context) return { skfiyError: 'No current page geometry; read browser_state again.' };
+  return context.geometry();
+}
+
+// Observation never renumbers elements. Another session replacing their
+// snapshot is an interruption, not evidence that this action succeeded.
+async function observePage(params) {
+  const tab = await tabById(params.tab_id);
+  const snapshot = frameIndex.get(tab.id);
+  if (snapshot && (snapshot.session_id !== params.session_id || snapshot.snapshot_id !== params.snapshot_id)) {
+    throw new Error('Another session replaced the page snapshot during verification.');
   }
-  // A hidden tab still renders for the debugger's capture.
-  const shot = await withDebugger(tab.id, (send) => send('Page.captureScreenshot', { format: 'jpeg', quality: 70 }));
-  return { jpeg: shot.data, debugger: true };
+  let target;
+  if (snapshot) target = locateIndex(tab.id, params.index, params);
+  const frames = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true },
+    func: pageObservation, args: [], world: 'ISOLATED', injectImmediately: true });
+  frames.sort((a, b) => a.frameId - b.frameId);
+  if (!frames.length || !frames.some(f => f.frameId === 0 && f.result)) throw new Error('The page could not be observed.');
+  const text = frames.map(f => f.result?.text || '').join('\n');
+  const value = target && params.include_target ? await run(tab.id, pageAction, [{ ...params, index: target.local, action: 'inspect' }], target.frameId) : {};
+  const latest = await tabById(tab.id);
+  return { text, treeText: JSON.stringify(frames.map(f => [f.frameId, f.result])), url: tab.url,
+    loading: tab.status !== 'complete' || latest.status !== 'complete' || tab.url !== latest.url, ...value };
+}
+
+function pageObservation() {
+  const fields = Array.from(document.querySelectorAll('input:not([type=password]),textarea,select,button,[aria-expanded],[aria-checked],[aria-selected]'))
+    .slice(0, 3000).filter(el => el.type !== 'password');
+  const controls = fields.map(el => [el.tagName, el.id, el.type, el.value, el.checked, el.selectedIndex, el.disabled,
+    el.getAttribute('aria-expanded'), el.getAttribute('aria-checked'), el.getAttribute('aria-selected')]);
+  return { text: [document.title, document.body?.innerText || '', ...fields.map(el => el.value || '')].join('\n').slice(0, 500000),
+    controls, url: location.href };
 }
 
 // For browser_wait: whether a text is shown in any frame, and how long the
@@ -404,7 +448,7 @@ async function screenshot({ tab_id: tabId, background }) {
 async function probe({ tab_id: tabId, text }) {
   const tab = await tabById(tabId);
   const frames = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true }, func: pageProbe, args: [String(text || '').toLowerCase()], world: 'ISOLATED'
+    target: { tabId: tab.id, allFrames: true }, func: pageProbe, args: [String(text || '').toLowerCase()], world: 'ISOLATED', injectImmediately: true
   }).catch(() => []);
   const answers = frames.map((f) => f.result).filter(Boolean);
   return {
@@ -430,6 +474,12 @@ function pageProbe(text) {
 }
 
 async function act(params, control) {
+  const execution = { status: 'not_sent' };
+  try { return { ...await sendAction(params, control, execution), action_status: execution.status }; }
+  catch (error) { return { action_status: execution.status, error: String(error.message || error) }; }
+}
+
+async function sendAction(params, control, execution) {
   const tab = await tabById(params.tab_id);
   await noteAct(tab);
   const { frameId, local } = locateIndex(tab.id, params.index, params);
@@ -438,7 +488,11 @@ async function act(params, control) {
   const inFrame = { ...params, index: local };
   if (params.action === 'hover') inFrame.css = await foreignStyles(tab.id, frameId);
   control.check();
+  await run(tab.id, pageAction, [{ ...inFrame, action: 'validate' }], frameId);
+  control.check();
+  execution.status = 'unknown';
   const result = params.trusted ? await trustedAct(tab.id, inFrame, control) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
+  execution.status = 'sent';
   if (params.action === 'scroll') {
     // Hidden/occluded Chromium defers scroll events and animation frames. A
     // compositor capture delivers a frame so virtual lists can render their
@@ -581,6 +635,20 @@ async function trustedAct(tabId, params, control) {
 // self-contained: executeScript serializes only the function body.
 
 function pageSnapshot(maxChars, locate, binding) {
+  const context = globalThis.__skfiyDocument ||= { id: crypto.randomUUID(), revision: 0 };
+  if (!context.observer) {
+    context.changed = records => {
+      if (records.some(r => r.type !== 'attributes' || !r.attributeName?.startsWith('data-skfiy-'))) context.revision++;
+    };
+    context.observer = new MutationObserver(context.changed);
+    context.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+    context.geometry = () => {
+      context.changed(context.observer.takeRecords());
+      const scroller = document.scrollingElement || document.documentElement;
+      return { document: context.id, url: location.href, width: innerWidth, height: innerHeight,
+        x: scroller.scrollLeft || 0, y: scroller.scrollTop || 0, scale: globalThis.devicePixelRatio || 1, revision: context.revision };
+    };
+  }
   const previous = globalThis.__skfiy;
   const state = globalThis.__skfiy = { ...binding, url: location.href, elements: [], identities: [],
     hovered: previous?.hovered };
@@ -860,6 +928,7 @@ function pageSnapshot(maxChars, locate, binding) {
     dialogs,
     lines,
     truncated,
+    geometry: context.geometry(),
     viewport: { width: innerWidth, height: innerHeight },
     scroll: { y: Math.round(scroller.scrollTop), max: Math.round(maxScroll) },
     focused: document.activeElement && document.activeElement !== document.body
@@ -871,6 +940,13 @@ function pageAction(params, keyAliases = {}) {
   const state = globalThis.__skfiy || { elements: [] };
   if (!params.session_id || !params.snapshot_id || state.session_id !== params.session_id || state.snapshot_id !== params.snapshot_id || state.url !== location.href) {
     return { skfiyError: 'The page snapshot expired or belongs to another session. Call browser_state again; nothing was sent.' };
+  }
+  if (params.coordinate_geometry && JSON.stringify(params.coordinate_geometry) !== JSON.stringify(globalThis.__skfiyDocument?.geometry())) {
+    // Compare fields, not object-key order: the native JSON encoder sorts independently.
+    const now = globalThis.__skfiyDocument?.geometry();
+    if (!now || Object.keys(now).some(key => now[key] !== params.coordinate_geometry[key])) {
+      return { skfiyError: 'The screenshot geometry or page content changed. Read browser_state with a screenshot again; nothing was sent.' };
+    }
   }
   const { action } = params;
   // How the page's next confirm() or prompt() is answered (see installDialogHooks).
@@ -1007,6 +1083,13 @@ function pageAction(params, keyAliases = {}) {
       applyHoverStyles(params.css || []);
       state.hovered = el;
       return { message: params.index != null ? `Hovered [${params.index}]` : `Hovered at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${el.tagName.toLowerCase()}>` };
+    }
+    case 'inspect': {
+      const el = pick() || (params.x != null ? document.elementFromPoint(Number(params.x), Number(params.y)) : document.activeElement);
+      const secret = el?.type === 'password';
+      return { label: el?.getAttribute('aria-label') || el?.innerText || el?.getAttribute('placeholder') || '',
+        identity: el && state.identity ? state.identity(el) : '',
+        value: secret ? null : (el?.value ?? (el?.isContentEditable ? el.innerText : null)), secret };
     }
     case 'validate': {
       if (params.index != null) pick();

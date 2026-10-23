@@ -14,15 +14,15 @@ struct NativeMessageTests {
         // Feed the stream in awkward chunks, as a pipe may deliver it.
         for chunk in stride(from: 0, to: stream.count, by: 5) {
             buffer.append(stream[chunk..<min(chunk + 5, stream.count)])
-            decoded += NativeMessage.decode(&buffer)
+            decoded += try NativeMessage.decode(&buffer)
         }
         #expect(decoded == [first, second])
         #expect(buffer.isEmpty)
     }
 
-    @Test func keepsIncompleteFramesBuffered() {
+    @Test func keepsIncompleteFramesBuffered() throws {
         var data = Data(NativeMessage.encode(Data("12345678".utf8)).prefix(7))
-        #expect(NativeMessage.decode(&data).isEmpty)
+        #expect(try NativeMessage.decode(&data).isEmpty)
         #expect(data.count == 7)
     }
 

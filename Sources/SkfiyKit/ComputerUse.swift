@@ -7,12 +7,14 @@ public struct ToolResult {
     public var image: Data?
     public var imageMimeType: String
     public var isError: Bool
+    public var structuredContent: [String: Any]?
 
-    public init(text: String, image: Data? = nil, imageMimeType: String = "image/jpeg", isError: Bool = false) {
+    public init(text: String, image: Data? = nil, imageMimeType: String = "image/jpeg", isError: Bool = false, structuredContent: [String: Any]? = nil) {
         self.text = text
         self.image = image
         self.imageMimeType = imageMimeType
         self.isError = isError
+        self.structuredContent = structuredContent
     }
 }
 
@@ -103,6 +105,8 @@ public final class ComputerUse {
     public var clientCanAsk: (() -> Bool)?
     /// The last few looks per app, for get_app_state since.
     var stateHistory: [pid_t: [StateRecord]] = [:]
+    var stateReadCaches: [pid_t: ObservedTreeCache] = [:]
+    private var actionEvents: [pid_t: AXChangeEvents] = [:]
     /// The text field a click last focused, per app: a background Chromium
     /// app (Electron) reports no focused element, so typing needs to know.
     var typingTargets: [pid_t: AXUIElement] = [:]
@@ -126,6 +130,8 @@ public final class ComputerUse {
     private func forgetApps() {
         sessions.removeAll()
         stateHistory.removeAll()
+        for observed in stateReadCaches.values { observed.events.stop() }
+        stateReadCaches.removeAll()
         accessibilityEnabled.removeAll()
         focusApproved.removeAll()
     }
@@ -282,10 +288,19 @@ public final class ComputerUse {
         let userTop = topWindow().flatMap { $0.pid == before ? $0.id : nil }
         let overlaysBefore = Set(target.map { overlayWindows(of: $0.processIdentifier) } ?? [])
         let guardian = FrontGuard(userApp: before, target: target?.processIdentifier, onlyTarget: readOnly)
+        let events = readOnly ? nil : target.flatMap { AXChangeEvents(pid: $0.processIdentifier) }
+        if let target {
+            if !readOnly { stateReadCaches[target.processIdentifier]?.cache.invalidate() }
+            actionEvents[target.processIdentifier] = events
+        }
+        defer {
+            events?.stop()
+            if let target { actionEvents[target.processIdentifier] = nil }
+        }
         var result: ToolResult
         do {
             result = try await body()
-            await Input.pause(0.15)
+            if !readOnly { await Input.pause(0.15) }
         } catch {
             guardian.stop()
             throw error
@@ -467,8 +482,9 @@ public final class ComputerUse {
     /// Settles, then returns a fresh screenshot and remaps coordinates to it.
     /// Element indices stay those of the last get_app_state.
     func afterAction(_ app: NSRunningApplication, _ message: String) async throws -> ToolResult {
-        await Input.pause(settleDelay)
         let pid = app.processIdentifier
+        if let events = actionEvents[pid] { await events.settle(upTo: settleDelay) }
+        else { await Input.pause(settleDelay) }
         guard !app.isTerminated else {
             sessions[pid] = nil
             return ToolResult(text: message + "\nThe app quit.")

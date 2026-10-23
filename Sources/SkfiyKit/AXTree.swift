@@ -356,11 +356,13 @@ final class AXTreeBuilder {
     let maxNodes: Int
     let maxDepth: Int
     let deadline: Date
+    let cache: TreeReadCache?
 
-    init(maxNodes: Int = 4_000, maxDepth: Int = 60, timeBudget: TimeInterval = 4) {
+    init(maxNodes: Int = 4_000, maxDepth: Int = 60, timeBudget: TimeInterval = 4, cache: TreeReadCache? = nil) {
         self.maxNodes = maxNodes
         self.maxDepth = maxDepth
         self.deadline = Date().addingTimeInterval(timeBudget)
+        self.cache = cache
     }
 
     func add(_ element: AXUIElement) -> Int {
@@ -370,7 +372,8 @@ final class AXTreeBuilder {
 
     /// Reads one element without its children.
     func info(_ element: AXUIElement) -> (NodeInfo, [AXUIElement]) {
-        let values = element.multipleValues(Self.attributes)
+        let values = cache?.attributes.read(ElementKey(element)) { element.multipleValues(Self.attributes) }
+            ?? element.multipleValues(Self.attributes)
         let info = NodeInfo(
             role: values[kAXRoleAttribute].flatMap(axString) ?? "AXUnknown",
             subrole: values[kAXSubroleAttribute].flatMap(axString),

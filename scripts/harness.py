@@ -147,7 +147,7 @@ class Client:
                                  is_error=bool(result.get('isError')), text=text, images=images)
         if result.get('isError') and not allow_error:
             raise RuntimeError(f'{tool}: {text}')
-        return {'text': text, 'images': images, 'is_error': bool(result.get('isError'))}
+        return {'text': text, 'images': images, 'is_error': bool(result.get('isError')), 'structured': result.get('structuredContent')}
 
     def close(self):
         if self.proc.poll() is None:

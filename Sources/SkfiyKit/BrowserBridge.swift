@@ -20,16 +20,18 @@ public enum BrowserBridge {
 
 /// Chrome's native messaging frame: a 32-bit native-endian length, then JSON.
 public enum NativeMessage {
+    static let maximumBytes = 32 * 1024 * 1024
     public static func encode(_ payload: Data) -> Data {
         var length = UInt32(payload.count).littleEndian
         return Data(bytes: &length, count: 4) + payload
     }
 
     /// Splits complete frames off the front of `buffer`.
-    public static func decode(_ buffer: inout Data) -> [Data] {
+    public static func decode(_ buffer: inout Data) throws -> [Data] {
         var messages: [Data] = []
         while buffer.count >= 4 {
             let length = buffer.prefix(4).enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << (8 * UInt32($1.offset)) }
+            guard length <= maximumBytes else { throw ToolError("The browser bridge message exceeds 32 MiB.") }
             guard buffer.count >= 4 + Int(length) else { break }
             messages.append(Data(buffer.dropFirst(4).prefix(Int(length))))
             buffer = Data(buffer.dropFirst(4 + Int(length)))
@@ -70,19 +72,39 @@ private func writeAll(_ fd: Int32, _ data: Data) -> Bool {
     }
 }
 
-/// Reads one newline-terminated line, waiting at most `timeout` seconds.
-private func readLine(_ fd: Int32, timeout: TimeInterval) -> Data? {
-    var line = Data()
-    var byte: UInt8 = 0
-    let deadline = Date().addingTimeInterval(timeout)
-    while true {
-        let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { return nil }
-        var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        guard poll(&poller, 1, Int32(min(remaining, 3600) * 1000)) > 0 else { return nil }
-        guard read(fd, &byte, 1) == 1 else { return nil }
-        if byte == 0x0A { return line }
-        line.append(byte)
+/// One reader per connection retains coalesced messages. Chunked reads avoid
+/// two system calls per byte for base64 screenshots; lengths remain bounded.
+final class BridgeLineReader {
+    private var buffer = Data()
+    private(set) var reads = 0
+    private let maximumBytes: Int
+    init(maximumBytes: Int = NativeMessage.maximumBytes) { self.maximumBytes = maximumBytes }
+
+    func line(_ fd: Int32, timeout: TimeInterval) throws -> Data? {
+        let started = ProcessInfo.processInfo.systemUptime
+        var searched = buffer.startIndex
+        var chunk = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            if let newline = buffer[searched...].firstIndex(of: 0x0A) {
+                guard newline - buffer.startIndex <= maximumBytes else { throw ToolError("The browser bridge line is too large.") }
+                let line = Data(buffer[..<newline])
+                buffer = Data(buffer[buffer.index(after: newline)...])
+                return line
+            }
+            guard buffer.count <= maximumBytes else { throw ToolError("The browser bridge line is too large.") }
+            let remaining = timeout - (ProcessInfo.processInfo.systemUptime - started)
+            guard remaining > 0 else { return nil }
+            var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&poller, 1, Int32(min(remaining, 3600) * 1000))
+            if ready < 0 && errno == EINTR { continue }
+            guard ready > 0 else { return nil }
+            let count = read(fd, &chunk, chunk.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { return nil }
+            reads += 1
+            searched = buffer.endIndex
+            buffer.append(contentsOf: chunk[..<count])
+        }
     }
 }
 
@@ -188,7 +210,8 @@ extension BrowserBridge {
 
         /// One JSON request per line; the reply comes back on the same connection.
         private func serve(_ client: Int32) {
-            while let line = readLine(client, timeout: 3600) {
+            let reader = BridgeLineReader()
+            while let line = try? reader.line(client, timeout: 3600) {
                 guard let request = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
                 let clientID = request["id"] ?? NSNull()
                 let method = request["method"] as? String ?? ""
@@ -236,7 +259,8 @@ extension BrowserBridge {
                 let count = read(0, &chunk, chunk.count)
                 guard count > 0 else { return }
                 buffer.append(contentsOf: chunk[0..<count])
-                for payload in NativeMessage.decode(&buffer) {
+                guard let messages = try? NativeMessage.decode(&buffer) else { return }
+                for payload in messages {
                     guard let message = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { continue }
                     if message["event"] as? String == "hello" {
                         lock.lock()
@@ -294,7 +318,7 @@ extension BrowserBridge {
         let data = try JSONSerialization.data(withJSONObject: request)
         try cancellation?.check()
         guard writeAll(fd, data + Data([0x0A])) else { throw ToolError("The browser bridge closed the connection.") }
-        let line = readLine(fd, timeout: timeout)
+        let line = try BridgeLineReader().line(fd, timeout: timeout)
         try cancellation?.check()
         guard let line,
               let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {

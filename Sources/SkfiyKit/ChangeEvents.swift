@@ -21,6 +21,8 @@ final class AXChangeEvents {
     /// Notifications received, and kinds the app accepted.
     private(set) var received = 0
     private(set) var registered = 0
+    var onChange: ((AXUIElement, String) -> Void)?
+    private var lastChange: Double?
     private var pending = false
     private var waiter: CheckedContinuation<Void, Never>?
     private var timer: Task<Void, Never>?
@@ -64,8 +66,10 @@ final class AXChangeEvents {
         }
     }
 
-    fileprivate func fire() {
+    fileprivate func fire(_ element: AXUIElement, _ notification: String) {
         received += 1
+        lastChange = ProcessInfo.processInfo.systemUptime
+        onChange?(element, notification)
         guard waiter != nil else {
             pending = true
             return
@@ -74,6 +78,20 @@ final class AXChangeEvents {
         debounce = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 60_000_000)
             if !Task.isCancelled { self?.resume() }
+        }
+    }
+
+    /// Return after an announced change goes quiet. Apps without useful
+    /// notifications keep the configured fallback delay.
+    func settle(upTo seconds: Double, quietFor quiet: Double = 0.06) async {
+        let deadline = ProcessInfo.processInfo.systemUptime + max(0, seconds)
+        while !Task.isCancelled {
+            let now = ProcessInfo.processInfo.systemUptime
+            let remaining = deadline - now
+            if remaining <= 0 { return }
+            if let lastChange, now - lastChange >= quiet { return }
+            let delay = lastChange.map { max(0, quiet - (now - $0)) } ?? remaining
+            await wait(upTo: min(remaining, delay))
         }
     }
 
@@ -99,5 +117,5 @@ final class AXChangeEvents {
 private func axChangeCallback(_ observer: AXObserver, _ element: AXUIElement, _ notification: CFString, _ refcon: UnsafeMutableRawPointer?) {
     guard let refcon else { return }
     let events = Unmanaged<AXChangeEvents>.fromOpaque(refcon).takeUnretainedValue()
-    MainActor.assumeIsolated { events.fire() }
+    MainActor.assumeIsolated { events.fire(element, notification as String) }
 }

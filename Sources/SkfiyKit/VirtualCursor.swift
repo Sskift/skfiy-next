@@ -23,6 +23,8 @@ enum VirtualCursor {
         return !["0", "off", "false", "no"].contains(setting)
     }()
 
+    private static let waitForMotion = ["1", "true", "on", "yes"].contains(ProcessInfo.processInfo.environment["SKFIY_CURSOR_WAIT"]?.lowercased() ?? "")
+
     private static var helper: Process?
     private static var input: FileHandle?
     private static var position: CGPoint?
@@ -30,10 +32,11 @@ enum VirtualCursor {
     private static var bend = 1.0
 
     /// Glides to `point` (screen coordinates) over `pid`'s window there and
-    /// returns once it has arrived, so the real event lands under it.
+    /// normally returns immediately; effects play when it arrives. Set
+    /// SKFIY_CURSOR_WAIT=1 to wait for motion before sending input.
     static func move(to point: CGPoint, pid: pid_t, window: CGWindowID? = nil) async {
         guard let seconds = glide(to: point, pid: pid, window: window) else { return }
-        await Input.pause(seconds)
+        if waitForMotion { await Input.pause(seconds) }
     }
 
     /// Starts a glide and returns its duration without waiting, e.g. for a
@@ -183,6 +186,7 @@ final class CursorOverlay {
     private var tip = CGPoint.zero
     private var glide: Glide?
     private var pressed = false
+    private var pendingEffects: [[String: Any]] = []
     private var lastActivity = Date.distantPast
     private var shown = false
     private var alpha: CGFloat = 0
@@ -217,6 +221,10 @@ final class CursorOverlay {
                  bend: message["bend"] as? Double ?? 1, pressed: message["pressed"] as? Bool ?? false)
         case "effect":
             guard shown else { return }
+            if glide != nil {
+                pendingEffects.append(message)
+                return
+            }
             lastActivity = Date()
             switch message["kind"] as? String {
             case "click":
@@ -253,6 +261,7 @@ final class CursorOverlay {
     }
 
     private func move(to point: CGPoint, window id: CGWindowID, duration: Double, bend: Double, pressed: Bool) {
+        pendingEffects.removeAll()
         var from = tip
         if !shown {
             // Coming in from the lower left reads as a guided cursor, not a jump.
@@ -297,7 +306,11 @@ final class CursorOverlay {
             let a = (1 - eased) * (1 - eased), b = 2 * (1 - eased) * eased, c = eased * eased
             tip = CGPoint(x: a * glide.from.x + b * glide.control.x + c * glide.to.x,
                           y: a * glide.from.y + b * glide.control.y + c * glide.to.y)
-            if progress >= 1 { self.glide = nil }
+            if progress >= 1 {
+                self.glide = nil
+                let effects = pendingEffects; pendingEffects.removeAll()
+                for effect in effects { handle(effect) }
+            }
         }
         if !finishing, now.timeIntervalSince(lastTrack) > 0.25 {
             lastTrack = now

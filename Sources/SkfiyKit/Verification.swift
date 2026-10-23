@@ -232,8 +232,8 @@ struct RepeatGuard {
     /// A fresh look at the app (get_app_state, wait_for) lifts the guard.
     mutating func looked(app: String) { last[app] = nil }
 
-    func refusal(app: String, signature: String) -> String? {
+    func refusal(app: String, signature: String, look: String = "get_app_state or wait_for") -> String? {
         guard let entry = last[app], entry.signature == signature, !entry.verified else { return nil }
-        return "The previous \(entry.label) was not verified to have taken effect, and repeating it could submit or send twice. Look at the current state first (get_app_state or wait_for, which may show it went through); if it really did nothing, call again with confirm_repeat: true."
+        return "The previous \(entry.label) was not verified to have taken effect, and repeating it could submit or send twice. Look at the current state first (\(look), which may show it went through); if it really did nothing, call again with confirm_repeat: true."
     }
 }
