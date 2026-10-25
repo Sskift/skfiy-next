@@ -25,11 +25,12 @@ jobs:
   browser-integration:
     runs-on: macos-15
     timeout-minutes: 20
-    env:
-      CFT_CACHE: ${{ runner.temp }}/skfiy-chrome
-      SKFIY_TEST_EVIDENCE: ${{ runner.temp }}/browser-evidence
     steps:
       - uses: actions/checkout@v4
+      - name: Configure temporary test directories
+        run: |
+          echo "CFT_CACHE=$RUNNER_TEMP/skfiy-chrome" >> "$GITHUB_ENV"
+          echo "SKFIY_TEST_EVIDENCE=$RUNNER_TEMP/browser-evidence" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
