@@ -1,6 +1,8 @@
 # Release notes
 
-## 0.10.0 — 2026-10-25
+## 0.10.1 — 2026-10-25
+
+The 0.10.0 tag did not produce a release because CI exposed fixture scheduling and startup races. This release includes their fixes without relaxing test deadlines.
 
 - `open_file` distinguishes accepted requests from confirmed document opens. A missing matching document URL returns `open_status: unverified` instead of claiming a chat attachment or successful open.
 - A stalled ScreenCaptureKit connection switches to bounded system window captures, including for explicitly selected windows. Coordinates are checked against the captured window geometry; other apps' pixels are excluded. Shareable-content timeouts propagate immediately instead of being swallowed by retries.

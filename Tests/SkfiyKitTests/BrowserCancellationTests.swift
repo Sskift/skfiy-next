@@ -34,13 +34,13 @@ struct BrowserCancellationTests {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         try #require(bound == 0 && listen(listener, 1) == 0)
-        let server = Task.detached {
+        let server = blockingTestWorker {
             var poller = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 3000) > 0 else { return }
             let client = accept(listener, nil, nil)
             guard client >= 0 else { return }
             // The peer deliberately consumes no request bytes.
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            Thread.sleep(forTimeInterval: 1.2)
             Darwin.close(client)
         }
         let started = ProcessInfo.processInfo.systemUptime
@@ -68,7 +68,7 @@ struct BrowserCancellationTests {
         }
         try #require(bound == 0 && listen(listener, 1) == 0)
         let received = SocketReceipt()
-        let server = Task.detached { () -> Bool in
+        let server = blockingTestWorker { () -> Bool in
             var poller = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 3000) > 0 else { return false }
             let client = accept(listener, nil, nil)

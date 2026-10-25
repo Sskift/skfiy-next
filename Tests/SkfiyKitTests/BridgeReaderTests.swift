@@ -20,7 +20,7 @@ struct BridgeReaderTests {
     }
 
     private func writer(_ fd: Int32, data: Data) -> Task<Void, Never> {
-        Task.detached {
+        blockingTestWorker {
             defer { Darwin.close(fd) }
             var option: Int32 = 1
             setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &option, socklen_t(MemoryLayout<Int32>.size))

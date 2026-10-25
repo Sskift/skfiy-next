@@ -113,6 +113,11 @@ chrome.scripting.executeScript = async options => {
                 f'--user-data-dir={profile}', '--headless=new', '--window-size=1000,800', '--no-first-run', '--no-default-browser-check',
                 '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'],
                 stdout=log, stderr=subprocess.STDOUT)
+            # A clean runner has no normal-profile registration. MCP decides
+            # which tools to advertise at startup, so wait for this profile's
+            # actual native host before starting the two MCP sessions.
+            bridge = Path.home()/'Library/Application Support/skfiy/browsers'/f'{chrome.pid}.sock'
+            require(wait_until(bridge.exists, timeout=30), 'custom-profile native bridge started')
             env = {'SKFIY_CURSOR': '0', 'SKFIY_APPROVE': 'ask', 'SKFIY_BROWSER_TRACE': '1'}
             a = Client(binary, evidence=evidence('a'), env=env, answer=APPROVE); clients.append(a)
             b = Client(binary, evidence=evidence('b'), env=env); clients.append(b)
