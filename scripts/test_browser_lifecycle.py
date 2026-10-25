@@ -3,10 +3,13 @@
 Checks independent page receipts; no user tabs, profiles, or windows.
 Usage: python3 scripts/test_browser_lifecycle.py .build/debug/skfiy [all|lifecycle|outcomes]
 """
+from contextlib import contextmanager
+import errno
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -67,6 +70,45 @@ pane.scrollTop=50;moved=true;fetch('/receipt?name=inner-scrolled')}},30)</script
         self.wfile.write(body)
 
 
+@contextmanager
+def fixture_directory():
+    folder = tempfile.mkdtemp(prefix='skfiy-lifecycle-')
+    try:
+        yield folder
+    finally:
+        # Chrome helpers can finish a filesystem write just as their process
+        # group exits. Retry only that race, with a bounded cleanup deadline.
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                shutil.rmtree(folder)
+                break
+            except OSError as error:
+                if error.errno != errno.ENOTEMPTY or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.05)
+
+
+def stop_browser(process):
+    if process is None:
+        return
+    # Each fixture browser has its own session. Its renderer/utility children
+    # can outlive the main process; never target the user's browser processes.
+    def signal_group(value):
+        try:
+            os.killpg(process.pid, value)
+        except ProcessLookupError:
+            pass
+    signal_group(signal.SIGTERM)
+    try:
+        process.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        signal_group(signal.SIGKILL)
+        process.wait(timeout=5)
+    finally:
+        signal_group(signal.SIGKILL)
+
+
 def main():
     global scroll_enabled
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT/'.build/debug/skfiy').resolve()
@@ -83,7 +125,7 @@ def main():
     def check(name, condition, detail=''):
         require(condition, f'{name}: {detail}' if detail else name)
         checks.append(name); print('PASS ' + name, flush=True)
-    with tempfile.TemporaryDirectory(prefix='skfiy-lifecycle-') as folder:
+    with fixture_directory() as folder:
         root = Path(folder)
         evidence_path = Path(os.environ.get('SKFIY_TEST_EVIDENCE', str(root/'evidence')))
         evidence_path.mkdir(parents=True, exist_ok=True)
@@ -112,7 +154,7 @@ chrome.scripting.executeScript = async options => {
             chrome = subprocess.Popen([str(chrome_path/'Contents/MacOS/Google Chrome for Testing'),
                 f'--user-data-dir={profile}', '--headless=new', '--window-size=1000,800', '--no-first-run', '--no-default-browser-check',
                 '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'],
-                stdout=log, stderr=subprocess.STDOUT)
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             # A clean runner has no normal-profile registration. MCP decides
             # which tools to advertise at startup, so wait for this profile's
             # actual native host before starting the two MCP sessions.
@@ -211,7 +253,7 @@ chrome.scripting.executeScript = async options => {
             subprocess.run([str(host), 'install-browser-bridge', '--user-data-dir', str(profile2)], check=True, capture_output=True)
             chrome2 = subprocess.Popen([str(chrome_path/'Contents/MacOS/Google Chrome for Testing'),
                 f'--user-data-dir={profile2}', '--headless=new', '--window-size=2000,1000', '--no-first-run', '--no-default-browser-check',
-                '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'], stdout=log, stderr=subprocess.STDOUT)
+                '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             other_browser = {'browser': str(chrome2.pid)}
             require(wait_until(lambda: not a.call('browser_tabs', allow_error=True, **other_browser)['is_error'], timeout=30), 'second extension connected')
             # IDs are process-local and may be randomized by Chrome. The
@@ -279,10 +321,7 @@ chrome.scripting.executeScript = async options => {
         finally:
             for client in clients: client.close()
             for process in [chrome, chrome2]:
-                if process and process.poll() is None:
-                    process.terminate()
-                    try: process.wait(timeout=8)
-                    except subprocess.TimeoutExpired: process.kill(); process.wait()
+                stop_browser(process)
             log.close()
             server.shutdown(); server.server_close()
 
