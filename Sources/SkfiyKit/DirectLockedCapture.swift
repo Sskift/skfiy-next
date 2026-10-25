@@ -132,6 +132,9 @@ func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1
           maxScale.isFinite, maxScale > 0 else {
         throw ToolError("The selected window or screenshot scale is invalid.")
     }
+    if CaptureStall.active, !isScreenLocked() {
+        return try await captureSystemView(window, maxScale: maxScale, modelLimits: modelLimits, children: children)
+    }
     guard let screenshot = try await withDeadline(4, { @MainActor in
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
         let metadata = directLockedWindowMetadata()
@@ -178,7 +181,9 @@ func captureDirectLockedImage(_ window: DirectLockedWindow, maxScale: Double = 1
 
         return (image, CaptureGeometry(rect: current.frame, pixelWidth: image.width, pixelHeight: image.height))
     }) else {
-        throw ToolError("No screenshot: independent window capture did not answer within 4 s.")
+        CaptureStall.set()
+        guard !isScreenLocked() else { throw ToolError("No screenshot: independent window capture did not answer within 4 s.") }
+        return try await captureSystemView(window, maxScale: maxScale, modelLimits: modelLimits, children: children)
     }
     try Task.checkCancellation()
     return screenshot

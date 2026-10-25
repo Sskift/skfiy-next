@@ -1,6 +1,18 @@
 # Release notes
 
-## Unreleased
+## 0.10.0 — 2026-10-25
+
+- `open_file` distinguishes accepted requests from confirmed document opens. A missing matching document URL returns `open_status: unverified` instead of claiming a chat attachment or successful open.
+- A stalled ScreenCaptureKit connection switches to bounded system window captures, including for explicitly selected windows. Coordinates are checked against the captured window geometry; other apps' pixels are excluded. Shareable-content timeouts propagate immediately instead of being swallowed by retries.
+- AppKit sheets and focus-only windows are included in app window lookup. Fields remain bound to their nearest sheet instead of silently switching back to the main document. System panel paths use exact, verified AX insertion; `set_value` also checks native text read-back.
+- Window-only expectations avoid expensive tree/OCR reads, and observations have a bounded verification budget. Late/unavailable evidence is never reported as proof of success.
+- Native pointer tools accept explicit `coordinate_space: screen` with a bound `window_id`, including after a tree-only read. Screenshot coordinates remain the default and stale/moved windows are refused.
+- `run_in_front` explicitly asks once per local app process and MCP session, restoring the previous foreground app after each action. Remote-session actions keep their individual approvals. System panels and some custom views still require this foreground path; background delivery alone does not prove an effect.
+
+
+- Apple Screen Sharing now recognizes `AXSharedScreen`, captures the selected connection independently, and supports background pointer control and ASCII keyboard input. Left clicks and drags use button-number routing verified on the RFB wire. Connection changes, stale screenshots and mismatched keyboard targets are rejected. Unicode is refused before sending; modifier shortcuts use the approved foreground path, bypassing local menus and clipboard emulation. See `docs/screen-sharing.md` for the supported scope.
+- Native `expect.changed` compares independent window pixels as well as accessibility state, avoiding false `no_effect` results for canvas-only changes. Missing captures remain unknown. Verification and its follow-up state refresh stay on the inspected window, and value checks retain the original element across tree refreshes. Long verification waits renew supported Electron rendering leases.
+- Action logs include failed reads, incomplete screenshot diagnostics, bounded structured arguments, verification outcomes, duration and the running binary's build identity. Screen Sharing inputs remain redacted even when expectation validation fails before dispatch.
 
 - Screenshot coordinates expire when nested containers scroll, including before delivery of the scroll event. The target is checked again before dispatch.
 - An unreadable or navigating page cannot prove that text disappeared. Failed waits retain repeat protection.

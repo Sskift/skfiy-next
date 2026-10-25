@@ -52,6 +52,19 @@ extension ComputerUse {
                 + (element.map { " on \(describe($0))" } ?? "")
         }
 
+        // The remote framebuffer owns its context menus and pointer events.
+        // Do this before local AX/menu fallbacks (right-click is valid remotely).
+        let sharedPoint = point ?? (element?.string(kAXRoleAttribute) == "AXSharedScreen" ? element?.frame.map { CGPoint(x: $0.midX, y: $0.midY) } : nil)
+        if let sharedPoint, let screen = try sharedScreenPointer(app, session: session, point: sharedPoint, element: point == nil ? element : nil) {
+            try checkSharedScreenModifiers(modifiers, foreground: frontmostProcessID() == pid)
+            try await withSharedScreenInput(app, screen: screen, foreground: !modifiers.isEmpty) {
+                await Input.withRemoteModifiers(modifiers, to: pid, toFront: !modifiers.isEmpty) {
+                    _ = await Input.click(at: sharedPoint, pid: pid, windowID: screen.window, button: button, count: count, modifiers: modifiers, sharedScreen: true)
+                }
+            }
+            return try await afterSharedScreenInput(app, screen: screen, message: "Sent \(button.rawValue) click ×\(count) to the shared screen.")
+        }
+
         // A status item's menu would open over the user's screen; its items
         // can only be listed when the app built the menu in advance.
         if let element, element.string(kAXRoleAttribute) == "AXMenuBarItem",
@@ -219,13 +232,14 @@ extension ComputerUse {
         }
         let windowElement = element.flatMap(containingWindow(of:)) ?? axWindow(window, pid: pid)
         try checkPointerTarget(app, window: windowElement, receiver: window, point: point, aimed: element == nil)
+        let receiver = windowOwner(window) ?? pid
         let chromium = isChromium(app)
         let flutter = isFlutter(app)
         var note = ""
         if flutter, frontmostProcessID() != pid {
             // Measured with RustDesk: Flutter views ignore every kind of
             // background click; brief focus was not tried (it defocuses the user).
-            guard await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers) else {
+            guard await Input.click(at: point, pid: receiver, windowID: window, button: button, count: count, modifiers: modifiers) else {
                 throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
             }
             return "sent a background mouse click, but Flutter apps (such as RustDesk) ignore mouse clicks while they are in the background, so expect no effect. Click their controls by element_index instead (get_app_state lists them), or use run_in_front with the same x/y (asks the user)."
@@ -235,7 +249,7 @@ extension ComputerUse {
             case true?:
                 if await waitForUserIdle() {
                     let delivered = await Input.withBriefFocus(pid: pid, windowID: window) {
-                        await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
+                        await Input.click(at: point, pid: receiver, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
                     }
                     if delivered {
                         return "sent a mouse click while \(app.localizedName ?? "the app") had keyboard focus for a moment (it did not come forward; the user's front app kept its place). If the screenshot shows no change, this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
@@ -250,7 +264,7 @@ extension ComputerUse {
             }
         }
         // Input sends nothing once stopped, cancelled or locked: that is no click.
-        guard await Input.click(at: point, pid: pid, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium) else {
+        guard await Input.click(at: point, pid: receiver, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium) else {
             throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
         }
         let inFront = " this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
@@ -275,7 +289,7 @@ extension ComputerUse {
         if briefFocusEnabled || focusApproved.contains(pid) { return true }
         guard let askUser else { return nil }
         let name = app.localizedName ?? "the app"
-        let answer = await askUser("\(name) ignores clicks while it is in the background. Allow skfiy to give it keyboard focus for about a tenth of a second when it clicks there — only while you are not typing, without bringing it forward? (Asked once for \(name) this session.)")
+        let answer = await askUser("\(name) may ignore background pointer or key input. Allow skfiy to give it keyboard focus briefly when sending input — only while you are not typing, without bringing it forward? (Asked once for \(name) this session.)")
         if answer == true {
             focusApproved.insert(pid)
         }
@@ -363,6 +377,10 @@ extension ComputerUse {
             }
         }
         try element.set(kAXValueAttribute, newValue)
+        if Self.textRoles.contains(role), !webText,
+           await settledValue(element, expecting: text) != text {
+            throw ToolError("The field did not retain the requested value; the change is unverified. Inspect before retrying.")
+        }
         if webText {
             // Chromium updates the tree of a window that is not the key window
             // (or is covered) late, or not at all: then the read-back proves nothing.
@@ -417,6 +435,16 @@ extension ComputerUse {
         guard let window = pointerWindow(pid: pid, at: point, element: element) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at that point.")
         }
+        if let screen = try sharedScreenPointer(app, session: session, point: point, element: element) {
+            try ScreenSharing.validateScrollDirection(direction)
+            let distance = max((vertical ? screen.frame.height : screen.frame.width) * 0.85, 40) * pages
+            let dx = vertical ? 0 : (direction == "left" ? -distance : distance)
+            let dy = vertical ? (direction == "up" ? -distance : distance) : 0
+            try await withSharedScreenInput(app, screen: screen) {
+                await Input.scroll(at: point, dx: dx, dy: dy, pid: pid, windowID: screen.window)
+            }
+            return try await afterSharedScreenInput(app, screen: screen, message: "Sent \(direction) scroll to the shared screen.")
+        }
         // Not into a remote session either: the wheel would scroll the remote computer.
         try checkPointerTarget(app, window: element.flatMap(containingWindow(of:)), what: "wheel input", receiver: window, point: point,
                                aimed: args.values["x"] != nil || args.values["y"] != nil)
@@ -448,6 +476,13 @@ extension ComputerUse {
         let pid = app.processIdentifier
         guard let window = pointerWindow(pid: pid, at: start) else {
             throw ToolError("No window of \(app.localizedName ?? "the app") is at the start point.")
+        }
+        if let screen = try sharedScreenPointer(app, session: session, point: start) {
+            guard screen.contains(end) else { throw ToolError("A remote drag must end inside the same shared screen; nothing was sent.") }
+            try await withSharedScreenInput(app, screen: screen) {
+                await Input.drag(from: start, to: end, pid: pid, windowID: screen.window, sharedScreen: true)
+            }
+            return try await afterSharedScreenInput(app, screen: screen, message: "Sent a drag within the shared screen.")
         }
         try checkPointerTarget(app, window: axWindow(window, pid: pid), receiver: window, point: start, aimed: true)
         var how = "background mouse events"

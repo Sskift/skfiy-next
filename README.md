@@ -56,6 +56,10 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 
 连接和其他浏览器的说明见[浏览器扩展](docs/installation.md#浏览器扩展可选)。
 
+## macOS 自带“屏幕共享”
+
+已连接的“屏幕共享”窗口可以直接用 `get_app_state`、`click`、`type_text`、`press_key`、`scroll`、`drag` 操作。支持后台左键、双击、右键、中键、上下滚动、拖拽和 ASCII 文字；远端画面使用截图坐标，本机工具栏继续使用元素编号。修饰键快捷键需要经确认的前台操作，Unicode 文字会在发送前拒绝。见[用法、限制和验证方式](docs/screen-sharing.md)。
+
 ## 远程 Windows 桌面
 
 需要控制 RustDesk 连接的 Windows 桌面、同时保持本机窗口和焦点不动时，可以使用[SSH 远程桌面通道](docs/remote-desktop.md)。复用已有 SSH 连接，执行 `skfiy remote add 名称 SSH主机别名` 配置一次，然后让模型使用 `remote_desktop` 工具。组件按需在远端的已登录用户会话中运行。

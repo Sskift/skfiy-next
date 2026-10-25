@@ -16,13 +16,21 @@ extension ComputerUse {
         let signature: String
         let label: String?
         let elementIndex: Int?
+        var element: AXUIElement? = nil
+
+        var stateArguments: [String: Any] {
+            var arguments: [String: Any] = ["app": "pid:\(pid)"]
+            if let window { arguments["window"] = String(window) }
+            return arguments
+        }
     }
 
     func performVerified(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         let args = Arguments(raw)
         let expectation: ActionExpectation?
         do { expectation = try ActionExpectation(raw["expect"]) } catch {
-            return ToolResult(text: (error as? ToolError)?.description ?? "\(error)", isError: true)
+            return ToolResult(text: (error as? ToolError)?.description ?? "\(error)", isError: true,
+                              structuredContent: ["validation_error": "expect"])
         }
         let locked = DirectLockedUse.isActive
         if locked, let expectation, expectation.valueChanges || expectation.value != nil {
@@ -53,7 +61,7 @@ extension ComputerUse {
                 cache = updated
                 return observation
             }
-            return await unlockedObservation(target, wantText: wantText)
+            return await unlockedObservation(target, wantText: wantText, wantPixels: expectation.anyChange, windowsOnly: !wantText && !expectation.anyChange && !expectation.valueChanges && expectation.value == nil)
         }
         let before = await observe()
         if Task.isCancelled { return ToolResult(text: "The request was cancelled. Nothing was sent.", isError: true) }
@@ -62,26 +70,37 @@ extension ComputerUse {
         }
         var result = await perform(name, raw)
         guard !result.isError else { return result }
-        let started = Date()
+        let started = ProcessInfo.processInfo.systemUptime
         let verdict = await expectation.verify(
-            before: before, now: { Date().timeIntervalSince(started) },
+            before: before, now: { ProcessInfo.processInfo.systemUptime - started },
             sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
             observe: { await observe() })
         if risky {
             repeatGuard.performed(app: String(target.pid), signature: target.signature, label: label, verified: verdict.status == .verified)
         }
         result.text = verdict.line(risky: risky) + "\n" + result.text
+        var details = result.structuredContent ?? [:]
+        details["verification"] = ["status": verdict.status.rawValue, "detail": verdict.detail, "seconds": verdict.seconds]
+        result.structuredContent = details
         if verdict.status != .verified {
             result.isError = true
             if Task.isCancelled { return result }
             // The state now, not as it was right after the input.
-            var stateArguments: [String: Any] = ["app": raw["app"] ?? ""]
+            // Refresh the same inspected window. Falling back to the key
+            // window would silently replace the next action's coordinates.
+            var stateArguments = target.stateArguments
             if locked { stateArguments["ocr"] = true }
             let state = await perform("get_app_state", stateArguments)
             if !state.isError {
                 result.text += "\nCurrent state:\n" + state.text
                 result.image = state.image
                 result.imageMimeType = state.imageMimeType
+                for key in ["capture", "screenshot_attached", "capture_error"] {
+                    result.structuredContent?[key] = state.structuredContent?[key]
+                }
+            } else {
+                result.text += "\nCould not refresh the action's window: \(state.text). Inspect get_app_state before retrying."
+                result.structuredContent?["state_error"] = state.text
             }
         }
         return result
@@ -96,7 +115,7 @@ extension ComputerUse {
         guard let query = args.string("app"), case .running(let app)? = try? directory.resolve(query) else { return nil }
         let pid = app.processIdentifier
         let session = sessions[pid]
-        let window = session?.window.flatMap { windowID(of: $0) } ?? focusedWindowID(of: pid) ?? session?.windowID
+        let window = session?.window.flatMap { windowID(of: $0) } ?? session?.windowID ?? focusedWindowID(of: pid)
         var signature = name
         var label: String?
         let index = (try? args.elementIndex()) ?? nil
@@ -116,10 +135,11 @@ extension ComputerUse {
         case "perform_secondary_action": signature += "|\(args.string("action") ?? "")"
         default: break
         }
-        return ActionTarget(pid: pid, window: window, signature: signature, label: label, elementIndex: index)
+        return ActionTarget(pid: pid, window: window, signature: signature, label: label, elementIndex: index,
+                            element: index.flatMap { session?.elements[safe: $0] })
     }
 
-    private func unlockedObservation(_ target: ActionTarget, wantText: Bool) async -> VerifyObservation {
+    private func unlockedObservation(_ target: ActionTarget, wantText: Bool, wantPixels: Bool, windowsOnly: Bool = false) async -> VerifyObservation {
         var observation = VerifyObservation(text: "", windows: [:], targetPresent: true)
         guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else {
             observation.interruption = "the app quit"
@@ -129,24 +149,47 @@ extension ComputerUse {
             observation.interruption = "the screen locked"
             return observation
         }
+        if let window = target.window, !appIsHidden(app), presence(of: window, app: app) == .onScreen,
+           electronRendering.isLive(pid: target.pid, window: window) || chromiumWindowFrozen(app, window: window),
+           (try? refuseProtectedTarget(Arguments(["app": "pid:\(target.pid)"]))) != nil {
+            // Verification may outlast a rendering lease. Renew using the
+            // same guarded path; a failed renewal keeps the stale-pixel gate.
+            _ = await electronRendering.prepare(app, window: window)
+        }
         let appElement = AXUIElementCreateApplication(target.pid)
         AXUIElementSetMessagingTimeout(appElement, 1)
-        guard let windows = appElement.value(kAXWindowsAttribute) as? [AXUIElement] else {
+        guard appElement.value(kAXWindowsAttribute) as? [AXUIElement] != nil else {
             observation.interruption = "the window list could not be read"
             return observation
         }
-        for window in windows where window.string(kAXRoleAttribute) == kAXWindowRole {
+        for window in appWindows(appElement) where [kAXWindowRole, kAXSheetRole].contains(window.string(kAXRoleAttribute) ?? "") {
             let title = window.string(kAXTitleAttribute) ?? ""
             observation.windows[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
         if let id = target.window { observation.targetPresent = observation.windows[String(id)] != nil }
+        if windowsOnly { return observation }
         // The window the action was aimed at (an inspected one is not the
         // app's focused window), read on its own.
-        let inspected = sessions[target.pid]?.window != nil
-        let query = inspected ? target.window.map(String.init) : nil
+        let query = target.window.map(String.init)
         if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: query) {
             observation.text = snapshot.text
             observation.treeText = snapshot.body.joined(separator: "\n")
+            if wantPixels, observation.targetPresent {
+                // A canvas/remote framebuffer may change with an identical
+                // AX tree. Capture only this window, never the app's current
+                // key window or the composited desktop.
+                if let shown = snapshot.shownWindow, let window = independentWindow(shown, pid: target.pid) {
+                    do {
+                        let (image, _) = try await captureDirectLockedImage(window, children: true)
+                        observation.pixels = PixelFingerprint(image, region: nil)
+                    } catch {
+                        observation.changeUnavailable = "the window's pixels could not be captured: \(error)"
+                    }
+                }
+                if observation.pixels == nil, observation.changeUnavailable == nil {
+                    observation.changeUnavailable = "the window's pixels were unavailable"
+                }
+            }
             if wantText, snapshot.opaque, let region = snapshot.chosenWindow?.frame ?? appRegion(pid: target.pid, focusedWindow: snapshot.focusedWindowFrame),
                let lines = try? await recognizeView(pid: target.pid, window: snapshot.chosenWindow, rect: region) {
                 observation.text += "\n" + lines.map(\.text).joined(separator: "\n")
@@ -162,13 +205,16 @@ extension ComputerUse {
         let inTarget = { (element: AXUIElement) -> Bool in
             target.window == nil || self.containingWindow(of: element).flatMap(windowID(of:)) == target.window
         }
-        let element = target.elementIndex.flatMap { sessions[target.pid]?.elements[safe: $0] }
+        // Input can refresh and renumber the tree; retain the original AX
+        // element instead of interpreting its old index in a new snapshot.
+        let element = target.element
             ?? appElement.element(kAXFocusedUIElementAttribute).flatMap { inTarget($0) ? $0 : nil }
             ?? typingTargets[target.pid].flatMap { inTarget($0) ? $0 : nil }
         observation.value = element?.string(kAXValueAttribute)
         if chromiumWindowFrozen(app, window: target.window) {
             observation.unobservable = "the window is completely covered by other windows, and fresh Chromium rendering has not been confirmed"
         }
+        if isScreenLocked() { observation.interruption = "the screen locked" }
         return observation
     }
 

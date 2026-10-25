@@ -73,7 +73,14 @@ enum Input {
     static var directLockedWindowOrigin: CGPoint?
     static var directLockedReleaseValidation: (() -> Bool)?
     static var directLockedAborted = false
+    static var remoteValidation: (() -> Bool)?
+    static var remoteAborted = false
+    /// Only set inside a foreground-validated remote shortcut.
+    private static var remoteHIDTarget: pid_t?
     private static var cancelled: Bool {
+        if let validate = remoteValidation {
+            guard !remoteAborted, validate() else { remoteAborted = true; return true }
+        }
         if let validation = directLockedValidation {
             guard !directLockedAborted else { return true }
             guard !EmergencyStop.isStopped, !Task.isCancelled, validation() else {
@@ -90,6 +97,7 @@ enum Input {
     /// Release already delivered input after cancellation. Locked releases
     /// remain PID-scoped and require the retained direct target identity.
     private static var canRelease: Bool {
+        if let validate = remoteValidation, !validate() { return false }
         if directLockedValidation != nil {
             return directLockedReleaseValidation?() == true
         }
@@ -105,10 +113,21 @@ enum Input {
     private static func postKey(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, to pid: pid_t) {
         // A key-up may release an already delivered key after cancellation.
         guard !down || !cancelled else { return }
-        guard down || canRelease else { return }
+        guard down || canRelease || (remoteHIDTarget == pid && desktopAllowsNormalInput) else { return }
         guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: down) else { return }
-        event.flags = flags
-        event.postToPid(pid)
+        event.flags = remoteHIDTarget == pid ? remoteDeviceFlags(flags) : flags
+        if remoteHIDTarget == pid { event.post(tap: .cghidEventTap) }
+        else { event.postToPid(pid) }
+    }
+
+    private static func remoteDeviceFlags(_ flags: CGEventFlags) -> CGEventFlags {
+        var raw = flags.rawValue
+        // macOS left-device modifier bits, defined in IOLLEvent.h.
+        if flags.contains(.maskControl) { raw |= 0x01 }
+        if flags.contains(.maskShift) { raw |= 0x02 }
+        if flags.contains(.maskCommand) { raw |= 0x08 }
+        if flags.contains(.maskAlternate) { raw |= 0x20 }
+        return CGEventFlags(rawValue: raw)
     }
 
     /// Keys that carry the fn (and, for arrows, numeric-pad) flag on real keyboards.
@@ -141,6 +160,57 @@ enum Input {
                     await pause(0.02)
                 }
             }
+        }
+    }
+
+    /// Remote clients forward modifier transitions separately from keyDown.
+    /// Screen Sharing shortcuts use HID events only while foreground-validated;
+    /// background ASCII keeps its key events and modifier flags PID-scoped.
+    static func withRemoteModifiers(_ modifiers: Modifiers, to pid: pid_t, toFront: Bool = false, body: () async -> Void) async {
+        var flags: CGEventFlags = []
+        var pressed: [(CGKeyCode, CGEventFlags)] = []
+        func postModifier(_ code: CGKeyCode, _ flags: CGEventFlags, down: Bool) {
+            // Release our global modifier even if the user switched apps.
+            // Otherwise an interrupted foreground shortcut could leave it held.
+            guard down ? !cancelled : (toFront ? desktopAllowsNormalInput : canRelease) else { return }
+            guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: down) else { return }
+            event.type = .flagsChanged
+            event.flags = remoteDeviceFlags(flags)
+            if toFront { event.post(tap: .cghidEventTap) }
+            else { event.postToPid(pid) }
+        }
+        for (modifier, code, flag) in Modifiers.physical where modifiers.contains(modifier) {
+            guard !cancelled else { break }
+            flags.insert(flag)
+            postModifier(code, flags, down: true)
+            pressed.append((code, flag))
+            await pause(0.012)
+        }
+        if !cancelled { await body() }
+        for (code, flag) in pressed.reversed() {
+            flags.remove(flag)
+            postModifier(code, flags, down: false)
+            await pause(0.012)
+        }
+    }
+
+    static func remotePress(_ chord: KeyChord, count: Int = 1, hold: Double? = nil, to pid: pid_t, toFront: Bool = false) async {
+        let previous = remoteHIDTarget
+        remoteHIDTarget = toFront ? pid : nil
+        defer { remoteHIDTarget = previous }
+        if case .code(let code) = chord.key, let modifier = Modifiers.physical.first(where: { $0.1 == code })?.0 {
+            for _ in 0..<count {
+                guard !cancelled else { return }
+                await withRemoteModifiers(chord.modifiers.union(modifier), to: pid, toFront: toFront) {
+                    let until = Date().addingTimeInterval(hold ?? 0.012)
+                    while Date() < until, !cancelled { await pause(min(0.05, until.timeIntervalSinceNow)) }
+                }
+            }
+            return
+        }
+        await withRemoteModifiers(chord.modifiers, to: pid, toFront: toFront) {
+            if let hold { await self.hold(chord, seconds: hold, to: pid) }
+            else { await press(chord, repeat: count, to: pid) }
         }
     }
 
@@ -269,6 +339,12 @@ enum Input {
             (0, eventNumber), (1, clickState), (3, buttonNumber), (7, subtype), (40, Int64(pid)),
             (51, Int64(windowID)), (58, group), (91, Int64(windowID)), (92, Int64(windowID))
         ]
+        // Apple's SharedScreen ignores the inactive-window leftMouseDown
+        // path, but forwards otherMouse* using buttonNumber. Button 0 is still
+        // a left button on the RFB wire, without a focus click or replay.
+        if buttonNumber == 0, [.otherMouseDown, .otherMouseDragged, .otherMouseUp].contains(event.type) {
+            event.setDoubleValueField(.mouseEventPressure, value: event.type == .otherMouseUp ? 0 : 1)
+        }
         // The location within the window: AppKit views work it out from the
         // screen location, but WebKit reads this field.
         let origin = directLockedWindowOrigin ?? windowOrigin(windowID)
@@ -298,10 +374,10 @@ enum Input {
     /// target press/release sharing one mouse event number. False when it
     /// stopped (emergency stop, cancellation, lock) before every click was sent.
     @discardableResult
-    static func click(at point: CGPoint, pid: pid_t, windowID: CGWindowID, button: MouseButton, count: Int, modifiers: Modifiers, chromium: Bool = false) async -> Bool {
+    static func click(at point: CGPoint, pid: pid_t, windowID: CGWindowID, button: MouseButton, count: Int, modifiers: Modifiers, chromium: Bool = false, sharedScreen: Bool = false) async -> Bool {
         guard !cancelled else { return false }
         let (downType, upType, cgButton, number): (CGEventType, CGEventType, CGMouseButton, Int64) = switch button {
-        case .left: (.leftMouseDown, .leftMouseUp, .left, 0)
+        case .left: (sharedScreen ? .otherMouseDown : .leftMouseDown, sharedScreen ? .otherMouseUp : .leftMouseUp, .left, 0)
         case .right: (.rightMouseDown, .rightMouseUp, .right, 1)
         case .middle: (.otherMouseDown, .otherMouseUp, .center, 2)
         }
@@ -342,7 +418,7 @@ enum Input {
         return true
     }
 
-    static func drag(from start: CGPoint, to end: CGPoint, pid: pid_t, windowID: CGWindowID) async {
+    static func drag(from start: CGPoint, to end: CGPoint, pid: pid_t, windowID: CGWindowID, sharedScreen: Bool = false) async {
         guard !cancelled else { return }
         let group = Int64.random(in: 1...Int64(Int32.max))
         if let move = mouseEvent(.mouseMoved, start, .left, []) {
@@ -350,7 +426,7 @@ enum Input {
         }
         await pause(0.015)
         guard !cancelled else { return }
-        if let down = mouseEvent(.leftMouseDown, start, .left, []) {
+        if let down = mouseEvent(sharedScreen ? .otherMouseDown : .leftMouseDown, start, .left, []) {
             post(down, at: start, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
         }
         await pause(0.08)
@@ -360,14 +436,14 @@ enum Input {
             if cancelled { break }
             let t = Double(step) / Double(steps)
             let point = CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
-            if let dragged = mouseEvent(.leftMouseDragged, point, .left, []) {
+            if let dragged = mouseEvent(sharedScreen ? .otherMouseDragged : .leftMouseDragged, point, .left, []) {
                 post(dragged, at: point, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
                 lastPoint = point
             }
             await pause(0.012)
         }
         if !cancelled { await pause(0.08) }
-        if let up = mouseEvent(.leftMouseUp, lastPoint, .left, []) {
+        if let up = mouseEvent(sharedScreen ? .otherMouseUp : .leftMouseUp, lastPoint, .left, []) {
             post(up, at: lastPoint, pid: pid, windowID: windowID, clickState: 1, buttonNumber: 0, subtype: 0, group: group)
         }
     }

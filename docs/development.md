@@ -13,13 +13,16 @@ python3 scripts/test_browser_lifecycle.py .build/debug/skfiy  # 两个真实 MCP
 python3 scripts/test_browser_lifecycle.py .build/debug/skfiy outcomes  # 单独验证结果回执与多浏览器；lifecycle 单独跑生命周期，默认 all
 python3 scripts/test_bridge_backpressure.py .build/debug/skfiy  # 临时 HOME 中的真实 host/socket：慢客户端隔离和写入超时
 python3 scripts/test_read_modes.py .build/debug/skfiy  # 自建原生应用：纯树/增量读取、缓存失效和完整刷新；输出 P50/P95
+python3 scripts/test_native_verification.py .build/debug/skfiy  # 自建后台窗口：纯像素变化验证、失败后的窗口绑定、截图与读取失败日志
 node scripts/test_browser_sessions.mjs  # 浏览器快照绑定、坐标版本、动作回执、跨会话引用与取消；不依赖桌面
 node scripts/test_electron_rendering_lease.mjs  # 不依赖桌面的渲染租约与恢复测试
+python3 scripts/test_capture_recovery.py .build/debug/skfiy  # 测试专用 dylib 让 SCK 回调永久挂起，验证系统截图恢复、坐标与像素验证
+python3 scripts/test_system_panels.py .build/debug/skfiy  # 沙盒应用：打开请求假成功、系统 Go To sheet、中文路径与一次前台授权
 make test-install   # install.sh、skfiy setup / doctor / uninstall：在临时 HOME 里用假的 claude/codex 跑一遍，并核对你真实的配置没被改动；不碰界面
 make embed-extension  # 改了 browser-extension/ 之后：重新生成二进制里携带的插件副本（make release/install、源码安装和 release.sh 会自动做；不一致时 make test 失败）；内容变了而 manifest.json 的 version 没升时会提醒
 make dist           # 发布用的通用二进制压缩包（dist/），不发布任何东西；打 vX.Y.Z 标签后由 .github/workflows/release.yml 构建并发布
 make smoke          # 端到端：经 MCP 在后台驱动 TextEdit，并断言 TextEdit 从未到前台
-python3 scripts/test_electron_rendering.py .build/debug/skfiy  # 自建 Electron：受控遮挡通知、真实冻结/恢复、输入、截图、节流恢复、调试连接生命周期、焦点/层级采样
+python3 scripts/test_electron_rendering.py .build/debug/skfiy  # 自建 Electron：受控遮挡通知、真实冻结/恢复、输入、截图、长时间等待与 expect、节流恢复、调试连接生命周期、焦点/层级采样
 python3 scripts/test_complex_controls.py .build/debug/skfiy  # 自建 AppKit + 无界面 Chrome：行列定位、图标、后台虚拟列表、失效索引、截图 OCR 和前台采样；不启动窗口守护
 make smoke-fixture  # 自建的小应用（窗口放在所有窗口之后）：悬停提示、打开/存储面板、自绘视图的点击
 make smoke-web      # 端到端：用应用工具操作测试网页（一次性的 Chrome for Testing + 独立 profile）
@@ -33,6 +36,8 @@ swift scripts/make_extension_icons.swift browser-extension   # 重新画插件�
 ```
 
 浏览器 CI 另起 `browser-integration` 任务，下载 Chrome for Testing，用全新 profile 跑真实页面和受控故障：内层列表滚动、探测失败、上传后页面不可读、重复提交与多会话取消。Swift 测试另外覆盖丢失上传回执、写入堵塞和共享超时预算；Node 测试覆盖滚动事件尚未送达、导航中及子 frame 读取失败。它们不会连接个人浏览器。`CFT_CACHE` 可指定测试浏览器缓存，兼容 Intel 和 Apple Silicon。
+
+`test_native_verification.py` 仅操作自己创建的后台 AppKit 测试窗口，日志写入临时目录，不操作真实文档、远端连接或前台快捷键。可加 `--baseline /path/to/old/skfiy`，先断言旧版本能复现“画面已变却报 no_effect”和“验证失败后切换窗口”，再验证修复版本。
 
 设置 `SKFIY_TEST_EVIDENCE` 为一个空目录可保存这次浏览器集成测试的 Chrome 日志、MCP 记录和截图；CI 无论成功或失败都上传该目录。测试只在临时复制的扩展中注入页面探测故障，生产扩展没有故障开关。
 
@@ -110,3 +115,7 @@ eval/                      真实任务评测：任务、独立判定、前台/�
 
 这个仓库原先是「桌宠 + 后台 Agent」的 Electron 项目（约 16 万行，含设置网页、记忆中心、自动化、旧版 Chrome 扩展等），2026-09-28 按"先做内核"的方向重写为现在的样子，旧实现与旧提交历史一并移除。桌宠素材只留在本地的 `art/`（不随仓库分发），桌面浮窗/桌宠之后在这个内核之上重做。
 
+
+2026-10-25 0.10.0 发布验证：236 项 Swift、18 项浏览器会话、8 项原生验证、7 项截图故障恢复、4 组真实系统面板检查和 94 项隔离安装检查通过。故障注入分别让 SCK 截图回调、可捕获窗口列表永久不返回；恢复后验证了连续截图、画布实际点击、全局坐标保护及像素变化。微信只读实测在截图回调卡死时首次约 3.7 秒恢复、后续约 0.3 秒出图；没有发送文件或消息。系统面板测试确实选中了带中文与空格的路径，两次前台操作仅批准一次。
+
+旧 `smoke_fixture.py` 首轮逐列导航未在根目录看到 `Users`，导致后续面板测试连带失败（12/17）；修复前二进制对照与发布二进制重跑均为 17/17。该次失败未稳定复现，不能宣称旧逐列导航的所有间歇问题已经解决。独立 Go To sheet 路径测试通过，可在此类失败后读取系统 sheet、AX 写入路径并使用已授权的前台 Return 完成。

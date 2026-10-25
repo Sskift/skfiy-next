@@ -41,7 +41,8 @@ extension ComputerUse {
     }
 
     func pressKey(_ args: Arguments) async throws -> ToolResult {
-        let (app, _) = try target(args)
+        let (app, session) = try target(args)
+        if ScreenSharing.isApp(app.bundleIdentifier) { lastInputWasSecret = true }
         let key = try args.requiredString("key")
         let chord = try parseKeyChord(key)
         let count = try args.int("repeat") ?? 1
@@ -49,10 +50,23 @@ extension ComputerUse {
             throw ToolError("repeat must be between 1 and 100.")
         }
         try checkInputTarget(app)
-        let pid = app.processIdentifier
+        var pid = app.processIdentifier
+        if let screen = try sharedScreenKeyboard(app, session: session) {
+            let foreground = frontmostProcessID() == pid
+            try checkSharedScreenKey(chord, foreground: foreground)
+            let hold = try args.double("hold_seconds")
+            if let hold, (!(0.05...10).contains(hold) || count != 1) {
+                throw ToolError("hold_seconds must be between 0.05 and 10, without repeat.")
+            }
+            try await withSharedScreenInput(app, screen: screen, keyboard: true, foreground: foreground) {
+                await Input.remotePress(chord, count: count, hold: hold, to: pid, toFront: foreground)
+            }
+            return try await afterSharedScreenInput(app, screen: screen, message: "Sent remote key input (no local menu or clipboard emulation).")
+        }
         // Key events go to the app's key window, which may not be the window
         // the model works in: it is made the key window, or no key is sent.
         let keyboard = try await keyboardTarget(app, args)
+        pid = try keyboardReceiver(app, target: keyboard)
         if !keyboard.reachesIntended {
             // Shortcuts done through accessibility work on any window.
             if let how = try emulateShortcut(chord, pid: pid, window: keyboard.intendedWindow, text: keyboard.text) {
@@ -121,17 +135,30 @@ extension ComputerUse {
     }
 
     func typeText(_ args: Arguments) async throws -> ToolResult {
-        let (app, _) = try target(args)
+        let (app, session) = try target(args)
+        if ScreenSharing.isApp(app.bundleIdentifier) { lastInputWasSecret = true }
         let text = try args.requiredText("text")
         guard !text.isEmpty else {
             throw ToolError("\"text\" must not be empty.")
         }
         try checkInputTarget(app)
-        let pid = app.processIdentifier
+        var pid = app.processIdentifier
+        if let screen = try sharedScreenKeyboard(app, session: session) {
+            guard text.utf16.count <= 2000 else { throw ToolError("Screen Sharing text is limited to 2000 UTF-16 units per call.") }
+            let chords = try screenSharingTextChords(text)
+            try await withSharedScreenInput(app, screen: screen, keyboard: true) {
+                for chord in chords {
+                    guard Input.canSend, !Input.remoteAborted else { break }
+                    await Input.remotePress(chord, to: pid)
+                }
+            }
+            return try await afterSharedScreenInput(app, screen: screen, message: "Sent \(text.count) character(s) to the shared screen without using the local clipboard.")
+        }
         // Key events go to the app's key window, which may not be the window
         // the model works in: it is made the key window, or the text goes
         // into its field through accessibility, or nothing is sent.
         let keyboard = try await keyboardTarget(app, args)
+        pid = try keyboardReceiver(app, target: keyboard)
         // Flutter takes text set through accessibility only in an invisible
         // stand-in field, so for it keys are the only way.
         let flutter = isFlutter(app)
@@ -151,7 +178,7 @@ extension ComputerUse {
         await VirtualCursor.typing("⌨︎", pid: pid)
         // Background Chromium (Electron) reports no focused element even
         // right after a click focused a field: that field is meant.
-        let focused = focusedElement(pid) ?? keyboard.text ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
+        let focused = keyboard.text ?? focusedElement(pid) ?? typingTargets[pid].flatMap { $0.string(kAXRoleAttribute) == nil ? nil : $0 }
         lastInputWasSecret = focused?.string(kAXSubroleAttribute) == "AXSecureTextField"
         var note = keyboard.note
         if let focused, !isTextLike(focused) {
@@ -160,6 +187,11 @@ extension ComputerUse {
             note += " The app reports no focused element; click the field first if the text went missing."
         }
 
+        if let focused, pid != app.processIdentifier
+            || (focused.ancestor(role: kAXSheetRole) != nil && FilePanel.find(in: AXUIElementCreateApplication(app.processIdentifier)) != nil) {
+            try await insertPanelText(text, into: focused)
+            return try await afterAction(app, "Entered \(text.count) character(s) into the associated system panel through accessibility (verified; input method bypassed).")
+        }
         // Insert directly when the frontmost app's input method would compose
         // keystrokes, or when the text is long enough that keystrokes are slow.
         let imeWouldCompose = frontmostProcessID() == pid && Input.inputMethodActive()
@@ -216,6 +248,23 @@ extension ComputerUse {
             }
         }
         return try await afterAction(app, "Typed \(text.count) character(s) (sent to the app in the background).\(note)")
+    }
+
+    /// Insert at the selection without translating through the current IME.
+    func insertPanelText(_ text: String, into field: AXUIElement) async throws {
+        guard let before = field.string(kAXValueAttribute), field.isSettable(kAXValueAttribute) else {
+            throw ToolError("The system panel's focused field has no writable AX value. Inspect it and use set_value; no keystrokes were sent.")
+        }
+        let current = before as NSString
+        let range = selectedRange(field) ?? CFRange(location: current.length, length: 0)
+        let location = min(max(0, range.location), current.length)
+        let length = min(max(0, range.length), current.length - location)
+        let updated = current.replacingCharacters(in: NSRange(location: location, length: length), with: text)
+        try field.set(kAXValueAttribute, updated as CFString)
+        guard await settledValue(field, expecting: updated) == updated else {
+            throw ToolError("The panel did not retain the exact text; input is unverified. Inspect before retrying.")
+        }
+        setCaret(field, location + (text as NSString).length)
     }
 
     /// cmd+a, cmd+w and cmd+m through accessibility, on `window` (the window

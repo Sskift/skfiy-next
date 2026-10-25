@@ -30,6 +30,8 @@ struct AppSession {
     /// When the latest screenshot was taken, and the latest zoom of it.
     var captured: Date?
     var zoom: ZoomMapping?
+    /// Remote framebuffer identity and bounds at the latest screenshot.
+    var sharedScreen: SharedScreenSnapshot?
     /// The window the screenshot was about, and where it was then: pixels
     /// map to the screen only while it stays there.
     var windowID: CGWindowID?
@@ -95,6 +97,7 @@ public final class ComputerUse {
     /// themselves (sign in, enter a code); nil when the client cannot ask.
     public var waitForUser: ((String) async -> Bool?)?
     let settleDelay: Double
+    var frontApproved: Set<String> = []
     let directLockedUse = DirectLockedUse()
     let electronRendering = ElectronRendering()
     /// Refuses repeating a risky action whose effect was not verified.
@@ -147,6 +150,7 @@ public final class ComputerUse {
     /// Runs a tool and records what it changed in the action log.
     public func call(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         guard !Task.isCancelled else { return ToolResult(text: "The request was cancelled.", isError: true) }
+        let started = Date()
         if DirectLockedUse.enabled {
             if directLockedUse.observeTransition() { forgetApps() }
             if name == "locked_use_end" { return directLockedUse.status(end: true) }
@@ -155,10 +159,23 @@ public final class ComputerUse {
             return ToolResult(text: "Locked use is off. To keep macOS locked while skfiy works, the user starts a new MCP session with SKFIY_LOCKED_USE=direct.")
         }
         lastInputWasSecret = name == "remote_desktop"
+        // Set before target/expect parsing, which can fail before perform().
+        // Remote password fields are pixels, so their inputs are always private.
+        if ["type_text", "press_key", "set_value", "run_in_front"].contains(name) {
+            if DirectLockedUse.isActive { lastInputWasSecret = true }
+            if let query = raw["app"] as? String {
+                if ScreenSharing.isApp(query) || ["screensharing", "screen sharing", "屏幕共享"].contains(normalizeAppName(query)) {
+                    lastInputWasSecret = true
+                } else if case .running(let app)? = try? directory.resolve(query), ScreenSharing.isApp(app.bundleIdentifier) {
+                    lastInputWasSecret = true
+                }
+            }
+        }
         browser.lastInputWasSecret = false
         let result = await act(name, raw)
         if ["get_app_state", "wait_for"].contains(name), !result.isError { noteLooked(raw) }
-        actionLog?.record(tool: name, arguments: raw, result: result, secret: lastInputWasSecret || browser.lastInputWasSecret)
+        actionLog?.record(tool: name, arguments: raw, result: result, secret: lastInputWasSecret || browser.lastInputWasSecret,
+                          duration: Date().timeIntervalSince(started))
         return result
     }
 
@@ -211,6 +228,11 @@ public final class ComputerUse {
     func perform(_ name: String, _ raw: [String: Any]) async -> ToolResult {
         guard !Task.isCancelled else { return ToolResult(text: "The request was cancelled.", isError: true) }
         let args = Arguments(raw)
+        if ["type_text", "press_key", "run_in_front"].contains(name), let query = args.string("app"),
+           case .running(let app)? = try? directory.resolve(query), ScreenSharing.isApp(app.bundleIdentifier) {
+            // Remote password fields are pixels, including on failed/invalid calls.
+            lastInputWasSecret = true
+        }
         if DirectLockedUse.isActive, name == "type_text" || name == "press_key" || name == "set_value" {
             lastInputWasSecret = true
         }
@@ -220,6 +242,9 @@ public final class ComputerUse {
         do {
             if Self.inputTools.contains(name) || name == "scroll" {
                 try refuseProtectedTarget(args, scrolling: name == "scroll")
+            }
+            if DirectLockedUse.isActive, args.string("coordinate_space") == "screen" {
+                throw ToolError("Screen coordinates are unavailable while locked; use pixels of the latest window screenshot.")
             }
             if DirectLockedUse.isActive, Self.lockedPathTools.contains(name) {
                 // No foreground preservation, AX fallback, menu emulation, or
@@ -586,6 +611,9 @@ public final class ComputerUse {
     }
 
     func screenPoint(_ args: Arguments, _ xKey: String, _ yKey: String, session: AppSession) throws -> CGPoint {
+        if args.string("coordinate_space") == "screen", args.string("zoom_id") != nil {
+            throw ToolError("coordinate_space: screen cannot be combined with zoom_id.")
+        }
         if let zoomed = try zoomPoint(args, xKey, yKey, latest: session.zoom, screenshot: session.geometry, taken: session.captured,
                                       notDone: "nothing was done") {
             try checkWindowUnmoved(session)
@@ -595,8 +623,18 @@ public final class ComputerUse {
             throw ToolError("Pass both \(xKey) and \(yKey) (or an element_index).")
         }
         try checkWindowUnmoved(session)
+        let space = args.string("coordinate_space") ?? "screenshot"
+        guard ["screenshot", "screen"].contains(space) else { throw ToolError("coordinate_space must be screenshot or screen.") }
+        if space == "screen" {
+            guard !isScreenLocked(), args.string("zoom_id") == nil,
+                  let named = args.string("window_id"), let id = CGWindowID(named), id == session.windowID,
+                  let frame = session.windowFrame, frame.contains(CGPoint(x: x, y: y)) else {
+                throw ToolError("Screen coordinates require window_id from fresh get_app_state and a point inside that unchanged window. Nothing was sent.")
+            }
+            return CGPoint(x: x, y: y)
+        }
         guard let geometry = session.geometry else {
-            throw ToolError("There is no screenshot to map coordinates from. Call get_app_state first.")
+            throw ToolError("There is no screenshot to map coordinates from. Call get_app_state to recover capture, use an AX element, or explicitly pass coordinate_space: screen with window_id and known global screen points.")
         }
         guard geometry.containsPixel(x: x, y: y) else {
             throw ToolError("(\(formatNumber(x)), \(formatNumber(y))) is outside the latest \(geometry.pixelWidth)×\(geometry.pixelHeight) screenshot.")

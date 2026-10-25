@@ -14,7 +14,7 @@ struct FilePanel {
     /// The panel shown by `app`, as a sheet or as a window of its own.
     static func find(in app: AXUIElement) -> FilePanel? {
         var candidates: [AXUIElement] = []
-        for window in app.elements(kAXWindowsAttribute) {
+        for window in appWindows(app) {
             candidates.append(window)
             candidates.append(contentsOf: window.elements(kAXChildrenAttribute).filter { $0.string(kAXRoleAttribute) == kAXSheetRole })
         }

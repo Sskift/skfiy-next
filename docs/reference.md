@@ -136,6 +136,10 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 - **插件路径（推荐）**：在页面的隔离环境里操作 DOM，后台标签页照样可用。输入用 `execCommand('insertText')`，产生 React 等框架认的 input 事件，中文也不经过输入法。点击是合成事件（`isTrusted=false`），绝大多数网站不在意；少数要求真实用户手势的操作（弹窗、写剪贴板）可传 `trusted: true`，通过 `chrome.debugger` 发真实输入事件——执行期间 Chrome 顶部会短暂出现「正在调试此浏览器」提示条，且真实点击/按键只对窗口中正显示的标签页有效（Chrome 会丢弃发往隐藏标签页的这类事件，真实输入文字则不受限）。
 - **应用路径（无插件）**：`get_app_state` 读浏览器的辅助功能树（Chrome 等 Chromium 系和 Safari 都可以），只能操作每个窗口当前显示的标签页。链接/按钮/勾选框/表单/下拉框/可编辑区/滚动都走 AX，产生的是真实可信事件；但 Chromium 和 WebKit 都会丢弃发往后台窗口网页内容的指针事件，所以画布这类只能靠坐标点的内容要用 `click` 的 `focus: true`（见下文，首次对每个应用征得你同意）。
 
+### macOS 屏幕共享
+
+已连接的 Apple Screen Sharing 支持独立截图与后台画面操作，详见[屏幕共享适配](screen-sharing.md)。远端用截图坐标，本机工具栏用元素编号；ASCII 与普通键可在后台发送，修饰键快捷键需经确认的 `run_in_front`，Unicode 文字会在发送前拒绝。
+
 ### RustDesk 与 Flutter 应用
 
 - RustDesk 用同一个 bundle id 跑着两个进程：有窗口的界面进程和没有窗口的 `RustDesk --server`。按名字、bundle id 或路径找时取有 Dock 图标的那个；也可以写 `pid:N` 指定进程（`list_apps` 列出进程号）。
@@ -180,9 +184,11 @@ Menu bar: [76] "Apple" [77] "Finder" [78] "File" …
 
 ## 操作日志
 
-skfiy 做过的每个改动类操作（点击、输入、按键、文件打开和保存、网页操作、经你同意的前台操作、读取你的剪贴板）都追加到 `~/Library/Logs/skfiy/actions.jsonl`：时间、会话、工具、参数、结果的第一行。只读操作（看状态、放大、等待）不记。文件只有你能读（600），超过 5 MB 时轮换成 `actions.1.jsonl`。
+skfiy 做过的每个改动类操作（点击、输入、按键、文件打开和保存、网页操作、经你同意的前台操作、读取你的剪贴板）都追加到 `~/Library/Logs/skfiy/actions.jsonl`：时间、会话、进程所用二进制的构建标识、工具、耗时、参数、结果的第一行。成功的只读操作（看状态、放大、等待）不记；读取失败或请求的截图不可用时也会记录，方便追查后续坐标错误。文件只有你能读（600），超过 5 MB 时轮换成 `actions.1.jsonl`。
 
 - 输入到密码框里的文字只记长度（应用里靠辅助功能的 `AXSecureTextField`，网页里靠 `type=password`）；剪贴板的内容从不记。
+- 屏幕共享和锁屏输入无法识别远端密码框，因此输入内容始终脱敏，包括参数校验失败时。脱敏结果只保留验证状态和安全的错误类别。
+- `expect`、`target` 等对象参数保留有限长度与深度；验证结果、截图失败原因 `capture_error`、后续状态读取失败 `state_error` 单独记录，不写完整界面树或截图。构建标识可区分全局更新后仍在运行的旧 MCP 进程。
 - `skfiy log [N]` 查看最近 N 条（默认 30）。
 - `SKFIY_ACTION_LOG=off` 关闭记录，或设为别的路径；测试脚本都用临时文件或关闭，不写你的日志。
 
@@ -226,6 +232,8 @@ skfiy 自己的文件（插件、急停标记、流程、操作日志、实例�
 
 `expect` 在锁屏状态发生变化、应用退出、目标意外变化或无法可靠观察时不会报告成功。如果条件在输入前就已成立，返回 `already_satisfied`（未验证本次动作效果），重复操作保护仍然生效。
 
+原生应用的 `expect: {"changed": true}` 同时比较所操作窗口的独立截图和辅助功能状态，能识别画布、远程桌面等只改变画面的情况。截图不可用时，仍可用明确的辅助功能变化证明成功，但不能把没有观察到变化判为 `no_effect`。验证及失败后的状态刷新都保持原先查看的窗口；后续读取失败会返回 `state_error`，不会改读另一个窗口。`expect.text` 匹配实际界面文字，例如 `{"text":"Saved"}`；“打开图谱标签页”这类意图描述不会自动转换为界面条件。
+
 浏览器标签页的完整身份是浏览器进程加标签页 ID。不同浏览器出现相同 ID，或 `browser` 名称匹配多个进程时，工具会拒绝选择并列出候选；从 `browser_tabs` 取进程号作为 `browser` 即可区分。截图坐标也按此身份保存，并绑定文档、DOM 版本、视口、缩放及滚动位置；超过 30 秒或任一项变化后须重新截图。发送坐标前由页面再次核对，因此旧图不会沿用到导航后的新页面。
 
 `browser_click`、`browser_type`、`browser_select`、`browser_press_key` 和 `browser_scroll` 支持 `expect` 的 `text`、`text_gone`、`value`、`value_changes`、`changed`，超时范围 0.2–30 秒。结果同时返回文本与 MCP `structuredContent`：`action.status` 为 `sent`（已确认发送）、`not_sent`（发送前拒绝）或 `unknown`（输入可能已发送，回执不确定）；`verification.status` 单独表示效果是否验证，无条件时为 `not_requested`。后续读取失败仍保留已发送的回执，并给出 `state_error`；它不表示可以安全重试。加载中的空白页不能证明文字消失，密码值不参与读取或验证。
@@ -239,3 +247,12 @@ skfiy 自己的文件（插件、急停标记、流程、操作日志、实例�
 频繁读取同一窗口时，可同时传 `incremental: true` 和 `since`：值变化通知使对应节点失效，结构变化通知使全部节点失效；本会话发送原生输入前也清空缓存。即使应用漏发通知，也会在缓存满 2 秒或下一轮超过 4 次读取时做一次完整读取。未收到通知的变化在此期限内可能尚未反映，因此需要当下完整状态时省略 `incremental`。应用不支持通知时退回完整读取。`structuredContent` 的 `tree.cached_nodes` / `tree.fresh_nodes`、`capture`、`screenshot_attached` 可检查实际路径。
 
 原生动作后的固定等待改为在辅助功能变化静默 60 ms 后继续；没有可用通知时仍保留 `SKFIY_SETTLE_SECONDS` 的兜底等待。只读操作不再额外等待 150 ms，输入后的前台守护等待保留。
+
+
+### 系统文件面板与截图恢复（0.10.0）
+
+`open_file` 是系统 Open Document 请求。只有窗口的文档 URL 匹配才返回 `open_status: verified`；系统接受了请求但无法确认时返回错误和 `open_status: unverified`，不能当作聊天附件已经挂载。先读状态，避免盲目重发。
+
+系统文件面板的 Go To sheet 可按 `get_app_state` 返回的窗口 ID 读取。用 `set_value` 写完整路径，或点击字段、`cmd+a`、`type_text`；路径字段通过 AX 精确写入并核对，绕开输入法。部分系统面板忽略后台 Return，可用 `run_in_front(key: "Return")` 确认，再读取文件面板并点击 Open。首次请求明确说明本次 MCP 会话内对该本地应用进程的授权，之后复用；每次操作仍恢复原前台应用。远程连接继续单次批准。
+
+ScreenCaptureKit 超时后自动使用系统按窗口截图，同一 MCP 会话不必重启。备用捕获不截取整个桌面，窗口移动或关闭后不会返回可点击的旧坐标。默认 x/y 仍是最近截图像素；若已从其他来源得到全局屏幕点，可显式指定 `coordinate_space: "screen"` 与最新状态的 `window_id`，无需手算偏移。该模式要求点在未移动窗口内，不支持锁屏或 zoom_id。

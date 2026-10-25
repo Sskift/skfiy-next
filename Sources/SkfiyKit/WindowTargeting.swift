@@ -196,20 +196,20 @@ extension ComputerUse {
 
     /// The window an element belongs to.
     func containingWindow(of element: AXUIElement) -> AXUIElement? {
-        if element.string(kAXRoleAttribute) == kAXWindowRole { return element }
-        if let window = element.element(kAXWindowAttribute) { return window }
-        var current = element.element(kAXParentAttribute)
+        var current: AXUIElement? = element
         for _ in 0..<60 {
-            guard let candidate = current else { return nil }
-            if candidate.string(kAXRoleAttribute) == kAXWindowRole { return candidate }
+            guard let candidate = current else { break }
+            if [kAXWindowRole, kAXSheetRole].contains(candidate.string(kAXRoleAttribute) ?? ""), windowID(of: candidate) != nil {
+                return candidate
+            }
             current = candidate.element(kAXParentAttribute)
         }
-        return nil
+        return element.element(kAXWindowAttribute)
     }
 
     /// The app's window with this id, as accessibility lists it.
     func axWindow(_ id: CGWindowID, pid: pid_t) -> AXUIElement? {
-        AXUIElementCreateApplication(pid).elements(kAXWindowsAttribute).first { windowID(of: $0) == id }
+        appWindows(AXUIElementCreateApplication(pid)).first { windowID(of: $0) == id }
     }
 
     /// Hidden, also for an accessory app that hid itself: NSRunningApplication
@@ -292,8 +292,10 @@ extension ComputerUse {
                   let dictionary = row[kCGWindowBounds as String] as? NSDictionary else { return nil }
             return CGRect(dictionaryRepresentation: dictionary)
         }
+        let associated = appWindowIDs(pid)
         let top = rows.first { row in
-            guard (row[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid,
+            guard (row[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid
+                    || (row[kCGWindowNumber as String] as? UInt32).map({ associated.contains($0) }) == true,
                   let dictionary = row[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: dictionary) else { return false }
             return rect.contains(point)
@@ -429,6 +431,9 @@ extension ComputerUse {
         let keyWindow = appElement.element(kAXFocusedWindowAttribute)
         target.keyWindow = keyWindow.flatMap(windowID(of:))
         target.keyTitle = keyWindow?.string(kAXTitleAttribute) ?? ""
+        if keyWindow?.string("AXIdentifier") == "GoToWindow" {
+            target.text = keyWindow?.descendant(limit: 100) { $0.string("AXIdentifier") == "PathTextField" }
+        }
         if session?.window != nil || named, let intended = session?.windowID {
             target.intended = intended
             target.intendedWindow = session?.window ?? axWindow(intended, pid: pid)
@@ -440,7 +445,7 @@ extension ComputerUse {
                 target.text = focused
             } else if let window = target.intendedWindow {
                 // AppKit keeps a first responder per window; accessibility reports it focused.
-                target.text = window.descendant(limit: 1500) { $0.bool(kAXFocusedAttribute) == true && self.isTextLike($0) }
+                target.text = window.descendant(limit: 1500) { ($0.bool(kAXFocusedAttribute) == true || $0.string("AXIdentifier") == "PathTextField") && self.isTextLike($0) }
             }
         }
         let bundle = app.bundleIdentifier
@@ -489,6 +494,17 @@ extension ComputerUse {
         return target
     }
 
+    func keyboardReceiver(_ app: NSRunningApplication, target: KeyboardTarget) throws -> pid_t {
+        let pid = app.processIdentifier
+        guard target.reachesIntended, let id = target.keyWindow ?? target.intended,
+              let owner = windowOwner(id), owner != pid else { return pid }
+        guard appWindowIDs(pid).contains(id),
+              NSRunningApplication(processIdentifier: owner)?.bundleIdentifier == "com.apple.appkit.xpc.openAndSavePanelService" else {
+            throw ToolError("The keyboard window belongs to an unrecognized external process. No keys were sent; inspect the associated panel first.")
+        }
+        return owner
+    }
+
     /// Whether the window the model inspected by name or id is gone (closed
     /// by an action or by the user).
     func inspectedWindowClosed(_ pid: pid_t) -> Bool {
@@ -499,7 +515,7 @@ extension ComputerUse {
 
     /// The app's windows, as accessibility lists them.
     func appWindowIDs(_ pid: pid_t) -> Set<CGWindowID> {
-        Set(AXUIElementCreateApplication(pid).elements(kAXWindowsAttribute).compactMap(windowID(of:)))
+        Set(appWindows(AXUIElementCreateApplication(pid)).compactMap(windowID(of:)))
     }
 
     /// After an action, when the model works in a window it inspected by
@@ -521,7 +537,7 @@ extension ComputerUse {
         let was = (oldTitle.isEmpty ? "the window" : quote(oldTitle, limit: 60)) + (old.map { " (id \($0))" } ?? "")
         let opened = keyWindowMoved(now: keyID, inspected: old, known: session.knownWindows)
         guard session.window != nil, let key, let keyID, keyID != old, opened || closed,
-              key.string(kAXRoleAttribute) == kAXWindowRole, key.bool(kAXMinimizedAttribute) != true else {
+              [kAXWindowRole, kAXSheetRole].contains(key.string(kAXRoleAttribute) ?? ""), key.bool(kAXMinimizedAttribute) != true else {
             return session.knownWindows.isEmpty ? "" : openedNote(pid, windows.subtracting(session.knownWindows))
         }
         let title = quote(key.string(kAXTitleAttribute) ?? "", limit: 60)

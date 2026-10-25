@@ -45,15 +45,28 @@ extension ComputerUse {
             try checkPointerTarget(app, allowRemote: true)
         }
         let chord = try request.key.map(parseKeyChord)
-        // A RustDesk remote session passes what it gets to the remote computer.
+        // Remote clients pass session input to another computer.
         let appElementNow = AXUIElementCreateApplication(pid)
         let remoteWindow: AXUIElement? = {
             if let clickPoint, let id = pointerWindow(pid: pid, at: clickPoint), let window = axWindow(id, pid: pid) { return window }
             return appElementNow.element(kAXFocusedWindowAttribute)
         }()
+        let sharedKeyboardTarget: SharedScreenSnapshot?
+        if chord != nil, ScreenSharing.isApp(app.bundleIdentifier),
+           sessions[pid]?.sharedScreen != nil || ScreenSharing.surface(in: remoteWindow) != nil {
+            // Resolve remote intent before approval or local menu/clipboard
+            // handling. A disconnected inspected session must not turn the
+            // same shortcut into a command on the client's connection list.
+            guard let screen = try sharedScreenKeyboard(app, session: try appSession()) else {
+                throw ToolError("Screen Sharing's remote keyboard target changed; nothing was pressed. Inspect the connection again.")
+            }
+            sharedKeyboardTarget = screen
+        } else {
+            sharedKeyboardTarget = nil
+        }
         let remoteTitle = remoteWindow.flatMap { window -> String? in
             let title = window.string(kAXTitleAttribute) ?? ""
-            return RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: title) ? title : nil
+            return RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: title) || (ScreenSharing.isApp(app.bundleIdentifier) && ScreenSharing.surface(in: window) != nil) ? title : nil
         }
         // cmd+c, cmd+x and cmd+v work on skfiy's clipboard here too (not in a
         // remote session, where they are the remote computer's).
@@ -74,15 +87,20 @@ extension ComputerUse {
         let reason = args.string("reason").map { " (\($0))" } ?? ""
         var message = "skfiy wants to bring \(name) to the front for about a second to \(action)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
         if let remoteTitle {
-            message += " This goes to RustDesk's remote session \(quote(remoteTitle, limit: 80)), so the remote computer receives it; RustDesk may keep your keyboard for the remote computer until you click elsewhere."
+            message += " This goes to \(name)'s remote session \(quote(remoteTitle, limit: 80)), so the remote computer receives it; the remote client may keep your keyboard for the remote computer until you click elsewhere."
         }
-        switch await askUser(message) {
-        case nil:
-            throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them (or no answer came). Tell the user what needs doing instead.")
-        case false?:
-            throw ToolError("The user declined bringing \(name) to the front. Do not ask again for the same thing; tell them what is left to do.")
-        case true?:
-            break
+        let approvalKey = "\(pid)|\(app.launchDate?.timeIntervalSince1970 ?? 0)|\(app.bundleIdentifier ?? "")"
+        if remoteTitle != nil || !frontApproved.contains(approvalKey) {
+            if remoteTitle == nil { message += " Allow this for this app for the rest of this MCP session? Each action restores your app afterwards." }
+            switch await askUser(message) {
+            case nil:
+                throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them (or no answer came). Tell the user what needs doing instead.")
+            case false?:
+                throw ToolError("The user declined bringing \(name) to the front. Do not ask again for the same thing; tell them what is left to do.")
+            case true?:
+                break
+            }
+            if remoteTitle == nil { frontApproved.insert(approvalKey) }
         }
         // A quiet moment: no typing or clicking for a second, within 15 s.
         var quiet = false
@@ -155,6 +173,16 @@ extension ComputerUse {
                 how = "clicked there"
             } else if let menuElement, case .menu(_, let path) = request {
                 how = try await chooseFromMenu(of: menuElement, path: path, pid: pid)
+            } else if let chord, let sharedKeyboardTarget {
+                guard let screen = try sharedScreenKeyboard(app, session: try appSession()),
+                      screen == sharedKeyboardTarget, front() == pid else {
+                    throw ToolError("Screen Sharing's remote keyboard target changed; nothing was pressed. Inspect the connection again.")
+                }
+                try checkSharedScreenKey(chord, foreground: true)
+                try await withSharedScreenInput(app, screen: screen, keyboard: true, foreground: true) {
+                    await Input.remotePress(chord, to: pid, toFront: true)
+                }
+                how = "sent the shortcut to the remote screen without invoking a local menu or clipboard command"
             } else if let chord, let item = menuItem(for: chord, pid: pid), item.enabled {
                 if guardedAXPerformAction(item.element, kAXPressAction as CFString) == .failure, let refusal = axMutationRefusal() {
                     throw ToolError(refusal)

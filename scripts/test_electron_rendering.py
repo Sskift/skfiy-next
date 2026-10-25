@@ -129,6 +129,17 @@ def main():
         waited = c.call('wait_for', app=f'pid:{pid}', window=str(window), text='WAIT-' + nonce[:6], timeout=20, rpc_timeout=28)
         timer.join()
         check('long wait renews rendering and sees later text', not waited['is_error'])
+        # expect uses its own observation loop: it must renew the same lease
+        # even after the original ten-second confirmation has expired.
+        marker = 'VERIFIED-' + nonce[:6]
+        frames = covered.page(run)['frames']
+        timer = threading.Timer(12, lambda: covered.command(run, later=marker)); timer.start()
+        verified = c.call('click', app=f'pid:{pid}', target={'role': 'button', 'name': 'Increment'},
+                          expect={'text': marker, 'timeout': 20}, rpc_timeout=30, allow_error=True)
+        timer.join()
+        check('long action verification renews rendering and sees later text',
+              not verified['is_error'] and verified['structured']['verification']['status'] == 'verified'
+              and covered.page(run)['clicks'] == 2 and covered.page(run)['frames'] > frames, verified['text'])
         second = client('second-client')
         second.call('get_app_state', **common)
         c.close(); clients.remove(c)

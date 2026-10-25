@@ -225,6 +225,14 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         }
     }
 
+    // LaunchServices accepts all these requests. Only the verified fixture
+    // document is actually represented by a window; other files are ignored.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        if let url = urls.first, url.lastPathComponent == "skfiy-open-verified.txt" {
+            window.representedURL = url
+        }
+    }
+
     @objc func saveAs() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "fixture.txt"

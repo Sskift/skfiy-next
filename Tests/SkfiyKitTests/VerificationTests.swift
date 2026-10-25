@@ -14,6 +14,21 @@ private func look(_ text: String = "status: ready", windows: [String: String] = 
 }
 
 struct VerificationTests {
+    @Test func hungObservationHasABoundedBudget() async {
+        var expectation = ActionExpectation()
+        expectation.windowOpened = ""
+        expectation.timeout = 0.2
+        let started = ProcessInfo.processInfo.systemUptime
+        let verdict = await expectation.verify(before: look(), now: { ProcessInfo.processInfo.systemUptime - started },
+            sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }, observe: {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                return look(windows: ["1": "Main", "2": "Too late"])
+            })
+        #expect(verdict.status == .timeout)
+        #expect(verdict.detail.contains("effect is unknown"))
+        #expect(ProcessInfo.processInfo.systemUptime - started < 1)
+    }
+
     @Test func interruptionCannotSatisfyDisappearanceOrValueChange() async {
         var gone = ActionExpectation(); gone.textGone = "Loading"
         for reason in ["the screen locked", "the app quit", "the window list could not be read"] {
@@ -135,6 +150,44 @@ struct VerificationTests {
         #expect(b.differs(from: a))
         b.pixels = still
         #expect(!b.differs(from: a))
+    }
+
+    @Test func pixelOnlyChangesVerifyEvenWithAnIdenticalAccessibilityTree() async {
+        let pixels = PixelFingerprint(width: 10, height: 10, pixels: [UInt8](repeating: 0, count: 100))
+        var before = look("local toolbar only"), after = before
+        before.pixels = pixels
+        after.pixels = PixelFingerprint(width: 10, height: 10, pixels: [UInt8](repeating: 255, count: 100))
+        var expectation = ActionExpectation(); expectation.anyChange = true
+        let verdict = await run(expectation, before: before) { _ in after }
+        #expect(verdict.status == .verified)
+        // Changed pixels alone cannot prove a particular success message.
+        expectation.text = "Saved"; expectation.timeout = 0.5
+        let wrongText = await run(expectation, before: before) { _ in after }
+        #expect(wrongText.status == .timeout)
+    }
+
+    @Test func missingPixelsCannotBeMisreportedAsNoEffect() async {
+        var expectation = ActionExpectation(); expectation.anyChange = true; expectation.timeout = 0.5
+        var unavailable = look()
+        unavailable.changeUnavailable = "window capture failed"
+        for baselineMissing in [false, true] {
+            let before = baselineMissing ? unavailable : look()
+            let after = baselineMissing ? look() : unavailable
+            let verdict = await run(expectation, before: before) { _ in after }
+            #expect(verdict.status == .timeout && verdict.detail.contains("capture failed"))
+        }
+        var changed = unavailable; changed.treeText = "status: applied"
+        let positive = await run(expectation, before: unavailable) { _ in changed }
+        #expect(positive.status == .verified)
+        changed.unobservable = "covered Chromium rendering is unconfirmed"
+        let stale = await run(expectation, before: look()) { _ in changed }
+        #expect(stale.status == .timeout)
+    }
+
+    @Test @MainActor func followupStateStaysBoundToTheActionWindow() {
+        let target = ComputerUse.ActionTarget(pid: 321, window: 42, signature: "click", label: nil, elementIndex: nil)
+        #expect(target.stateArguments["app"] as? String == "pid:321")
+        #expect(target.stateArguments["window"] as? String == "42")
     }
 
     @Test func riskyLabelsAndKeys() {

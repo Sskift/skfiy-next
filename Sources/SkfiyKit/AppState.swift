@@ -115,6 +115,7 @@ extension ComputerUse {
         var screenshot: Screenshot?
         var captureNote: String?
         let shownWindow = snapshot.shownWindow
+        let sharedBeforeCapture = ScreenSharing.isApp(app.bundleIdentifier) ? ScreenSharing.snapshot(in: shownWindow) : nil
         let minimized = shownWindow?.bool(kAXMinimizedAttribute) == true
         // A window inspected by name may lie under another window of the same
         // app: it is captured on its own, as while locked, not as a region.
@@ -141,6 +142,17 @@ extension ComputerUse {
             }
         } else {
             captureNote = "No screenshot: the app has no visible window. Use the menu bar or a shortcut such as cmd+n to open one."
+        }
+        let sharedAfterCapture = ScreenSharing.isApp(app.bundleIdentifier) ? ScreenSharing.snapshot(in: shownWindow) : nil
+        if sharedBeforeCapture != sharedAfterCapture {
+            screenshot = nil
+            captureNote = "The shared screen changed during capture. Call get_app_state again; input coordinates are unavailable."
+        }
+        if let screen = sharedBeforeCapture,
+           let geometry = screenshot?.geometry, includeScreenshot {
+            let first = geometry.toPixels(screen.frame.origin)
+            let last = geometry.toPixels(CGPoint(x: screen.frame.maxX, y: screen.frame.maxY))
+            snapshot.header.append("Shared screen region: x=\(formatNumber(first.x)) y=\(formatNumber(first.y)) w=\(formatNumber(last.x - first.x)) h=\(formatNumber(last.y - first.y)) in screenshot pixels; the toolbar outside this region belongs to the local client.")
         }
         let windowKey = shownWindow.flatMap(windowID(of:)).map(String.init) ?? shownWindow?.string(kAXTitleAttribute) ?? ""
         let comparable = base.map { $0.window == windowKey } ?? false
@@ -192,6 +204,7 @@ extension ComputerUse {
         sessions[pid]?.shownFingerprint = includeScreenshot ? fingerprint : nil
         sessions[pid]?.independent = includeScreenshot && inspected != nil && screenshot != nil
         sessions[pid]?.knownWindows = appWindowIDs(pid)
+        sessions[pid]?.sharedScreen = sharedBeforeCapture == sharedAfterCapture ? sharedBeforeCapture : nil
         if screenshot != nil, chromiumWindowFrozen(app, window: sessions[pid]?.windowID) {
             snapshot.header.append(frozenNote(app))
         } else if let window = sessions[pid]?.windowID, electronRendering.isLive(pid: pid, window: window) {
@@ -210,6 +223,15 @@ extension ComputerUse {
         }
         var metrics: [String: Any] = ["tree": ["cached_nodes": readCache?.attributes.hits ?? 0, "fresh_nodes": readCache?.attributes.misses ?? snapshot.elements.count],
             "capture": screenshot != nil, "screenshot_attached": includeScreenshot && screenshot != nil]
+        if includeScreenshot, screenshot == nil { metrics["capture_error"] = shotLine }
+        if let geometry = screenshot?.geometry {
+            metrics["coordinates"] = ["space": "screenshot", "screen_x": geometry.rect.minX,
+                "screen_y": geometry.rect.minY, "points_per_pixel_x": geometry.rect.width / Double(geometry.pixelWidth),
+                "points_per_pixel_y": geometry.rect.height / Double(geometry.pixelHeight)]
+        }
+        if let id = shownWindow.flatMap(windowID(of:)), let owner = windowOwner(id), owner != pid {
+            metrics["window_owner_pid"] = owner
+        }
 
         let full = { (note: String?) -> ToolResult in
             var snapshot = snapshot
@@ -248,7 +270,7 @@ extension ComputerUse {
     /// A window as the window server knows it, for capturing it on its own.
     func independentWindow(_ window: AXUIElement, pid: pid_t) -> DirectLockedWindow? {
         guard let id = windowID(of: window), let frame = window.frame else { return nil }
-        return DirectLockedWindow(id: id, pid: pid, title: window.string(kAXTitleAttribute) ?? "", frame: frame)
+        return DirectLockedWindow(id: id, pid: windowOwner(id) ?? pid, title: window.string(kAXTitleAttribute) ?? "", frame: frame)
     }
 
     /// Recognizes the text shown in `region` of an app, from a capture at the
@@ -302,15 +324,20 @@ extension ComputerUse {
             kAXWindowsAttribute, kAXFocusedWindowAttribute, kAXMainWindowAttribute,
             kAXMenuBarAttribute, kAXChildrenAttribute, kAXFocusedUIElementAttribute
         ])
-        let windows = (values[kAXWindowsAttribute] as? [AXUIElement]) ?? []
+        let windows = appWindows(appElement)
         var focusedWindow = axElement(values[kAXFocusedWindowAttribute])
             ?? axElement(values[kAXMainWindowAttribute])
             ?? windows.first
         var chosenWindow: AXUIElement?
         if let windowQuery {
             // Inspect another window without raising it: the user's window order stays.
-            let titled = windows.filter { $0.string(kAXRoleAttribute) == kAXWindowRole }
+            let titled = windows.filter { [kAXWindowRole, kAXSheetRole].contains($0.string(kAXRoleAttribute) ?? "") }
             focusedWindow = try Self.chooseWindow(titled, query: windowQuery, app: app.localizedName ?? "the app")
+            chosenWindow = focusedWindow
+        }
+        if (focusedWindow.flatMap(windowID(of:)).flatMap(windowOwner).map { $0 != pid } ?? false)
+            || (ScreenSharing.isApp(app.bundleIdentifier) && ScreenSharing.surface(in: focusedWindow) != nil) {
+            // A remote connection is always captured on its own, even without window:.
             chosenWindow = focusedWindow
         }
         let focusedFrame = focusedWindow?.frame
@@ -431,14 +458,16 @@ extension ComputerUse {
             }
         }
         var windowTitles: [String: String] = [:]
-        for window in windows where window.string(kAXRoleAttribute) == kAXWindowRole {
+        for window in windows where [kAXWindowRole, kAXSheetRole].contains(window.string(kAXRoleAttribute) ?? "") {
             let title = window.string(kAXTitleAttribute) ?? ""
             windowTitles[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
         if let window = focusedWindow {
             let remote = RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: window.string(kAXTitleAttribute) ?? "")
             var keyboard = ""
-            if remote {
+            if ScreenSharing.isApp(app.bundleIdentifier), ScreenSharing.surface(in: window) != nil {
+                keyboard = " — remote screen; keyboard input requires this shared screen to be the client's keyboard target"
+            } else if remote {
                 keyboard = " — inspected without raising it; background remote input is unavailable"
             } else if chosenWindow != nil {
                 let key = axElement(values[kAXFocusedWindowAttribute])
@@ -458,7 +487,11 @@ extension ComputerUse {
         if let focusedElement, let index = elements.firstIndex(where: { CFEqual($0, focusedElement) }) {
             header.append("Keyboard focus: [\(index)]")
         }
-        if opaqueWindow {
+        if (focusedWindow.flatMap(windowID(of:)).flatMap(windowOwner).map { $0 != pid } ?? false)
+            || (ScreenSharing.isApp(app.bundleIdentifier) && ScreenSharing.surface(in: focusedWindow) != nil) {
+            opaqueWindow = true
+            header.append(ScreenSharing.guidance)
+        } else if opaqueWindow {
             header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Its text is recognized from the screenshot below, with positions for x/y clicks; also use the menu bar and keyboard shortcuts.")
         }
         return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow,

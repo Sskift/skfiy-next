@@ -63,6 +63,9 @@ struct CapabilityInputs: Equatable {
     var coveredChromium = false
     /// The app's key window is a remote session: key events would go to another computer.
     var remoteKeyWindow = false
+    var screenSharingSession = false
+    var screenSharingKeyboard = false
+    var screenSharingKeyWindow = false
 }
 
 struct Capability: Equatable {
@@ -186,6 +189,9 @@ struct CapabilityReport {
             if facts.hasFocusedElement == false {
                 limits.append("The app reports no focused element, so keystrokes may be lost: click the field first, or use set_value.")
             }
+            if facts.screenSharingSession {
+                limits.append("Only the client's local toolbar has accessibility controls. Remote screen text is recognized from pixels; use screenshot coordinates for remote controls.")
+            }
             let count = facts.accessibilityElements.map { " (\($0) content elements in the window)" } ?? ""
             channels.append(Capability(name: "ax", available: true, detail: "Accessibility tree with element indices\(count).", limits: limits))
         }
@@ -245,6 +251,10 @@ struct CapabilityReport {
             channels.append(Capability(name: "pointer", available: false, detail: "macOS is locked."))
         } else if facts.hidden {
             channels.append(Capability(name: "pointer", available: false, detail: "The app is hidden; use element actions or the keyboard."))
+        } else if facts.screenSharingSession {
+            channels.append(Capability(name: "pointer", available: screenshot.available,
+                                       detail: "Apple Screen Sharing framebuffer: PID/window-scoped click, right-click, vertical scroll and drag using the latest screenshot pixels.",
+                                       limits: ["Requires Control mode, a visible window and a screenshot from the last 30 seconds. No automatic activation or brief focus.", "Horizontal wheel input is refused; use the remote scrollbar. Remote delivery is not proof of effect: inspect the returned screenshot."]))
         } else if facts.remoteSession {
             channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks, drags and the wheel there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
                                        limits: ["Screenshots and text recognition of it work.", RemoteSurface.foregroundCaveat]))
@@ -279,6 +289,12 @@ struct CapabilityReport {
                              limits: ["Leave one window open before locking, or unlock manually."]))
         } else if facts.session == .locked {
             channels.append(Capability(name: "keyboard", available: false, detail: "macOS is locked."))
+        } else if facts.screenSharingSession {
+            channels.append(Capability(name: "keyboard", available: screenshot.available && facts.screenSharingKeyboard,
+                                       detail: "Direct remote keys/text through Apple Screen Sharing, bypassing local menu and clipboard emulation.",
+                                       limits: ["Requires the inspected SharedScreen to be the client's keyboard target, in Control mode, with a screenshot from the last 30 seconds.", "Printable ASCII, newline, tab and plain keys work in the background; Unicode is refused. Modifier shortcuts require run_in_front (approval and local focus/window order changes).", "Text and key arguments are redacted. The client's own clipboard synchronization setting still applies."]))
+        } else if facts.screenSharingKeyWindow {
+            channels.append(Capability(name: "keyboard", available: false, detail: "Screen Sharing's keyboard target is a remote screen that is not the inspected window. Inspect that connection by window id first."))
         } else if facts.remoteSession || facts.remoteKeyWindow {
             channels.append(Capability(name: "keyboard", available: false,
                                        detail: (facts.remoteSession ? "This window is" : "The app's key window, where key events go, is") + " a RustDesk remote session: keys there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
@@ -478,6 +494,11 @@ extension ComputerUse {
             let (count, web) = Self.contentElements(in: chosen, budget: 600)
             facts.accessibilityElements = count
             facts.webContent = web
+            facts.screenSharingSession = ScreenSharing.isApp(app.bundleIdentifier) && ScreenSharing.surface(in: chosen) != nil
+            if facts.screenSharingSession, let surface = ScreenSharing.surface(in: chosen), let focused,
+               CFEqual(focused, chosen), let field = appElement.element(kAXFocusedUIElementAttribute) {
+                facts.screenSharingKeyboard = isSelfOrDescendant(field, of: surface)
+            }
             facts.remoteSession = RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: pair.1.title)
             facts.coveredChromium = chromiumWindowFrozen(app, window: pair.1.id)
             if let focused, !CFEqual(focused, chosen) {
@@ -485,6 +506,7 @@ extension ComputerUse {
             }
         }
         if let focused {
+            facts.screenSharingKeyWindow = ScreenSharing.isApp(app.bundleIdentifier) && ScreenSharing.surface(in: focused) != nil
             facts.remoteKeyWindow = RemoteSurface.isRemoteSession(bundleID: app.bundleIdentifier, title: focused.string(kAXTitleAttribute) ?? "")
         }
         facts.hasFocusedElement = appElement.element(kAXFocusedUIElementAttribute) != nil

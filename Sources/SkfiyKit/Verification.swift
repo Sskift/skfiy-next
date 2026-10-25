@@ -64,7 +64,7 @@ struct ActionExpectation: Equatable {
 struct VerifyObservation {
     /// Accessibility text of the window (unlocked), or text recognized in it (locked).
     var text: String
-    /// What changed is judged on: pixels while locked, the tree's text unlocked.
+    /// Pixels for visual changes; unlocked observations also compare the AX tree.
     var pixels: PixelFingerprint?
     var treeText: String?
     /// The app's windows, by id (or title when no id is known).
@@ -77,6 +77,9 @@ struct VerifyObservation {
     /// Why the target cannot show an effect even if there was one (a covered
     /// Chromium window is not updated): no change then means nothing.
     var unobservable: String?
+    /// Missing pixels prevent a negative "nothing changed" conclusion, but
+    /// a readable AX/value change may still provide positive evidence.
+    var changeUnavailable: String?
 
     func differs(from other: VerifyObservation) -> Bool {
         if let a = pixels, let b = other.pixels, a.changed(from: b) { return true }
@@ -129,7 +132,7 @@ extension ActionExpectation {
     /// Watches after an action until the expectation holds, the target
     /// changes, or the timeout; then classifies what was seen.
     func verify(before: VerifyObservation, now: () -> Double, sleep: (Double) async throws -> Void,
-                observe: () async throws -> VerifyObservation, interval: Double = 0.25) async -> Verdict {
+                observe: @escaping () async throws -> VerifyObservation, interval: Double = 0.25) async -> Verdict {
         let started = now()
         if let interruption = before.interruption {
             return Verdict(status: .targetChanged, detail: interruption, seconds: 0)
@@ -141,7 +144,7 @@ extension ActionExpectation {
                 return Verdict(status: .timeout, detail: "the window changed, but not as expected (\(summary))\(stale)", seconds: now() - started)
             }
             // Not no_effect: the action may well have worked unseen.
-            if let reason = current.unobservable {
+            if let reason = current.unobservable ?? before.unobservable ?? current.changeUnavailable ?? before.changeUnavailable {
                 return Verdict(status: .timeout, detail: "nothing could be observed (\(reason)), so whether it took effect is unknown", seconds: now() - started)
             }
             return Verdict(status: .noEffect, detail: "nothing in the window changed", seconds: now() - started)
@@ -151,7 +154,11 @@ extension ActionExpectation {
             let current: VerifyObservation
             do {
                 try Task.checkCancellation()
-                current = try await observe()
+                let remaining = max(0, timeout - (now() - started))
+                guard remaining > 0, let received = try await withDeadline(remaining, observe) else {
+                    return Verdict(status: .timeout, detail: "observation did not finish within the verification budget; the action's effect is unknown", seconds: now() - started)
+                }
+                current = received
             } catch is BrowserDeadlineExceeded {
                 return Verdict(status: .timeout, detail: "verification exhausted its time budget", seconds: now() - started)
             } catch is CancellationError {

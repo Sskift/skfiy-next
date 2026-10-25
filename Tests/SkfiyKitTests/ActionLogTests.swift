@@ -3,6 +3,54 @@ import Testing
 @testable import SkfiyKit
 
 struct ActionLogTests {
+    @Test func failedReadsAndMissingScreenshotsAreDiagnosableWithoutLoggingSuccessfulLooks() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-log-reads-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let log = ActionLog(file: file)
+        log.record(tool: "get_app_state", arguments: ["app": "Fixture"], result: ToolResult(text: "private UI tree"), secret: false)
+        for tool in ["get_app_state", "zoom", "browser_wait"] {
+            log.record(tool: tool, arguments: ["app": "Fixture"], result: ToolResult(text: "capture unavailable", isError: true), secret: false, duration: 1.25)
+        }
+        log.record(tool: "get_app_state", arguments: ["app": "Fixture", "window": "42"],
+                   result: ToolResult(text: "App: Fixture\nprivate UI tree", structuredContent: ["capture_error": "independent capture timed out", "capture": false]), secret: false)
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let entries = try text.split(separator: "\n").map { try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        #expect(entries.count == 4)
+        #expect(!text.contains("private UI tree"))
+        #expect(entries[0]["duration_ms"] as? Int == 1250)
+        #expect(entries[0]["build"] as? String == ActionLog.buildID)
+        #expect(entries[3]["capture_error"] as? String == "independent capture timed out")
+        #expect(log.recent(1)[0].contains("⚠ get_app_state"))
+    }
+
+    @Test func structuredExpectationsAndTargetsSurviveLoggingWithinBounds() throws {
+        let recorded = ActionLog.recordedArguments([
+            "expect": ["changed": true, "timeout": 8],
+            "target": ["name": "Apply", "region": [10, 20, 30, 40]],
+            "text": String(repeating: "x", count: 600),
+        ], secret: false)
+        #expect((recorded["expect"] as? [String: Any])?["timeout"] as? Int == 8)
+        #expect((recorded["target"] as? [String: Any])?["region"] as? [Int] == [10, 20, 30, 40])
+        #expect((recorded["text"] as? String)?.count == 500)
+        #expect(JSONSerialization.isValidJSONObject(recorded))
+        let privateArguments = ActionLog.recordedArguments(["app": "Screen Sharing", "expect": ["value": "secret-marker"], "text": "secret-marker"], secret: true)
+        #expect(!String(decoding: try JSONSerialization.data(withJSONObject: privateArguments), as: UTF8.self).contains("secret-marker"))
+    }
+
+    @Test(arguments: ["com.apple.ScreenSharing", "Screen Sharing", "屏幕共享"]) @MainActor
+    func remoteInputIsRedactedWhenExpectationParsingFailsBeforeDispatch(app: String) async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-log-preflight-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let computer = ComputerUse()
+        computer.actionLog = ActionLog(file: file)
+        let result = await computer.call("type_text", ["app": app, "text": "preflight-secret-marker", "expect": ["timeout": 2]])
+        #expect(result.isError && result.text.contains("expect needs at least one condition"))
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(!text.contains("preflight-secret-marker"))
+        #expect(text.contains("redacted"))
+        #expect(text.contains("\"validation_error\":\"expect\""))
+    }
+
     @Test func recordsActionsNotLooksAndMasksPasswords() throws {
         let path = "/tmp/skfiy-log-test-\(getpid())-\(UUID().uuidString).jsonl"
         defer { try? FileManager.default.removeItem(atPath: path) }

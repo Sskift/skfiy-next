@@ -189,6 +189,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         button("Open dialog", "open-dialog", NSRect(x: 480, y: 340, width: 140, height: 30), in: content)
         button("Ask", "ask", NSRect(x: 480, y: 295, width: 140, height: 30), in: content)
         button("New window", "new-window", NSRect(x: 480, y: 255, width: 140, height: 30), in: content)
+        button("Paint pixels", "paint", NSRect(x: 480, y: 215, width: 140, height: 30), in: content)
         canvas.frame = NSRect(x: 20, y: 120, width: 400, height: 160)
         canvas.tiny = "tiny \(options.nonce.prefix(6))"
         canvas.clicked = { [weak self] point, hit in
@@ -214,6 +215,9 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         counters[name, default: 0] += 1
         let count = counters[name] ?? 0
         switch name {
+        case "paint":
+            // Change only pixels, leaving all AX labels and values unchanged.
+            canvas.phase = count.isMultiple(of: 2) ? 0.1 : 0.8
         case "noop": break  // deliberately nothing visible
         case "submit":
             submitted.append(input.stringValue)

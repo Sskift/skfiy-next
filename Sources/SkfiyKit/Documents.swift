@@ -58,7 +58,16 @@ extension ComputerUse {
         }
         await Input.pause(max(settleDelay, 0.8))
         let name = app.localizedName ?? appURL.deletingPathExtension().lastPathComponent
-        return ToolResult(text: "Opened \(path) in \(name) in the background. Call get_app_state with app \"\(app.bundleIdentifier ?? name)\" to see it.")
+        let confirmed = appWindows(AXUIElementCreateApplication(app.processIdentifier)).contains { window in
+            guard let document = window.string(kAXDocumentAttribute), let opened = URL(string: document), opened.isFileURL else { return false }
+            return opened.standardizedFileURL.resolvingSymlinksInPath() == url.standardizedFileURL.resolvingSymlinksInPath()
+        }
+        if confirmed {
+            return ToolResult(text: "Opened \(path) in \(name) in the background (confirmed by the window's document URL).",
+                              structuredContent: ["open_status": "verified", "request_accepted": true])
+        }
+        return ToolResult(text: "macOS accepted the request to open \(path) in \(name), but the app did not expose a matching document. Opening or attaching the file is unverified; this is not proof that anything happened. Inspect get_app_state before retrying. For a chat attachment, use the app's file picker with file_dialog or paste a file reference copied in Finder; open_file is an Open Document request, not an attachment operation.",
+                          isError: true, structuredContent: ["open_status": "unverified", "request_accepted": true])
     }
 
     // MARK: - file_dialog

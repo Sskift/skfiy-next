@@ -59,13 +59,6 @@ struct Screenshot {
     let mimeType: String
 }
 
-/// Out-of-process AppKit panels (open/save dialogs of sandboxed apps) render in
-/// these services, not in the app itself.
-private let panelServiceBundleIDs: Set<String> = [
-    "com.apple.appkit.xpc.openAndSavePanelService",
-    "com.apple.quicklook.QuickLookUIService"
-]
-
 /// The screen region to show for an app: its focused window plus any of its
 /// pop-up windows (menus, popovers, completion lists), clipped to one display.
 func appRegion(pid: pid_t, focusedWindow: CGRect?) -> CGRect? {
@@ -138,29 +131,32 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
     // start stream") for an app with nothing on screen; say what it is instead.
     let onScreen = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
     var visible = false
+    let associated = Set(appWindows(AXUIElementCreateApplication(pid)).compactMap(windowID(of:)))
+    var included: Set<CGWindowID> = []
     var panelServices: Set<pid_t> = []
     for window in onScreen {
         guard let owner = (window[kCGWindowOwnerPID as String] as? Int).map(pid_t.init),
               let dictionary = window[kCGWindowBounds as String] as? NSDictionary,
               let frame = CGRect(dictionaryRepresentation: dictionary),
               frame.width >= 2, frame.height >= 2, frame.intersects(region) else { continue }
-        if owner == pid {
-            visible = true
-        } else if panelServiceBundleIDs.contains(NSRunningApplication(processIdentifier: owner)?.bundleIdentifier ?? "") {
-            panelServices.insert(owner)
+        if owner == pid { visible = true }
+        if let id = window[kCGWindowNumber as String] as? UInt32, owner == pid || associated.contains(id) {
+            included.insert(id)
+            if owner != pid { panelServices.insert(owner) }
         }
     }
     guard visible else {
         throw ToolError("No screenshot: none of the app's windows is on screen here (it may be on another desktop, in full screen, or minimized). The accessibility tree still works.")
     }
     if CaptureStall.active {
-        return try await captureInHelper(pid: pid, rect: rect, maxScale: maxScale)
+        return try await captureSystemApp(pid: pid, rect: region, maxScale: maxScale)
     }
     var content: SCShareableContent
     do {
         content = try await ShareableContentCache.shared.content(containing: pid, alsoShowing: panelServices)
         // A display connected since the list was fetched is not in it: fetch once more.
-        if !content.displays.contains(where: { $0.displayID == displayID }) {
+        if !content.displays.contains(where: { $0.displayID == displayID })
+            || !included.isSubset(of: Set(content.windows.map(\.windowID))) {
             await ShareableContentCache.shared.invalidate()
             content = try await ShareableContentCache.shared.content(containing: pid, alsoShowing: panelServices)
         }
@@ -168,17 +164,18 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
         guard CaptureStall.active else {
             throw ToolError("No screenshot: screen capture did not answer within 5 s. The accessibility tree still works.")
         }
-        return try await captureInHelper(pid: pid, rect: rect, maxScale: maxScale)
+        return try await captureSystemApp(pid: pid, rect: region, maxScale: maxScale)
     }
     guard let display = content.displays.first(where: { $0.displayID == displayID })
             ?? content.displays.first(where: { CGDisplayBounds($0.displayID).contains(center) }) else {
         await ShareableContentCache.shared.invalidate()
         throw ToolError("No display is available to capture.")
     }
-    let applications = content.applications.filter {
-        $0.processID == pid || panelServiceBundleIDs.contains($0.bundleIdentifier)
+    let windows = content.windows.filter { included.contains($0.windowID) }
+    guard Set(windows.map(\.windowID)) == included else {
+        return try await captureSystemApp(pid: pid, rect: region, maxScale: maxScale)
     }
-    let filter = SCContentFilter(display: display, including: applications, exceptingWindows: [])
+    let filter = SCContentFilter(display: display, including: windows)
     let scale = captureScale(for: region.size, maxScale: maxScale)
     let configuration = SCStreamConfiguration()
     configuration.sourceRect = region.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
@@ -202,7 +199,7 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
                 guard CaptureStall.active else {
                     throw ToolError("No screenshot: screen capture did not answer within 3 s. The accessibility tree still works.")
                 }
-                return try await captureInHelper(pid: pid, rect: rect, maxScale: maxScale)
+                return try await captureSystemApp(pid: pid, rect: region, maxScale: maxScale)
             }
             captured = image
             break
@@ -211,7 +208,7 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
         } catch {
             await ShareableContentCache.shared.invalidate()
             guard attempt < 2 else {
-                throw ToolError("Screenshot failed: \(screenUnavailableReason() ?? error.localizedDescription). The accessibility tree still works.")
+                return try await captureSystemApp(pid: pid, rect: region, maxScale: maxScale)
             }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
@@ -221,67 +218,15 @@ func captureApp(pid: pid_t, rect: CGRect, maxScale: Double = 1) async throws -> 
 }
 
 /// Screen capture can stop answering inside one process for good, while a
-/// fresh process captures fine. After the first stall, screenshots are taken
-/// by a short-lived helper process (`skfiy capture-window`) instead.
+/// system process captures fine. After the first stall, use window-isolated
+/// screencapture processes instead of reusing the stalled SCK connection.
 struct CaptureStall: Error {
     @MainActor private static var stalled = false
-    /// This process is a helper itself; it never hands off to another one.
-    @MainActor static var isHelper = false
-
-    @MainActor static var active: Bool { stalled && !isHelper }
+    @MainActor static var active: Bool { stalled }
 
     @MainActor static func set() {
         stalled = true
     }
-}
-
-@MainActor
-private func captureInHelper(pid: pid_t, rect: CGRect, maxScale: Double) async throws -> Screenshot {
-    let failed = ToolError("No screenshot: screen capture stopped answering. The accessibility tree still works.")
-    guard let executable = Bundle.main.executableURL else { throw failed }
-    let output = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-capture-\(UUID().uuidString)")
-    defer { try? FileManager.default.removeItem(at: output) }
-    let process = Process()
-    process.executableURL = executable
-    process.arguments = ["capture-window", "\(pid)", "\(rect.minX)", "\(rect.minY)", "\(rect.width)", "\(rect.height)", "\(maxScale)", output.path]
-    // A link of its own: screen capture serves one process per executable path.
-    var environment = ProcessInfo.processInfo.environment
-    environment[Instance.variable] = nil
-    process.environment = environment
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = FileHandle.nullDevice
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        let once = Once()
-        process.terminationHandler = { _ in
-            if once.claim() { continuation.resume() }
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 6) {
-            if once.claim() {
-                process.terminate()
-                continuation.resume(throwing: failed)
-            }
-        }
-        do {
-            try process.run()
-        } catch {
-            if once.claim() { continuation.resume(throwing: failed) }
-        }
-    }
-    let answer = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    let fields = answer.split(separator: " ").map(String.init)
-    guard process.terminationStatus == 0, fields.count == 8, fields[0] == "ok",
-          let x = Double(fields[1]), let y = Double(fields[2]), let width = Double(fields[3]), let height = Double(fields[4]),
-          let pixelWidth = Int(fields[5]), let pixelHeight = Int(fields[6]),
-          let data = try? Data(contentsOf: output) else {
-        throw answer.hasPrefix("error ") ? ToolError(String(answer.dropFirst(6))) : failed
-    }
-    return Screenshot(
-        geometry: CaptureGeometry(rect: CGRect(x: x, y: y, width: width, height: height), pixelWidth: pixelWidth, pixelHeight: pixelHeight),
-        data: data,
-        mimeType: fields[7]
-    )
 }
 
 /// `skfiy capture-window pid x y width height max-scale output-path`: one
@@ -289,15 +234,19 @@ private func captureInHelper(pid: pid_t, rect: CGRect, maxScale: Double) async t
 /// capture stalled. Returns the line to print and whether it worked.
 @MainActor
 public func captureWindowCommand(_ arguments: [String]) async -> (output: String, ok: Bool) {
-    guard arguments.count == 7, let pid = pid_t(arguments[0]),
+    guard (7...8).contains(arguments.count), let pid = pid_t(arguments[0]),
           let x = Double(arguments[1]), let y = Double(arguments[2]),
           let width = Double(arguments[3]), let height = Double(arguments[4]),
-          let maxScale = Double(arguments[5]) else {
+          let maxScale = Double(arguments[5]), [x, y, width, height, maxScale].allSatisfy(\.isFinite),
+          width >= 1, height >= 1, maxScale > 0, maxScale <= 4,
+          arguments.count == 7 || arguments[7] == "system" else {
         return ("error usage: skfiy capture-window pid x y width height max-scale output-path", false)
     }
-    CaptureStall.isHelper = true
     do {
-        let shot = try await captureApp(pid: pid, rect: CGRect(x: x, y: y, width: width, height: height), maxScale: maxScale)
+        let region = CGRect(x: x, y: y, width: width, height: height)
+        let shot = try await (arguments.last == "system"
+            ? captureSystemApp(pid: pid, rect: region, maxScale: maxScale)
+            : captureApp(pid: pid, rect: region, maxScale: maxScale))
         try shot.data.write(to: URL(fileURLWithPath: arguments[6]))
         let rect = shot.geometry.rect
         return ("ok \(rect.minX) \(rect.minY) \(rect.width) \(rect.height) \(shot.geometry.pixelWidth) \(shot.geometry.pixelHeight) \(shot.mimeType)", true)
@@ -392,6 +341,8 @@ actor ShareableContentCache {
                     throw CaptureStall()
                 }
                 break
+            } catch is CaptureStall {
+                throw CaptureStall()
             } catch {
                 failure = error.localizedDescription
                 if attempt < 3 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
