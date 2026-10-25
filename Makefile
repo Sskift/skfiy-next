@@ -14,7 +14,7 @@ release: embed-extension
 	swift build -c release
 
 test:
-	swift test $(TEST_FLAGS)
+	swift test --no-parallel $(TEST_FLAGS)
 	@if command -v node >/dev/null; then node scripts/test_browser_sessions.mjs; else echo "Skipping browser session tests: Node is not installed."; fi
 
 # install.sh, `skfiy setup` and `skfiy uninstall` in a throwaway HOME with fake
