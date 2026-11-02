@@ -6,6 +6,26 @@ struct BrowserReliabilityTests {
     private var browser: ConnectedBrowser { ConnectedBrowser(socketPath: "/fixture", name: "Fixture", pid: 10, snapshotProtocol: 2) }
     private var page: [String: Any] { ["snapshot_id": "snapshot", "tabId": 7, "lines": ["Processing", "[0] button Submit"]] }
 
+    @Test @MainActor func navigationReceiptSurvivesUnreadableDestinationWithoutRepeatingNavigation() async throws {
+        let cases: [[String: Any]] = [["url": "https://fixture.invalid/"],
+                                      ["url": "https://fixture.invalid/", "tab_id": 7],
+                                      ["action": "reload", "tab_id": 7]]
+        for arguments in cases {
+            var navigations = 0
+            let tools = BrowserTools(discover: { [browser] }, request: { _, method, _, _ in
+                if method == "open" || method == "navigate" { navigations += 1; return ["tabId": 7] }
+                if method == "state" { throw ToolError("Frame with ID 0 is showing error page") }
+                throw ToolError("unexpected method")
+            })
+            let result = try await tools.call("browser_open", Arguments(arguments))
+            #expect(result.isError && navigations == 1)
+            #expect((result.structuredContent?["action"] as? [String: String])?["status"] == "sent")
+            #expect(result.structuredContent?["tab_id"] as? Int == 7)
+            #expect(result.structuredContent?["state_error"] as? String == "Frame with ID 0 is showing error page")
+            #expect(result.text.contains("tab 7") && result.text.contains("browser_state"))
+        }
+    }
+
     @Test @MainActor func unreadableWaitCannotSucceedOrClearRepeatProtection() async throws {
         var sent = 0
         var readable = false

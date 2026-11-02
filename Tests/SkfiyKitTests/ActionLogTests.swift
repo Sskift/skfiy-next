@@ -3,6 +3,33 @@ import Testing
 @testable import SkfiyKit
 
 struct ActionLogTests {
+    @Test(arguments: [false, true]) func browserFailureKeepsReasonAndReceiptWithoutPageContents(secret: Bool) throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-log-receipt-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let log = ActionLog(file: file)
+        let reason = "The tab snapshot expired. Call browser_state again."
+        var result = BrowserActionOutcome(status: "not_sent", detail: reason).result
+        result.text += "\nprivate-page-marker"
+        log.record(tool: "browser_click", arguments: [:], result: result, secret: secret)
+        let data = try Data(contentsOf: file)
+        let entry = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(entry["version"] as? String == skfiyVersion)
+        #expect((entry["action"] as? [String: String])?["status"] == "not_sent")
+        #expect(entry["detail"] as? String == (secret ? "(redacted)" : reason))
+        #expect(!String(decoding: data, as: UTF8.self).contains("private-page-marker"))
+        #expect(log.recent(1)[0].contains(secret ? "(redacted)" : reason))
+        if secret { #expect(!String(decoding: data, as: UTF8.self).contains(reason)) }
+    }
+
+    @Test func browserReceiptDetailIsBounded() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-log-detail-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        ActionLog(file: file).record(tool: "browser_click", arguments: [:],
+            result: BrowserActionOutcome(status: "unknown", detail: String(repeating: "x", count: 2000)).result, secret: false)
+        let entry = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect((entry["detail"] as? String)?.count == 1000)
+    }
+
     @Test func failedReadsAndMissingScreenshotsAreDiagnosableWithoutLoggingSuccessfulLooks() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-log-reads-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: file) }

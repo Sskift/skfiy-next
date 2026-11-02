@@ -83,6 +83,7 @@ public struct ActionLog: Sendable {
             "time": ISO8601DateFormatter().string(from: date),
             "session": Int(getpid()),
             "build": Self.buildID,
+            "version": skfiyVersion,
             "tool": tool,
             "arguments": Self.recordedArguments(arguments, secret: secret),
             // Validation errors can echo a secret argument, so the result
@@ -98,6 +99,15 @@ public struct ActionLog: Sendable {
             entry["state_error"] = secret ? "(redacted)" : String(stateError.prefix(1000))
         }
         if result.structuredContent?["validation_error"] as? String == "expect" { entry["validation_error"] = "expect" }
+        if let action = result.structuredContent?["action"] as? [String: Any],
+           let status = action["status"] as? String, ["sent", "not_sent", "unknown"].contains(status) {
+            entry["action"] = ["status": status]
+        }
+        // Browser receipts put their reason after the first line. Keep that
+        // bounded detail on failure, never the appended page snapshot.
+        if problem, let detail = result.structuredContent?["detail"] as? String {
+            entry["detail"] = secret ? "(redacted)" : String(detail.prefix(1000))
+        }
         // Keep structured outcome details, never the returned UI tree or
         // clipboard contents. Secret results retain only the status enum.
         if let verification = result.structuredContent?["verification"] as? [String: Any] {
@@ -144,6 +154,7 @@ public struct ActionLog: Sendable {
             let stateError = entry["state_error"] as? String
             let mark = entry["error"] as? Bool == true ? "✘" : captureError != nil || stateError != nil ? "⚠" : "✔"
             return "\(time)  \(mark) \(entry["tool"] as? String ?? "?")  \(arguments)\n      → \(entry["result"] as? String ?? "")"
+                + ((entry["detail"] as? String).map { "\n      → \($0)" } ?? "")
                 + (captureError.map { "\n      → Screenshot unavailable: \($0)" } ?? "")
                 + (stateError.map { "\n      → State refresh failed: \($0)" } ?? "")
         }

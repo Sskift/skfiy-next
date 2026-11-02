@@ -1,5 +1,12 @@
 # Release notes
 
+## 0.10.3 — 2026-11-02
+
+- Recover transient browser frame-readiness failures within the snapshot's existing wait budget. Only page reads are retried; navigation and input are never replayed. An unreadable destination retains the acknowledged navigation, browser process and tab ID.
+- Accept unambiguous AX/DOM role names such as `RadioButton`, `textbox`, `combobox` and `treeitem` in semantic targets.
+- Action logs retain bounded browser failure details and action receipts, plus the executable version. Private results stay redacted and appended page contents are excluded.
+- Bundled browser extension: 0.9.4; reload it after updating.
+
 ## 0.10.2 — 2026-10-25
 
 The 0.10.0 and 0.10.1 tags did not produce releases because CI exposed fixture scheduling and startup races. This release isolates blocking test workers, runs timing-sensitive tests serially, and waits for browser bridge readiness without relaxing test deadlines.

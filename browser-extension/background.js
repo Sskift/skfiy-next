@@ -342,11 +342,29 @@ const frameIndex = new Map();
 
 async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id }, control) {
   const tab = await tabById(tabId);
+  const deadline = Date.now() + 5000;
   await waitForLoad(tab.id, 5000, control);
   const binding = { session_id, snapshot_id: crypto.randomUUID() };
-  const frames = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding], world: 'ISOLATED', injectImmediately: true
-  });
+  let frames;
+  for (;;) {
+    control.check();
+    try {
+      frames = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding], world: 'ISOLATED', injectImmediately: true
+      });
+      control.check();
+      break;
+    } catch (error) {
+      control.check();
+      // A committed navigation can still lack an injectable frame even
+      // when tabs.get says complete. Retry only this read, never input or
+      // the navigation that already opened the tab. Error pages and access
+      // denials are terminal, not a reason to spin until the RPC expires.
+      if (!/^Frame with ID \d+ is not ready\.?$/i.test(error?.message || String(error)) || Date.now() >= deadline) throw error;
+      await delay(Math.min(150, deadline - Date.now()));
+      if (Date.now() >= deadline) throw error;
+    }
+  }
   const top = frames.find((f) => f.frameId === 0);
   if (!top || !top.result) throw new Error('the page did not answer');
   const map = [];

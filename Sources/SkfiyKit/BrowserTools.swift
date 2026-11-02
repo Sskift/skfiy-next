@@ -73,7 +73,7 @@ final class BrowserTools {
                 let tabID = try requiredTab(args)
                 let browser = try await browser(for: args, tabID: tabID)
                 _ = try await send(browser, "navigate", ["tab_id": tabID, "action": action], timeout: 30)
-                return try await state(browser, tabID: tabID, prefix: "Went \(action) in tab \(tabID).", screenshot: false)
+                return await navigationState(browser, tabID: tabID, detail: "Went \(action) in tab \(tabID).")
             }
             guard let url = args.string("url"), !url.isEmpty else { throw ToolError("Missing required argument \"url\" (or action, with tab_id).") }
             let tabID = try args.int("tab_id")
@@ -83,7 +83,7 @@ final class BrowserTools {
             let result = try await send(browser, "open", params, timeout: 30) as? [String: Any] ?? [:]
             guard let opened = result["tabId"] as? Int else { throw ToolError("The browser did not report the tab.") }
             let verb = tabID == nil ? "Opened \(url) in background tab \(opened) (in the \"skfiy\" tab group)." : "Navigated tab \(opened) to \(url)."
-            return try await state(browser, tabID: opened, prefix: verb, screenshot: false)
+            return await navigationState(browser, tabID: opened, detail: verb)
         case "browser_state":
             let tabID = try requiredTab(args)
             let browser = try await browser(for: args, tabID: tabID)
@@ -121,6 +121,14 @@ final class BrowserTools {
             throw ToolError("Missing required argument \"tab_id\" (see browser_tabs).")
         }
         return tabID
+    }
+
+    private func navigationState(_ browser: ConnectedBrowser, tabID: Int, detail: String) async -> ToolResult {
+        var receipt = BrowserActionOutcome(status: "sent", verification: "not_requested", detail: detail).result
+        receipt.text = detail
+        receipt.structuredContent?["tab_id"] = tabID
+        receipt.structuredContent?["browser_pid"] = Int(browser.pid)
+        return await followingState(receipt, browser: browser, tabID: tabID)
     }
 
     private func act(_ name: String, _ args: Arguments) async throws -> ToolResult {

@@ -125,11 +125,16 @@ struct Locator: Equatable {
     static func normalizedRole(_ role: String) -> String? {
         let key = role.lowercased().replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
         let synonyms = ["textfield": "text field", "input": "text field", "field": "text field", "check box": "checkbox", "menuitem": "menu item",
+                        "radiobutton": "radio", "radio button": "radio", "axradiobutton": "radio", "axcell": "cell",
                         "popup": "pop-up", "pop up": "pop-up", "dropdown": "pop-up", "select": "pop-up", "label": "text", "static text": "text",
                         "按钮": "button", "输入框": "text field", "文本框": "text field", "复选框": "checkbox", "链接": "link", "标签页": "tab",
                         "单元格": "cell", "表格": "table", "列表": "list", "行": "row", "滚动区域": "scroll area", "scrollarea": "scroll area", "工具栏": "toolbar", "菜单": "menu"]
         let resolved = synonyms[key] ?? key
-        return roleAliases[resolved] != nil ? resolved : nil
+        if roleAliases[resolved] != nil { return resolved }
+        // Accept roles already emitted by AX/DOM snapshots (textbox,
+        // combobox, treeitem, ...), only when their canonical kind is unique.
+        let matches = roleAliases.filter { $0.value.contains { $0.lowercased() == role.lowercased() } }.map(\.key)
+        return matches.count == 1 ? matches[0] : nil
     }
 
     var summary: String {

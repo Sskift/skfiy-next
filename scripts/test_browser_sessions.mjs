@@ -71,6 +71,47 @@ function setup() {
 }
 let passed = 0;
 async function test(name, body) { await body(); passed++; console.log('ok', name); }
+await test('snapshot recovers a temporarily unavailable frame without repeating navigation', async () => {
+  const s = setup(), execute = s.chrome.scripting.executeScript;
+  let attempts = 0;
+  s.chrome.scripting.executeScript = async options => {
+    if (options.func.name === 'pageSnapshot' && ++attempts < 3) throw new Error('Frame with ID 0 is not ready');
+    return execute(options);
+  };
+  await s.context.dispatchRequest('open', { tab_id: 7, url: s.tab.url, session_id: 'A' }, s.control());
+  const state = await s.state();
+  assert.equal(attempts, 3); assert.deepEqual(s.effects, ['navigate']);
+  await s.act(state); assert.deepEqual(s.clicks, ['Approve']);
+});
+await test('snapshot does not retry terminal errors or cancelled requests', async () => {
+  for (const reason of ['Frame with ID 0 is showing error page', 'Cannot access a chrome:// URL', 'No tab with id: 7.']) {
+    const s = setup(); let attempts = 0;
+    s.chrome.scripting.executeScript = async () => { attempts++; throw new Error(reason); };
+    await assert.rejects(s.state(), error => error.message === reason); assert.equal(attempts, 1);
+  }
+  const s = setup(), owner = s.control(); let attempts = 0;
+  s.chrome.scripting.executeScript = async () => {
+    attempts++; owner.cancelled = true; throw new Error('Frame with ID 0 is not ready');
+  };
+  await assert.rejects(s.context.dispatchRequest('state', { tab_id: 7, session_id: 'A' }, owner), /cancelled/);
+  assert.equal(attempts, 1); assert.deepEqual(s.effects, []);
+});
+await test('snapshot recovery shares a bounded budget and never retries input', async () => {
+  const s = setup(); let clock = 0, attempts = 0;
+  s.context.Date = { now: () => clock };
+  s.chrome.scripting.executeScript = async () => {
+    attempts++; clock += 1000; throw new Error('Frame with ID 0 is not ready');
+  };
+  await assert.rejects(s.state(), /Frame with ID 0 is not ready/);
+  assert.equal(attempts, 5); assert.deepEqual(s.clicks, []);
+  const input = setup(), state = await input.state(), execute = input.chrome.scripting.executeScript;
+  let inputs = 0;
+  input.chrome.scripting.executeScript = async options => {
+    if (options.func.name === 'pageAction') { inputs++; throw new Error('Frame with ID 0 is not ready'); }
+    return execute(options);
+  };
+  await assert.rejects(input.act(state), /Frame with ID 0 is not ready/); assert.equal(inputs, 1);
+});
 await test('another session cannot reinterpret a previously observed index', async () => {
   const s = setup(); const a = await s.state('A');
   s.setButtons([s.remove, s.approve]); const b = await s.state('B');

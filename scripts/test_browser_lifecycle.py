@@ -31,12 +31,14 @@ HTML = b'''<!doctype html><meta charset="utf-8"><title>Lifecycle fixture</title>
 <iframe src="/frame"></iframe>
 <script>function report(name){fetch('/receipt?name='+name)}</script>'''
 receipts = {}
+navigation_hits = {}
 scroll_enabled = False
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
     def do_GET(self):
         route = urlsplit(self.path)
+        navigation_hits[route.path] = navigation_hits.get(route.path, 0) + 1
         if route.path == '/receipt':
             name = parse_qs(route.query)['name'][0]
             receipts[name] = receipts.get(name, 0) + 1
@@ -141,9 +143,19 @@ def main():
         background = extension/'background.js'
         background.write_text(background.read_text() + """
 const executeForFixture = chrome.scripting.executeScript.bind(chrome.scripting);
+const snapshotAttempts = new Map();
 chrome.scripting.executeScript = async options => {
-  if (options.func?.name === 'pageProbe' && (await chrome.tabs.get(options.target.tabId)).url.includes('/probe-unavailable'))
+  const tab = await chrome.tabs.get(options.target.tabId);
+  if (options.func?.name === 'pageProbe' && tab.url.includes('/probe-unavailable'))
     throw new Error('fixture renderer unavailable');
+  if (options.func?.name === 'pageSnapshot') {
+    if (tab.url.includes('/snapshot-error')) throw new Error('Frame with ID 0 is showing error page');
+    if (tab.url.includes('/snapshot-transient')) {
+      const attempts = (snapshotAttempts.get(tab.id) || 0) + 1;
+      snapshotAttempts.set(tab.id, attempts);
+      if (attempts < 3) throw new Error('Frame with ID 0 is not ready');
+    }
+  }
   return executeForFixture(options);
 };
 """)
@@ -165,6 +177,16 @@ chrome.scripting.executeScript = async options => {
             b = Client(binary, evidence=evidence('b'), env=env); clients.append(b)
             browser = {'browser': str(chrome.pid)}
             require(wait_until(lambda: not a.call('browser_tabs', allow_error=True, **browser)['is_error'], timeout=30), 'extension connected')
+            recovered = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/snapshot-transient', **browser)
+            check('new tab snapshot recovers transient frame readiness without re-navigation',
+                  not recovered['is_error'] and 'Approve' in recovered['text'] and navigation_hits.get('/snapshot-transient') == 1)
+            a.call('browser_close_tab', tab_id=recovered['structured']['tab_id'], **browser)
+            unreadable = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/snapshot-error', allow_error=True, **browser)
+            unreadable_tab = unreadable.get('structured', {}).get('tab_id')
+            check('unreadable new tab keeps its id and acknowledged navigation',
+                  unreadable['is_error'] and unreadable_tab is not None and unreadable['structured']['action']['status'] == 'sent'
+                  and 'state_error' in unreadable['structured'] and navigation_hits.get('/snapshot-error') == 1)
+            a.call('browser_close_tab', tab_id=unreadable_tab, **browser)
             opened = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/', **browser)
             tab = int(re.search(r'tab (\d+)', opened['text'])[1]); target = {**browser, 'tab_id': tab}
             if suite != 'outcomes':

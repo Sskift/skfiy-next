@@ -30,6 +30,21 @@ private let scenario: [LocatorCandidate] = [
 private func locator(_ object: [String: Any]) throws -> Locator { try Locator(object) }
 
 struct LocatorTests {
+    @Test func acceptsObservedControlRoleNamesWithoutBroadeningTheirMeaning() throws {
+        for (input, canonical, actual) in [
+            ("RadioButton", "radio", "AXRadioButton"), ("radio-button", "radio", "radio"),
+            ("textbox", "text field", "textbox"), ("editable", "text field", "editable"),
+            ("combobox", "text field", "combobox"), ("treeitem", "row", "treeitem"),
+            ("AXTextField", "text field", "AXTextField"), ("AXRadioButton", "radio", "AXRadioButton")
+        ] {
+            let target = try locator(["role": input, "name": "Choice"])
+            #expect(target.role == canonical)
+            #expect(target.matches([element("Choice", actual, 20, 20)], bounds: window).count == 1)
+            #expect(target.matches([element("Choice", "AXImage", 20, 20)], bounds: window).isEmpty)
+        }
+        #expect(throws: ToolError.self) { try locator(["role": "summary"]) }
+    }
+
     @Test func structuralTargetsDoNotGuessFromNearbyText() throws {
         var bob = element("Edit", "button", 30, 100)
         bob.rowLabels = ["Bob", "bob@example.test"]; bob.columnLabels = ["Action"]
