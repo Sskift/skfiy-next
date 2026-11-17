@@ -24,10 +24,11 @@ func captureSystemWindow(_ window: DirectLockedWindow, maxScale: Double = 1,
     let scale = modelLimits ? captureScale(for: window.frame.size, maxScale: maxScale) : maxScale
     let width = max(1, Int((window.frame.width * scale).rounded()))
     let height = max(1, Int((window.frame.height * scale).rounded()))
-    // -o excludes shadows; the remaining image must have the window's aspect ratio.
+    // -a excludes attached windows, which otherwise enlarge the capture even
+    // with -o. Each child is composited separately at its verified frame.
     guard abs(Double(raw.width) / Double(raw.height) - window.frame.width / window.frame.height) < 0.02,
           let image = resized(raw, width: width, height: height) else {
-        throw ToolError("System capture returned unexpected window dimensions; coordinates are unavailable.")
+        throw ToolError("System capture returned unexpected window dimensions (\(raw.width)×\(raw.height) pixels for \(window.frame.width)×\(window.frame.height) points); coordinates are unavailable.")
     }
     return (image, CaptureGeometry(rect: window.frame, pixelWidth: width, pixelHeight: height))
 }
@@ -45,7 +46,7 @@ func systemCaptureWindow(_ id: CGWindowID) -> DirectLockedWindow? {
 private func runCaptureProcess(output: URL, window: CGWindowID, timeout: Double) async throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    process.arguments = ["-x", "-o", "-l", String(window), "-t", "png", output.path]
+    process.arguments = ["-x", "-o", "-a", "-l", String(window), "-t", "png", output.path]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     try process.run()

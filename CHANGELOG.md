@@ -1,5 +1,14 @@
 # Release notes
 
+## 0.10.4 — 2026-11-17
+
+- Background clicks move the pointer before pressing, preserve one click position, and respect cancelled pointer/mouse-down focus changes. Custom dropdown options can be chosen on the first click, including inside dialogs.
+- After input, finite animations on closing background popups receive a bounded rendering refresh so their overlays and accessibility masks are removed. Open menus are left alone; no tab or window is activated. A refresh failure preserves the sent receipt and never replays the input.
+- File panels reacquire their column browser after directory changes, so replaced accessibility objects no longer make existing folders or files appear missing.
+- System screenshot recovery excludes attached windows from each individual capture before compositing, preserving window dimensions and click coordinates. Dimension failures include the actual pixel and window sizes.
+- Hidden-tab trusted clicks and keys rejected before dispatch report `not_sent`, preserving a safe first attempt with supported input. Semantic targets accept the observed `spinbutton` role for numeric fields.
+- Bundled browser extension: 0.9.6; reload it after updating.
+
 ## 0.10.3 — 2026-11-02
 
 - Recover transient browser frame-readiness failures within the snapshot's existing wait budget. Only page reads are retried; navigation and input are never replayed. An unreadable destination retains the acknowledged navigation, browser process and tab ID.

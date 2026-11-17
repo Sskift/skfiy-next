@@ -35,8 +35,12 @@ function setup() {
   const approve = new Element('BUTTON', 'Approve'), remove = new Element('BUTTON', 'Delete');
   const setButtons = buttons => { body.children = body.childNodes = buttons; for (const el of buttons) el.parentElement = body; };
   setButtons([approve, remove]);
+  class InputEvent {
+    constructor(type, init) { this.type = type; Object.assign(this, init); this.defaultPrevented = false; }
+    preventDefault() { this.defaultPrevented = true; }
+  }
   const page = vm.createContext({ document, window, location: { href: 'https://fixture.invalid/' }, Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
-    innerWidth: 800, innerHeight: 600, getComputedStyle: style, PointerEvent: class {}, MouseEvent: class {}, HTMLElement: Element, crypto: { randomUUID },
+    innerWidth: 800, innerHeight: 600, getComputedStyle: style, PointerEvent: InputEvent, MouseEvent: InputEvent, HTMLElement: Element, crypto: { randomUUID },
     MutationObserver: class { observe() {} takeRecords() { return []; } } });
   const nativePort = { onMessage: event(), onDisconnect: event(), postMessage: message => replies.push(message) };
   const tab = { id: 7, windowId: 1, status: 'complete', active: true, url: 'https://fixture.invalid/' };
@@ -71,6 +75,74 @@ function setup() {
 }
 let passed = 0;
 async function test(name, body) { await body(); passed++; console.log('ok', name); }
+await test('indexed and coordinate clicks select an option on their first attempt', async () => {
+  for (const coordinates of [false, true]) {
+    const s = setup(), state = await s.state();
+    let moved = false, selected = 0;
+    s.page.document.elementFromPoint = () => s.approve;
+    s.approve.dispatchEvent = event => {
+      if (event.type === 'pointermove') moved = true;
+      // A popup guards the opening press until the pointer moves to an item.
+      if (event.type === 'pointerup' && moved) selected++;
+      if (event.type === 'pointerdown') assert.equal(event.buttons, 1);
+      if (event.type === 'pointerup') assert.equal(event.buttons, 0);
+      return true;
+    };
+    await s.act(state, coordinates ? { index: null, x: 30, y: 10 } : {});
+    assert.equal(selected, 1);
+  }
+});
+await test('cancelled pointer or mouse down preserves the popup focus', async () => {
+  for (const cancelled of ['pointerdown', 'mousedown']) {
+    for (const coordinates of [false, true]) {
+      const s = setup(), state = await s.state(), events = [];
+      s.page.document.activeElement = s.remove;
+      s.page.document.elementFromPoint = () => s.approve;
+      s.approve.dispatchEvent = event => { events.push(event.type); return event.type !== cancelled; };
+      await s.act(state, coordinates ? { index: null, x: 30, y: 10 } : {});
+      assert.equal(s.page.document.activeElement, s.remove);
+      assert.equal(events.includes('mousedown'), cancelled !== 'pointerdown');
+      assert.equal(events.includes('mouseup'), cancelled !== 'pointerdown');
+    }
+  }
+});
+await test('only finite closing popup animations need background rendering', async () => {
+  const s = setup();
+  s.page.document.hidden = true;
+  s.page.document.querySelectorAll = () => [s.approve];
+  let closed = false;
+  s.approve.getAttribute = () => closed ? 'closed' : 'open';
+  const style = { display: 'block', visibility: 'visible', animationName: 'exit', animationDuration: '.15s', animationDelay: '25ms', animationIterationCount: '1' };
+  s.page.window.getComputedStyle = () => style;
+  const duration = vm.runInContext('(' + s.context.backgroundClosingPopupAnimation.toString() + ')', s.page);
+  assert.equal(duration(), 0); // An open menu must not be blurred by a debugger lease.
+  closed = true; assert.equal(duration(), 175);
+  style.animationIterationCount = 'infinite'; assert.equal(duration(), 0);
+  style.animationIterationCount = '50'; assert.equal(duration(), 1000);
+  s.page.document.hidden = false; assert.equal(duration(), 0);
+});
+await test('popup rendering failure preserves sent input without replaying it', async () => {
+  const s = setup(), state = await s.state(), execute = s.chrome.scripting.executeScript;
+  s.chrome.scripting.executeScript = options => options.func.name === 'backgroundClosingPopupAnimation'
+    ? Promise.resolve([{ frameId: 0, result: 150 }]) : execute(options);
+  s.chrome.debugger.attach = async () => { throw new Error('another debugger is attached'); };
+  const receipt = await s.context.dispatchRequest('act', { tab_id: 7, session_id: state.session_id,
+    snapshot_id: state.snapshot_id, action: 'click', index: 0 }, s.control());
+  assert.equal(receipt.action_status, 'sent'); assert.match(receipt.error, /popup animation.*another debugger/);
+  assert.deepEqual(s.clicks, ['Approve']);
+});
+await test('cancelled popup rendering releases its debugger without repeating input', async () => {
+  const s = setup(), state = await s.state(), execute = s.chrome.scripting.executeScript;
+  s.chrome.scripting.executeScript = options => options.func.name === 'backgroundClosingPopupAnimation'
+    ? Promise.resolve([{ frameId: 0, result: 150 }]) : execute(options);
+  const gate = s.gateDebugger(), owner = s.control();
+  let detached = false;
+  s.chrome.debugger.detach = async () => { detached = true; };
+  const action = s.act(state, {}, owner);
+  await new Promise(resolve => setImmediate(resolve)); owner.cancelled = true; gate.resolve();
+  await assert.rejects(action, /cancelled/);
+  assert(detached); assert.deepEqual(s.clicks, ['Approve']); assert.deepEqual(s.effects, []);
+});
 await test('snapshot recovers a temporarily unavailable frame without repeating navigation', async () => {
   const s = setup(), execute = s.chrome.scripting.executeScript;
   let attempts = 0;
@@ -176,6 +248,22 @@ await test('cancellation during debugger attachment stops trusted input', async 
   const owner = s.control(); const action = s.act(state, { trusted: true }, owner);
   await new Promise(resolve => setImmediate(resolve)); owner.cancelled = true; gate.resolve();
   await assert.rejects(action, /cancelled/); assert.deepEqual(s.effects, []);
+});
+await test('trusted input refused before dispatch reports not_sent and keeps the page untouched', async () => {
+  for (const action of ['click', 'key']) {
+    for (const minimized of [false, true]) {
+      const s = setup(), state = await s.state();
+      s.tab.active = minimized;
+      s.chrome.windows.get = async () => ({ state: minimized ? 'minimized' : 'normal' });
+      s.chrome.debugger.attach = async () => { throw new Error('must not attach'); };
+      s.approve.focus = () => { throw new Error('must not focus'); };
+      s.approve.scrollIntoView = () => { throw new Error('must not scroll'); };
+      const receipt = await s.context.dispatchRequest('act', { tab_id: 7, session_id: state.session_id,
+        snapshot_id: state.snapshot_id, action, index: 0, key: 'Enter', trusted: true }, s.control());
+      assert.equal(receipt.action_status, 'not_sent'); assert.match(receipt.error, /tab is in the background/);
+      assert.deepEqual(s.effects, []); assert.deepEqual(s.clicks, []);
+    }
+  }
 });
 await test('coordinates expire after a resize, scroll or content change', async () => {
   for (const mutate of [s => { s.page.innerWidth = 900; }, s => { s.page.document.scrollingElement.scrollTop = 50; }, s => { s.page.__skfiyDocument.revision++; }]) {

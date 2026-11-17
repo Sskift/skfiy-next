@@ -54,7 +54,7 @@ struct FilePanel {
         let folder = isSave ? target.deletingLastPathComponent() : target
         // Panels show the real place of a link (/tmp is /private/tmp).
         let resolved = folder.resolvingSymlinksInPath()
-        guard let browser = element.descendant(limit: 600, where: { $0.string(kAXRoleAttribute) == "AXBrowser" }) else {
+        guard element.descendant(limit: 600, where: { $0.string(kAXRoleAttribute) == "AXBrowser" }) != nil else {
             throw ToolError("The panel does not show its columns (it is in list or icon view, or collapsed), which is the only view skfiy can navigate. The user can switch it to column view once; it is remembered.")
         }
         let (place, row) = try sidebarPlace(for: resolved)
@@ -65,7 +65,7 @@ struct FilePanel {
         let components = resolved.pathComponents.dropFirst(place.pathComponents.count)
         for (column, component) in components.enumerated() {
             current.appendPathComponent(component)
-            try await select(current, column: column, in: browser)
+            try await select(current, column: column)
         }
 
         if isSave {
@@ -137,7 +137,7 @@ struct FilePanel {
 
     /// Selects `url` in column `column` of the browser, waiting for the column
     /// to load and scrolling it when the item is further down.
-    private func select(_ url: URL, column: Int, in browser: AXUIElement) async throws {
+    private func select(_ url: URL, column: Int) async throws {
         let names = Set([FileManager.default.displayName(atPath: url.path), url.lastPathComponent])
         let hidden = url.lastPathComponent.hasPrefix(".") || (try? url.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true
         if hidden {
@@ -145,7 +145,12 @@ struct FilePanel {
         }
         var scrolled = 0
         for _ in 0..<60 {
-            let lists = browser.descendants(limit: 3_000, where: { $0.string(kAXRoleAttribute) == kAXListRole })
+            // Choosing a sidebar location or a folder can replace AXBrowser.
+            // The old reference then returns no children even while the new
+            // column visibly contains the requested file. Reacquire it on
+            // every observation, including while waiting for it to load.
+            let browser = element.descendant(limit: 600, where: { $0.string(kAXRoleAttribute) == "AXBrowser" })
+            let lists = browser?.descendants(limit: 3_000, where: { $0.string(kAXRoleAttribute) == kAXListRole }) ?? []
             if column < lists.count {
                 let list = lists[column]
                 if let item = list.elements(kAXChildrenAttribute).first(where: { item in

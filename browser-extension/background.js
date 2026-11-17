@@ -511,8 +511,8 @@ async function sendAction(params, control, execution) {
   control.check();
   await run(tab.id, pageAction, [{ ...inFrame, action: 'validate' }], frameId);
   control.check();
-  execution.status = 'unknown';
-  const result = params.trusted ? await trustedAct(tab.id, inFrame, control) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
+  if (!params.trusted) execution.status = 'unknown';
+  const result = params.trusted ? await trustedAct(tab.id, inFrame, control, execution) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
   execution.status = 'sent';
   if (params.action === 'scroll') {
     // Hidden/occluded Chromium defers scroll events and animation frames. A
@@ -533,7 +533,63 @@ async function sendAction(params, control, execution) {
   }
   await delay(250);
   await waitForLoad(tab.id, 8000, control);
+  // Hidden Chromium can leave an animated popup mounted after its value has
+  // changed. Give finite popup animations a rendering opportunity before the
+  // next snapshot; do not replay the input or activate the tab/window.
+  if (['click', 'key', 'select', 'hover'].includes(params.action)) {
+    control.check();
+    const duration = await run(tab.id, backgroundClosingPopupAnimation, [], frameId);
+    if (duration > 0) {
+      try {
+        control.check();
+        await withDebugger(tab.id, async (send) => {
+          const frame = () => send('Page.captureScreenshot', {
+            format: 'jpeg', quality: 1, clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 }
+          });
+          control.check();
+          await frame();
+          await delay(Math.min(duration + 50, 1000));
+          control.check();
+          await frame();
+        });
+        result.message += ' (refreshed background popup animation)';
+      } catch (error) {
+        throw new Error(`Input was sent, but the background popup animation could not be refreshed: ${error.message}. Inspect browser_state before repeating the action.`);
+      }
+    }
+  }
   return result;
+}
+
+function backgroundClosingPopupAnimation() {
+  if (!document.hidden) return 0;
+  // Snapshots also include same-origin frames and shadow roots. A portal may
+  // have appeared since that snapshot, so inspect their roots, not old indices.
+  const roots = new Set([document]);
+  for (const el of globalThis.__skfiy?.elements || []) {
+    if (el.isConnected) roots.add(el.getRootNode());
+  }
+  let duration = 0;
+  const times = (value) => value.split(',').map(v => parseFloat(v) * (v.trim().endsWith('ms') ? 1 : 1000));
+  for (const root of roots) {
+    for (const el of root.querySelectorAll('dialog,[role=dialog],[role=alertdialog],[role=listbox],[role=menu],[popover]')) {
+      // Do not focus-emulate an open popup: restoring real focus on detach
+      // emits blur, which would dismiss menus that are still being used.
+      if (el.getAttribute('data-state') !== 'closed') continue;
+      const style = el.ownerDocument.defaultView.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 1 && rect.height < 1) continue;
+      const names = style.animationName.split(','), lengths = times(style.animationDuration), delays = times(style.animationDelay);
+      const repeats = style.animationIterationCount.split(',').map(Number);
+      for (let i = 0; i < names.length; i++) {
+        const repeat = repeats[i % repeats.length], length = lengths[i % lengths.length];
+        if (names[i].trim() === 'none' || !Number.isFinite(repeat) || !(length > 0)) continue;
+        duration = Math.max(duration, length * repeat + delays[i % delays.length]);
+      }
+    }
+  }
+  return Math.min(duration, 1000);
 }
 
 // :hover rules in stylesheets from other origins, which the page may not read;
@@ -601,7 +657,7 @@ async function cdpKey(send, combo) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code, modifiers });
 }
 
-async function trustedAct(tabId, params, control) {
+async function trustedAct(tabId, params, control, execution) {
   const tab = await chrome.tabs.get(tabId);
   const window = await chrome.windows.get(tab.windowId);
   control.check();
@@ -609,6 +665,9 @@ async function trustedAct(tabId, params, control) {
     // Chrome drops debugger mouse and key events for hidden tabs.
     throw new Error('trusted clicks and keys only reach the tab shown in its window, and this tab is in the background. Use the default events (trusted: false); trusted typing works in any tab.');
   }
+  // The checks above cannot dispatch input. Only become uncertain once we
+  // may scroll/focus the page or enter the debugger input path.
+  execution.status = 'unknown';
   if (params.action === 'click') {
     await run(tabId, pageAction, [{ ...params, action: 'validate' }]);
     const point = params.index == null
@@ -1023,6 +1082,17 @@ function pageAction(params, keyAliases = {}) {
     const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
     return el.dispatchEvent(new Ctor(type, { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...init }));
   };
+  const clickPointer = (el, at, nativeClick) => {
+    // Selects opened on pointerdown use movement to distinguish choosing an
+    // option from releasing the opening press. Keep one position throughout.
+    for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) pointer(el, type, at);
+    const down = pointer(el, 'pointerdown', { ...at, buttons: 1 });
+    const mouseDown = down && pointer(el, 'mousedown', { ...at, buttons: 1 });
+    if (mouseDown && typeof el.focus === 'function') el.focus({ preventScroll: true });
+    pointer(el, 'pointerup', { ...at, buttons: 0 });
+    if (down) pointer(el, 'mouseup', { ...at, buttons: 0 });
+    if (nativeClick && typeof el.click === 'function') el.click(); else pointer(el, 'click', { ...at, detail: 1 });
+  };
   const editable = (el) => el && (el.isContentEditable || el.tagName === 'TEXTAREA'
     || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'range', 'color'].includes(el.type)));
   const setNativeValue = (el, value) => {
@@ -1189,9 +1259,7 @@ function pageAction(params, keyAliases = {}) {
         }
         if (!target) throw new Error('nothing at that point of the viewport');
         const at = { clientX: Number(params.x), clientY: Number(params.y) };
-        for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown']) pointer(target, type, at);
-        if (typeof target.focus === 'function') target.focus({ preventScroll: true });
-        for (const type of ['pointerup', 'mouseup', 'click']) pointer(target, type, at);
+        clickPointer(target, at, false);
         const inside = target === outer ? '' : ` inside <${outer.tagName.toLowerCase()}>`;
         return { message: `Clicked at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${target.tagName.toLowerCase()}>${inside}` };
       }
@@ -1203,11 +1271,7 @@ function pageAction(params, keyAliases = {}) {
         // A synthetic click cannot open a popup; open the link as a background tab instead.
         return { message: `Link to ${anchor.href}`, openInBackground: anchor.href };
       }
-      pointer(el, 'pointerover'); pointer(el, 'mouseover');
-      pointer(el, 'pointerdown'); pointer(el, 'mousedown');
-      if (typeof el.focus === 'function') el.focus({ preventScroll: true });
-      pointer(el, 'pointerup'); pointer(el, 'mouseup');
-      if (typeof el.click === 'function') el.click(); else pointer(el, 'click');
+      clickPointer(el, center(el), true);
       return { message: `Clicked [${params.index}]` };
     }
     case 'type': {

@@ -35,6 +35,7 @@ struct LocatorTests {
             ("RadioButton", "radio", "AXRadioButton"), ("radio-button", "radio", "radio"),
             ("textbox", "text field", "textbox"), ("editable", "text field", "editable"),
             ("combobox", "text field", "combobox"), ("treeitem", "row", "treeitem"),
+            ("spinbutton", "text field", "number"), ("spinbutton", "text field", "spinbutton"),
             ("AXTextField", "text field", "AXTextField"), ("AXRadioButton", "radio", "AXRadioButton")
         ] {
             let target = try locator(["role": input, "name": "Choice"])

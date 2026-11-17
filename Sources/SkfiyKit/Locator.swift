@@ -43,7 +43,7 @@ struct Locator: Equatable {
     static let roleAliases: [String: Set<String>] = [
         "button": ["AXButton", "button", "submit", "reset"],
         "text field": ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXSecureTextField", "text", "textarea", "search", "email",
-                       "password", "url", "tel", "number", "textbox", "searchbox", "combobox", "editable"],
+                       "password", "url", "tel", "number", "spinbutton", "textbox", "searchbox", "combobox", "editable"],
         "checkbox": ["AXCheckBox", "checkbox", "switch"],
         "radio": ["AXRadioButton", "radio"],
         "link": ["AXLink", "link"],

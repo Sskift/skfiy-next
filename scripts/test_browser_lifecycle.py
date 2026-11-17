@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ HTML = b'''<!doctype html><meta charset="utf-8"><title>Lifecycle fixture</title>
 <button onclick="report('submit');statusText.textContent='Saved '+(++submitted)">Submit</button>
 <button onclick="report('noop')">Noop</button><div id="statusText">Ready</div>
 <script>let submitted=0</script><label>Message<input id="message" oninput="report('type')"></label>
+<label>Amount<input type="number" role="spinbutton" oninput="report('amount')"></label>
 <label>Upload<input type="file" onchange="report('upload')"></label>
 <iframe src="/frame"></iframe>
 <script>function report(name){fetch('/receipt?name='+name)}</script>'''
@@ -56,6 +58,8 @@ pane.scrollTop=50;moved=true;fetch('/receipt?name=inner-scrolled')}},30)</script
             body = b'''<label>Upload<input type="file" onchange="fetch('/receipt?name=upload-destroy');document.documentElement.remove()"></label>'''
         elif route.path == '/probe-unavailable':
             body = b'<div>Processing</div>'
+        elif route.path == '/popup':
+            body = (ROOT/'scripts/fixtures/popup.html').read_bytes()
         elif route.path == '/destroy':
             body = b'<button onclick="fetch(\'/receipt?name=destroy\');document.documentElement.remove()">Submit and clear view</button>'
         elif route.path == '/coordinates':
@@ -263,6 +267,53 @@ chrome.scripting.executeScript = async options => {
                   and no_effect['structured']['verification']['status'] in ('no_effect', 'timeout'), no_effect)
             typed = a.call('browser_type', target='Message', text='verified value', clear=True, expect={'value': 'verified value'}, **target)
             check('browser field value is verified after typing', typed['structured']['verification']['status'] == 'verified')
+            amount = a.call('browser_type', target={'name': 'Amount', 'role': 'spinbutton'}, text='12.5', clear=True,
+                            expect={'value': '12.5'}, **target)
+            check('observed spinbutton role locates and types a real numeric input',
+                  amount['structured']['verification']['status'] == 'verified' and wait_until(lambda: receipts.get('amount') == 1))
+            for tool, extra in [('browser_click', {'idempotent': False}), ('browser_press_key', {'key': 'cmd+Up'})]:
+                refused = a.call(tool, target='Noop', trusted=True, allow_error=True, **extra, **target)
+                check(tool + ' rejects hidden trusted input as not_sent',
+                      refused['is_error'] and refused['structured']['action']['status'] == 'not_sent'
+                      and 'tab is in the background' in refused['text'])
+            retry = a.call('browser_click', target='Noop', idempotent=False, **target)
+            check('a refused trusted click does not block the first actual click as a duplicate',
+                  retry['structured']['action']['status'] == 'sent')
+
+            # Both entry points must choose on the first click and release the
+            # animated portal, while the browser's original active tab stays put.
+            front_tabs = lambda text: re.findall(r'tab (\d+) \[(?:shown|front tab of its window)\]', text)
+            front_before = front_tabs(a.call('browser_tabs', **browser)['text'])
+            def bridge_request(method, params):
+                with socket.socket(socket.AF_UNIX) as connection:
+                    connection.settimeout(10); connection.connect(str(bridge))
+                    connection.sendall((json.dumps({'id': 1, 'method': method, 'params': params})+'\n').encode())
+                    with connection.makefile('r') as response:
+                        result = json.loads(response.readline())
+                require('error' not in result, str(result))
+                return result['result']
+            for mode in ['index', 'coordinates']:
+                popup = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/popup?case={mode}', **browser)
+                popup_target = {**browser, 'tab_id': popup['structured']['tab_id']}
+                a.call('browser_click', target='New expense', **popup_target)
+                opened_menu = a.call('browser_click', target='Expense category', **popup_target)
+                check(f'{mode}: background menu stays open', 'option "Cloud"' in opened_menu['text']
+                      and receipts.get(f'popup-unexpected-blur-{mode}', 0) == 0)
+                if mode == 'index':
+                    selected = a.call('browser_click', index=int(re.search(r'\[(\d+)\] option "Cloud"', opened_menu['text'])[1]), **popup_target)
+                else:
+                    # Capture would blur an open menu. Exercise coordinate
+                    # dispatch through the bridge with its session/geometry guards.
+                    state = bridge_request('state', {'tab_id': popup_target['tab_id'], 'session_id': 'popup-coordinates'})
+                    result = bridge_request('act', {'tab_id': popup_target['tab_id'], 'session_id': state['session_id'],
+                        'snapshot_id': state['snapshot_id'], 'action': 'click', 'x': 180, 'y': 210, 'coordinate_geometry': state['geometry']})
+                    require(result['action_status'] == 'sent' and not result.get('error'), str(result))
+                    selected = a.call('browser_state', screenshot=False, **popup_target)
+                check(f'{mode}: first click selects once in a hidden tab and removes the closing portal',
+                      wait_until(lambda: receipts.get(f'popup-selected-hidden-{mode}') == 1 and receipts.get(f'popup-dismissed-{mode}') == 1)
+                      and 'Selected Cloud' in selected['text'] and 'option "Cloud"' not in selected['text'])
+                a.call('browser_close_tab', **popup_target)
+            check('popup selection leaves the original active tab unchanged', front_tabs(a.call('browser_tabs', **browser)['text']) == front_before)
 
             destroyed = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/destroy', **browser)
             destroy_target = {**browser, 'tab_id': int(re.search(r'tab (\d+)', destroyed['text'])[1])}

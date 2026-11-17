@@ -17,6 +17,7 @@ python3 scripts/test_native_verification.py .build/debug/skfiy  # 自建后台�
 node scripts/test_browser_sessions.mjs  # 浏览器快照绑定、坐标版本、动作回执、跨会话引用与取消；不依赖桌面
 node scripts/test_electron_rendering_lease.mjs  # 不依赖桌面的渲染租约与恢复测试
 python3 scripts/test_capture_recovery.py .build/debug/skfiy  # 测试专用 dylib 让 SCK 回调永久挂起，验证系统截图恢复、坐标与像素验证
+python3 scripts/test_file_panel_recovery.py .build/debug/skfiy  # 自建沙盒窗口：目录切换后的 AX 对象重建、同名文件、长中文文件名与后台保存
 python3 scripts/test_system_panels.py .build/debug/skfiy  # 沙盒应用：打开请求假成功、系统 Go To sheet、中文路径与一次前台授权
 make test-install   # install.sh、skfiy setup / doctor / uninstall：在临时 HOME 里用假的 claude/codex 跑一遍，并核对你真实的配置没被改动；不碰界面
 make embed-extension  # 改了 browser-extension/ 之后：重新生成二进制里携带的插件副本（make release/install、源码安装和 release.sh 会自动做；不一致时 make test 失败）；内容变了而 manifest.json 的 version 没升时会提醒

@@ -325,6 +325,14 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 }
             }
         case "open_window": openWindow(title ?? "Scenario extra \(options.nonce)", key: command["key"] as? String, input: command["input"] as? Bool ?? false)
+        case "attach_window":
+            let title = title ?? "Attached \(options.nonce)"
+            openWindow(title)
+            if let child = extra[title] {
+                child.setFrameOrigin(NSPoint(x: main.frame.minX - 120, y: main.frame.minY + 60))
+                main.addChildWindow(child, ordered: .above)
+                main.orderBack(nil)
+            }
         case "close_window": window(title)?.close()
         case "move":
             if let window = window(title) {

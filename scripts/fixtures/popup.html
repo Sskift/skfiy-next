@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Background popup fixture</title>
+<style>
+  #panel { position: fixed; left: 50px; top: 50px; padding: 20px; background: white; border: 1px solid; }
+  #category { width: 200px; height: 40px; }
+  #menu { position: fixed; left: 80px; top: 150px; width: 200px; background: white; }
+  [role=option] { height: 40px; }
+  #menu[data-state=open] { animation: enter .15s; }
+  #menu[data-state=closed] { animation: exit .15s; }
+  @keyframes enter { from { opacity: .5; } to { opacity: 1; } }
+  @keyframes exit { from { opacity: 1; } to { opacity: 0; } }
+</style>
+<main id="page"><button id="create">New expense</button></main>
+<div id="panel" role="dialog" aria-label="Expense form" aria-hidden="true" hidden>
+  <button id="category" role="combobox" aria-label="Expense category" aria-expanded="false">Choose category</button>
+  <div id="receipt">No selection</div>
+</div>
+<div id="menu" role="listbox" aria-label="Categories" aria-hidden="true" hidden>
+  <div role="option" tabindex="-1">Software</div>
+  <div role="option" tabindex="-1">Cloud</div>
+</div>
+<script>
+  const mode = new URLSearchParams(location.search).get('case');
+  const report = name => fetch('/receipt?name=' + encodeURIComponent('popup-' + name + '-' + mode));
+  create.onclick = () => { panel.hidden = false; panel.removeAttribute('aria-hidden'); page.setAttribute('aria-hidden', 'true'); };
+  category.onpointerdown = event => {
+    menu.hidden = false; menu.removeAttribute('aria-hidden'); menu.dataset.state = 'open';
+    panel.setAttribute('aria-hidden', 'true'); category.setAttribute('aria-expanded', 'true');
+    // Like pointer-driven selects, ignore the release of the opening press.
+    const origin = { x: event.pageX, y: event.pageY }; let moved = false;
+    const move = e => { moved = Math.abs(e.pageX - origin.x) > 10 || Math.abs(e.pageY - origin.y) > 10; };
+    queueMicrotask(() => {
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', e => {
+        if (!moved) e.preventDefault();
+        document.removeEventListener('pointermove', move);
+      }, { capture: true, once: true });
+    });
+    event.preventDefault();
+  };
+  const close = () => { category.setAttribute('aria-expanded', 'false'); menu.dataset.state = 'closed'; };
+  for (const option of menu.children) {
+    let pointerType = 'touch';
+    const select = () => { category.textContent = option.textContent; receipt.textContent = 'Selected ' + option.textContent; report('selected-' + document.visibilityState); close(); };
+    option.onpointerdown = event => { pointerType = event.pointerType; };
+    option.onpointerup = event => { if (!event.defaultPrevented && pointerType === 'mouse') select(); };
+    option.onclick = () => { if (pointerType !== 'mouse') select(); };
+  }
+  // The portal and its modal accessibility mask remain until animationend.
+  menu.addEventListener('animationend', event => {
+    if (event.animationName !== 'exit' || menu.dataset.state !== 'closed') return;
+    menu.hidden = true; menu.setAttribute('aria-hidden', 'true'); panel.removeAttribute('aria-hidden');
+    report('dismissed');
+  });
+  window.addEventListener('blur', () => { if (!menu.hidden && menu.dataset.state === 'open') { report('unexpected-blur'); close(); } });
+</script>

@@ -8,7 +8,7 @@ import time
 import uuid
 
 from harness import Client, index
-from scenario import Fixture, geometry, canvas_target, to_pixels
+from scenario import Fixture, geometry, canvas_target, to_pixels, probe
 
 
 def main():
@@ -30,6 +30,16 @@ def main():
             elapsed = time.monotonic() - started
             assert state['images'] and elapsed >= 3, f'fault injection/recovery did not run: {elapsed}'
             print('PASS stalled independent capture recovers to a real system screenshot', flush=True)
+            # screencapture includes attached windows by default, extending
+            # its image beyond the parent's frame. Recovery must isolate and
+            # composite them instead of stretching or rejecting the image.
+            fixture.command('attach_window')
+            state = client.call('get_app_state', app=app, window=str(window), ocr=False)
+            frame = next(w['frame'] for w in fixture.state()['windows'] if w['number'] == window)
+            g = geometry(state['text'])
+            assert state['images'] and g and g['width'] / g['sx'] == frame['width'], state['text']
+            assert g['height'] / g['sy'] == frame['height'], state['text']
+            print('PASS an attached window outside the parent does not corrupt capture geometry', flush=True)
             for _ in range(3):
                 state = client.call('get_app_state', app=app, window=str(window), ocr=False)
                 assert state['images'], state['text']
@@ -57,6 +67,16 @@ def main():
             state = client.call('get_app_state', app=app, ocr=False)
             assert state['images'], state['text']
             print('PASS app-region capture recovers in the same process', flush=True)
+            fixture.command('close_window', title='Attached ' + fixture.nonce)
+            state = client.call('get_app_state', app=app, window=str(window), ocr=False)
+            client.call('click', app=app, element_index=index(state['text'], r'Button "Ask"'))
+            state = client.call('get_app_state', app=app, window=str(window), ocr=False)
+            assert state['images'], state['text']
+            screenshot = directory / 'sheet.jpg'
+            screenshot.write_bytes(state['images'][0])
+            assert 'SHEET QUESTION' in '\n'.join(probe('ocr', screenshot)['lines']), 'recovery omitted the attached sheet'
+            client.call('click', app=app, element_index=index(state['text'], r'Button "Keep"'))
+            print('PASS attached sheets remain visible in recovered window pixels', flush=True)
             client.close()
             listing = directory / 'stalled-list.dylib'
             subprocess.run(['clang', '-DSTALL_LIST', '-dynamiclib', '-framework', 'Foundation', '-framework', 'ScreenCaptureKit',
