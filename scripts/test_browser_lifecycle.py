@@ -203,8 +203,10 @@ chrome.scripting.executeScript = async options => {
             host = root/'host'; shutil.copy2(binary, host)
             profile = root/'profile'
             subprocess.run([str(host), 'install-browser-bridge', '--user-data-dir', str(profile)], check=True, capture_output=True)
+            # Both fixture browsers talk directly to the loopback server even
+            # when this Mac has a proxy configured for normal browsing.
             chrome = subprocess.Popen([str(chrome_path/'Contents/MacOS/Google Chrome for Testing'),
-                f'--user-data-dir={profile}', '--headless=new', '--window-size=1000,800', '--no-first-run', '--no-default-browser-check',
+                f'--user-data-dir={profile}', '--headless=new', '--no-proxy-server', '--window-size=1000,800', '--no-first-run', '--no-default-browser-check',
                 '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'],
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             # A clean runner has no normal-profile registration. MCP decides
@@ -464,7 +466,7 @@ chrome.scripting.executeScript = async options => {
             profile2 = root/'profile2'
             subprocess.run([str(host), 'install-browser-bridge', '--user-data-dir', str(profile2)], check=True, capture_output=True)
             chrome2 = subprocess.Popen([str(chrome_path/'Contents/MacOS/Google Chrome for Testing'),
-                f'--user-data-dir={profile2}', '--headless=new', '--window-size=2000,1000', '--no-first-run', '--no-default-browser-check',
+                f'--user-data-dir={profile2}', '--headless=new', '--no-proxy-server', '--window-size=2000,1000', '--no-first-run', '--no-default-browser-check',
                 '--disable-features=DisableLoadExtensionCommandLineSwitch', f'--load-extension={extension}', 'about:blank'], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             other_browser = {'browser': str(chrome2.pid)}
             require(wait_until(lambda: not a.call('browser_tabs', allow_error=True, **other_browser)['is_error'], timeout=30), 'second extension connected')
