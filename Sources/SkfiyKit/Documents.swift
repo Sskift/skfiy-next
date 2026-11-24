@@ -74,12 +74,20 @@ extension ComputerUse {
 
     /// Fills in the Open or Save panel an app is showing, in the background.
     func fileDialog(_ args: Arguments) async throws -> ToolResult {
-        let (app, _) = try target(args)
+        let (app, session) = try await observedTarget(args)
         try checkInputTarget(app)
         let path = try args.absolutePath("path")
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let panel = FilePanel.find(in: appElement) else {
-            throw ToolError("\(app.localizedName ?? "The app") is not showing an Open or Save panel. Open one first (its menu item or button), or use open_file / save_document, which need no panel.")
+        let requestedWindow = args.string("window_id") == nil ? nil : session.windowID
+        var found = FilePanel.find(in: appElement, window: requestedWindow)
+        for _ in 0..<8 where found == nil {
+            try await Task.sleep(nanoseconds: 150_000_000)
+            try checkInputTarget(app)
+            found = FilePanel.find(in: appElement, window: requestedWindow)
+        }
+        guard let panel = found else {
+            let hint = isChromium(app) ? "For a webpage attachment, use browser_upload on the file input or its upload button." : "Open a panel first, or use open_file / save_document."
+            throw ToolError("\(app.localizedName ?? "The app") is not showing an Open or Save panel. \(hint)")
         }
         let overwrite = args.bool("overwrite") ?? false
         let summary = try await panel.choose(URL(fileURLWithPath: path), overwrite: overwrite, in: appElement)

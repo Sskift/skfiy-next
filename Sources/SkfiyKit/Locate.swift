@@ -311,7 +311,7 @@ extension ComputerUse {
             resolved["y"] = Double(pixel.y.rounded())
             return (resolved, "Target \(locator.summary) → " + line(match, item, index: nil) + " (found just now by recognized text).")
         }
-        let (app, _) = try target(args)
+        let (app, _) = try await observedTarget(args)
         var view = try await locateView(app: app, withText: false)
         var outcome = Self.match(locator, in: view)
         if outcome.matches.isEmpty, !view.recognized {

@@ -90,7 +90,7 @@ extension ComputerUse {
         if let element, button == .left, count == 1, inBackground,
            element.string(kAXRoleAttribute) == "AXPopUpButton" {
             let options = popupOptions(element)
-            let current = element.string(kAXValueAttribute).map { " Current value: \(quote($0, limit: 60))." } ?? ""
+            let current = popupValue(element).map { " Current value: \(quote($0, limit: 60))." } ?? ""
             let listing = options.isEmpty ? "" : " Options: " + options.map { quote($0.title, limit: 40) }.joined(separator: ", ") + "."
             return ToolResult(text: "\(described) is a pop-up menu; opening it would draw over the user's screen, so it was not opened.\(current)\(listing) Choose an option with set_value(element_index, value: \"<option text>\").")
         }
@@ -530,20 +530,40 @@ extension ComputerUse {
         }
     }
 
+    private func popupValue(_ popup: AXUIElement) -> String? {
+        if let value = nonEmpty(popup.string(kAXValueAttribute)) ?? nonEmpty(popup.string(kAXValueDescriptionAttribute)) { return value }
+        if let selected = popup.elements(kAXSelectedChildrenAttribute).first,
+           let title = nonEmpty(selected.string(kAXTitleAttribute)) { return title }
+        for attribute in [kAXDescriptionAttribute, kAXTitleAttribute] {
+            if let label = popup.string(attribute), let value = Self.currentOption(in: label) { return value }
+        }
+        return nil
+    }
+
+    // Some custom pop-ups only expose e.g. "Select model, current: Flash".
+    nonisolated static func currentOption(in label: String) -> String? {
+        guard let marker = label.range(of: #"(?:^|[,，]\s*)(?:current(?: value| selection)?|当前(?:值|选项)?)\s*[:：]\s*"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        return nonEmpty(String(label[marker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// Selects a pop-up option without opening the pop-up: press the menu item
     /// (native pop-ups), set the value, or focus it and type the option's name
     /// (HTML selects), verifying each step.
     private func chooseOption(_ popup: AXUIElement, _ option: String, app: NSRunningApplication) async throws -> String {
         let wanted = option.trimmingCharacters(in: .whitespaces).lowercased()
-        let selected = { (popup.string(kAXValueAttribute) ?? "").trimmingCharacters(in: .whitespaces).lowercased() == wanted }
         let options = popupOptions(popup)
-        if let item = options.first(where: { $0.title.lowercased() == wanted })
-            ?? options.first(where: { $0.title.lowercased().contains(wanted) }) {
+        let exact = options.filter { $0.title.lowercased() == wanted }
+        let matches = exact.isEmpty ? options.filter { $0.title.lowercased().contains(wanted) } : exact
+        guard matches.count < 2 else { throw ToolError("Several options match \(quote(option, limit: 60)). Choose a unique option title.") }
+        let selection = matches.first?.title.lowercased() ?? wanted
+        let selected = { self.popupValue(popup)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == selection }
+        if selected() { return "already selected" }
+        if let item = matches.first {
             let status = guardedAXPerformAction(item.element, kAXPressAction as CFString)
             try throwIfRefused(status)
             if status == .success {
                 await Input.pause(0.2)
-                if selected() || popup.string(kAXValueAttribute) == nil {
+                if selected() || popupValue(popup) == nil {
                     return "pressed the option through accessibility"
                 }
             }
@@ -561,14 +581,18 @@ extension ComputerUse {
         let names = options.map { quote($0.title, limit: 40) }.joined(separator: ", ")
         let popupWindow = containingWindow(of: popup).flatMap(windowID(of:))
         guard popupWindow == nil || popupWindow == focusedWindowID(of: app.processIdentifier) else {
-            throw ToolError("Could not choose \(quote(option, limit: 60)) through accessibility, and typing its name would go to the app's key window, not to the window of this pop-up, so nothing was typed. The value is still \(quote(popup.string(kAXValueAttribute) ?? "?", limit: 60)).\(names.isEmpty ? "" : " Options: \(names).")")
+            throw ToolError("Could not choose \(quote(option, limit: 60)) through accessibility. The pop-up is outside the key window. Current value: \(quote(popupValue(popup) ?? "unavailable", limit: 60)).\(names.isEmpty ? "" : " Options: \(names).")")
         }
         _ = try? popup.set(kAXFocusedAttribute, kCFBooleanTrue)
         await Input.pause(0.1)
+        let focused = AXUIElementCreateApplication(app.processIdentifier).element(kAXFocusedUIElementAttribute)
+        guard popup.bool(kAXFocusedAttribute) == true || focused.map({ CFEqual($0, popup) }) == true else {
+            throw ToolError("The pop-up did not take keyboard focus. No option name was typed. Current value: \(quote(popupValue(popup) ?? "unavailable", limit: 60)).")
+        }
         await Input.type(option, to: app.processIdentifier)
         await Input.pause(0.3)
         if selected() { return "focused it and typed the option name" }
-        throw ToolError("Could not choose \(quote(option, limit: 60)); the value is still \(quote(popup.string(kAXValueAttribute) ?? "?", limit: 60)).\(names.isEmpty ? "" : " Options: \(names).")")
+        throw ToolError("Could not verify that the app selected \(quote(option, limit: 60)). Current value: \(quote(popupValue(popup) ?? "unavailable", limit: 60)).\(names.isEmpty ? "" : " Options: \(names).")")
     }
 
     private func isInWebContentAt(pid: pid_t, point: CGPoint) -> Bool {

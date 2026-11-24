@@ -395,6 +395,23 @@ public final class ComputerUse {
         }
     }
 
+    /// Named controls and file panels can be observed even on the first call.
+    func observedTarget(_ args: Arguments) async throws -> (NSRunningApplication, AppSession) {
+        let app = try await runningApp(try args.requiredString("app"), launch: false)
+        let session = sessions[app.processIdentifier]
+        if session?.windowID == nil && session?.window == nil {
+            var look: [String: Any] = ["app": "pid:\(app.processIdentifier)", "screenshot": false, "ocr": false]
+            if let window = args.string("window_id") {
+                guard CGWindowID(window) != nil else { throw ToolError("window_id must be a window id number.") }
+                look["window"] = window
+            }
+            _ = try await getAppState(Arguments(look))
+        }
+        var pinned = args.values
+        pinned["app"] = "pid:\(app.processIdentifier)"
+        return try target(Arguments(pinned))
+    }
+
     /// Resolves the `app` argument to a running app with a session.
     func target(_ args: Arguments) throws -> (NSRunningApplication, AppSession) {
         try requireAccessibility()

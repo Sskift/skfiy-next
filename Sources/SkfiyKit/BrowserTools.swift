@@ -10,6 +10,7 @@ final class BrowserTools {
     private var snapshots: [BrowserTab: String] = [:]
     private var pages: [BrowserTab: [String: Any]] = [:]
     private var screenshots: [BrowserTab: BrowserScreenshot] = [:]
+    private var backgroundCaptureTabs = Set<BrowserTab>()
     private var repeatGuard = RepeatGuard()
     private let discover: () async -> [ConnectedBrowser]
     private let request: (ConnectedBrowser, String, [String: Any], TimeInterval) async throws -> Any
@@ -87,6 +88,9 @@ final class BrowserTools {
         case "browser_state":
             let tabID = try requiredTab(args)
             let browser = try await browser(for: args, tabID: tabID)
+            let key = BrowserTab(browser, tabID)
+            if args.bool("background_screenshot") == true { backgroundCaptureTabs.insert(key) }
+            else if args.bool("screenshot") != false { backgroundCaptureTabs.remove(key) }
             let result = try await state(browser, tabID: tabID, prefix: nil, screenshot: args.bool("screenshot") ?? true,
                                          background: args.bool("background_screenshot") ?? false)
             repeatGuard.looked(app: BrowserTab(browser, tabID).guardKey)
@@ -95,7 +99,7 @@ final class BrowserTools {
             let tabID = try requiredTab(args)
             guard let locator = try Locator.parse(args.values["target"]) else { throw ToolError("Missing required argument \"target\".") }
             let browser = try await browser(for: args, tabID: tabID)
-            let found = try await locate(locator, browser: browser, tabID: tabID)
+            let found = try await locate(locator, browser: browser, tabID: tabID, preferControl: true)
             return ToolResult(text: describe(found, locator: locator, tabID: tabID, acting: false), isError: found.matches.isEmpty)
         case "browser_close_tab":
             let tabID = try requiredTab(args)
@@ -140,15 +144,27 @@ final class BrowserTools {
         if let index = try args.elementIndex("index") { params["index"] = index }
         var located: String?
         if let locator = try Locator.parse(args.values["target"]) {
-            let resolved = try await resolve(locator, args: args, tabID: tabID, pointAllowed: ["browser_click", "browser_hover"].contains(name))
+            let resolved = try await resolve(locator, args: args, tabID: tabID, pointAllowed: ["browser_click", "browser_hover"].contains(name),
+                                             forTyping: name == "browser_type")
             params.merge(resolved.params) { _, new in new }
             located = resolved.note
         }
         if args.bool("trusted") == true { params["trusted"] = true }
+        if ["browser_click", "browser_hover"].contains(name), params["index"] == nil, params["x"] == nil {
+            guard let x = try args.double("x"), let y = try args.double("y") else {
+                throw ToolError("Pass an index, a target, or x and y from the tab's latest screenshot.")
+            }
+            let key = BrowserTab(browser, tabID)
+            guard let shot = screenshots[key], shot.matches(BrowserGeometry(pages[key]?["geometry"])) else {
+                return await refreshPoint(browser, tabID: tabID, reason: "These coordinates have no recent matching screenshot.")
+            }
+            let point = try shot.point(x: x, y: y)
+            params["x"] = point.0; params["y"] = point.1
+            params["coordinate_geometry"] = shot.geometry.json
+        }
         switch name {
         case "browser_hover":
             params["action"] = "hover"
-            try addPoint(&params, args, browser: browser, tabID: tabID, verb: "hover")
         case "browser_click":
             params["action"] = "click"
             if let dialog = args.string("dialog") {
@@ -159,7 +175,6 @@ final class BrowserTools {
                 params["dialog"] = params["dialog"] ?? "accept"
                 params["prompt_text"] = text
             }
-            try addPoint(&params, args, browser: browser, tabID: tabID, verb: "click")
         case "browser_type":
             params["action"] = "type"
             params["text"] = try args.requiredText("text")
@@ -174,7 +189,7 @@ final class BrowserTools {
             params["key"] = try args.requiredString("key")
         default:
             params["action"] = "scroll"
-            let direction = try args.requiredString("direction").lowercased()
+            let direction = try args.values["direction"] == nil ? "down" : args.requiredString("direction").lowercased()
             guard ["up", "down", "left", "right", "to"].contains(direction) else {
                 throw ToolError("direction must be up, down, left, right, or to (an index/target).")
             }
@@ -191,10 +206,29 @@ final class BrowserTools {
             throw ToolError("Browser expect supports text, text_gone, value, value_changes and changed; window expectations are for native app actions. Nothing was sent.")
         }
         let tab = BrowserTab(browser, tabID)
-        let before = try await observe(browser, params: params, includeTarget: true)
-        if params["coordinate_geometry"] != nil { params["coordinate_target"] = before.raw["identity"] }
-        let label = before.raw["label"] as? String ?? ""
-        let signatureParts: [String: Any] = ["action": name, "identity": before.raw["identity"] ?? "", "text": params["text"] ?? "",
+        let before: [String: Any]
+        var baseline: VerifyObservation?
+        do {
+            if name == "browser_click", expectation == nil, params["index"] != nil {
+                var inspection = params
+                inspection["target_only"] = true
+                inspection["include_target"] = true
+                guard let target = try await send(browser, "observe", inspection) as? [String: Any], target["identity"] is String else {
+                    throw ToolError("The selected control could not be inspected. Read browser_state again.")
+                }
+                before = target
+            } else {
+                let observation = try await observe(browser, params: params, includeTarget: true)
+                before = observation.raw
+                baseline = observation.observation
+            }
+        }
+        catch where params["coordinate_geometry"] != nil && String(describing: error).lowercased().contains("screenshot") {
+            return await refreshPoint(browser, tabID: tabID, reason: "\(error)")
+        }
+        if params["coordinate_geometry"] != nil { params["coordinate_target"] = before["identity"] }
+        let label = before["label"] as? String ?? ""
+        let signatureParts: [String: Any] = ["action": name, "identity": before["identity"] ?? "", "text": params["text"] ?? "",
             "key": params["key"] ?? "", "submit": params["submit"] ?? false, "option": params["option"] ?? "",
             "x": params["x"] ?? "", "y": params["y"] ?? ""]
         let signature = String(decoding: try JSONSerialization.data(withJSONObject: signatureParts, options: [.sortedKeys]), as: UTF8.self)
@@ -205,10 +239,10 @@ final class BrowserTools {
            let refusal = repeatGuard.refusal(app: tab.guardKey, signature: signature, look: "browser_state or browser_wait") {
             return BrowserActionOutcome(status: "not_sent", detail: refusal).result
         }
-        if let expectation, (expectation.value != nil || expectation.valueChanges), before.observation.value == nil {
+        if let expectation, (expectation.value != nil || expectation.valueChanges), baseline?.value == nil {
             throw ToolError("The selected field has no readable value (password values are never read). Nothing was sent.")
         }
-        lastInputWasSecret = before.raw["secret"] as? Bool == true
+        lastInputWasSecret = before["secret"] as? Bool == true
         // Reserve before dispatch: cancellation or a lost acknowledgement must
         // never make an uncertain submit look safe to retry.
         if risky { repeatGuard.performed(app: tab.guardKey, signature: signature, label: name + " " + label, verified: false) }
@@ -218,15 +252,18 @@ final class BrowserTools {
         } catch {
             let status = (error as? BrowserActionFailure)?.status ?? "unknown"
             if status == "not_sent", risky { repeatGuard.looked(app: tab.guardKey) }
-            return BrowserActionOutcome(status: status, detail: "\(error)\nInspect browser_state before retrying; an input already sent cannot be recalled.").result
+            if status == "not_sent", params["coordinate_geometry"] != nil, String(describing: error).lowercased().contains("screenshot") {
+                return await refreshPoint(browser, tabID: tabID, reason: "\(error)")
+            }
+            let detail = status == "not_sent" ? "\(error)" : "\(error)\nInspect browser_state before retrying. An input already sent cannot be recalled."
+            return BrowserActionOutcome(status: status, detail: detail).result
         }
         lastInputWasSecret = lastInputWasSecret || receipt["secret"] as? Bool == true
         var outcome = BrowserActionOutcome(status: receipt["action_status"] as? String ?? "unknown",
             verification: expectation == nil ? "not_requested" : "unknown", detail: (located.map { $0 + "\n" } ?? "") + (receipt["message"] as? String ?? "Input acknowledged."))
-        if let expectation {
+        if let expectation, var baseline {
             let started = Date()
             let observeValue = expectation.value != nil || expectation.valueChanges
-            var baseline = before.observation
             // Inspect supplies target metadata for the repeat guard. Compare
             // value only when requested; otherwise page text/fields are the
             // stable baseline even if navigation removes that target.
@@ -275,7 +312,7 @@ final class BrowserTools {
     private func scrollUntil(_ args: Arguments) async throws -> ToolResult {
         guard let wanted = try Locator.parse(args.values["until"]) else { throw ToolError("until needs a target description.") }
         guard try args.elementIndex("index") == nil else { throw ToolError("until cannot keep an index across scrolls; describe its container with target, or omit target for the page.") }
-        let direction = try args.requiredString("direction")
+        let direction = try args.values["direction"] == nil ? "down" : args.requiredString("direction").lowercased()
         guard ["up", "down", "left", "right"].contains(direction) else { throw ToolError("until uses up, down, left or right.") }
         let limit = try args.int("max_scrolls") ?? 5
         let container = try Locator.parse(args.values["target"])
@@ -315,20 +352,19 @@ final class BrowserTools {
             detail: "Stopped after \(completed) scrolls; \(wanted.summary) was not found. Nothing was clicked.").result
     }
 
-    /// Without an index (or a target resolved to a point): x/y of the tab's
-    /// latest screenshot, as viewport CSS pixels.
-    private func addPoint(_ params: inout [String: Any], _ args: Arguments, browser: ConnectedBrowser, tabID: Int, verb: String) throws {
-        guard params["index"] == nil, params["x"] == nil else { return }
-        guard let x = try args.double("x"), let y = try args.double("y") else {
-            throw ToolError("Pass index, or x and y from the tab's latest screenshot.")
-        }
+    private func refreshPoint(_ browser: ConnectedBrowser, tabID: Int, reason: String) async -> ToolResult {
         let key = BrowserTab(browser, tabID)
-        guard let shot = screenshots[key], shot.matches(BrowserGeometry(pages[key]?["geometry"])) else {
-            throw ToolError("x/y need a recent matching screenshot of this browser tab (browser_state; for a background tab with background_screenshot: true); otherwise \(verb) by index.")
+        var result = BrowserActionOutcome(status: "not_sent", detail: "\(reason) Choose a point from a fresh image, or use the control's name or index.").result
+        do {
+            let fresh = try await state(browser, tabID: tabID, prefix: nil, screenshot: true, background: backgroundCaptureTabs.contains(key))
+            result.text += "\n" + fresh.text
+            result.image = fresh.image
+            if let error = fresh.structuredContent?["capture_error"] { result.structuredContent?["capture_error"] = error }
+        } catch {
+            result.text += "\nThe tab could not be read: \(error)"
+            result.structuredContent?["state_error"] = "\(error)"
         }
-        let point = try shot.point(x: x, y: y)
-        params["x"] = point.0; params["y"] = point.1
-        params["coordinate_geometry"] = shot.geometry.json
+        return result
     }
 
     /// Sends a file to the page in pieces and attaches it to a file input,
@@ -367,9 +403,11 @@ final class BrowserTools {
         }
         let total = files.reduce(0) { $0 + $1.data.count }
         guard total <= 20_000_000 else { throw ToolError("The files add up to more than 20 MB.") }
-        let windows = (try? await send(browser, "tabs", [:]) as? [[String: Any]]) ?? []
-        let url = windows.flatMap { ($0["tabs"] as? [[String: Any]]) ?? [] }.first { $0["id"] as? Int == tabID }?["url"] as? String
-        let site = url.flatMap { URL(string: $0)?.host } ?? "tab \(tabID)"
+        let receiver = try await send(browser, "observe", ["tab_id": tabID, "index": index, "upload_count": files.count]) as? [String: Any]
+        guard let uploadToken = receiver?["upload_token"] as? String, let origin = receiver?["origin"] as? String else {
+            throw ToolError("Reload the skfiy browser extension to identify and verify the receiving file input before uploading.")
+        }
+        let site = origin == "null" ? "a document with an opaque origin in tab \(tabID)" : "\(origin) in tab \(tabID)"
         let names = files.map(\.name).joined(separator: ", ")
         let size = ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)
         let from = files.count == 1 ? files[0].path : (files[0].path as NSString).deletingLastPathComponent
@@ -386,21 +424,23 @@ final class BrowserTools {
             let token = UUID().uuidString
             let encoded = file.data.base64EncodedString()
             var offset = encoded.startIndex
-            while offset < encoded.endIndex {
+            repeat {
                 let end = encoded.index(offset, offsetBy: 400_000, limitedBy: encoded.endIndex) ?? encoded.endIndex
                 _ = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-chunk",
-                                                    "token": token, "data": String(encoded[offset..<end])], timeout: 30)
+                                                    "upload_token": uploadToken, "token": token, "data": String(encoded[offset..<end])], timeout: 30)
                 offset = end
-            }
+            } while offset < encoded.endIndex
             let mime = UTType(filenameExtension: (file.name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             parts.append(["token": token, "name": file.name, "mime": mime])
         }
         let result: [String: Any]
         do {
             result = try await send(browser, "act", ["tab_id": tabID, "index": index, "action": "upload-commit",
-                                                      "files": parts], timeout: 30) as? [String: Any] ?? [:]
+                                                      "upload_token": uploadToken, "files": parts], timeout: 30) as? [String: Any] ?? [:]
         } catch {
-            return BrowserActionOutcome(status: (error as? BrowserActionFailure)?.status ?? "unknown",
+            let status = (error as? BrowserActionFailure)?.status ?? "unknown"
+            if status == "not_sent" { return BrowserActionOutcome(status: status, detail: "\(error) No file was attached.").result }
+            return BrowserActionOutcome(status: status,
                 detail: "Upload acknowledgement unavailable: \(error). Inspect browser_state before retrying; the file may already be attached.").result
         }
         let attached = result["message"] as? String
@@ -423,6 +463,7 @@ final class BrowserTools {
         let browser = try await browser(for: args, tabID: tabID)
         engine.timeout = min(engine.timeout, BrowserOperation.deadline?.remaining ?? engine.timeout)
         let started = Date()
+        var unreadable: String? = "No page observation completed."
         let result = await engine.run(
             now: { Date().timeIntervalSince(started) },
             sleep: { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
@@ -431,16 +472,21 @@ final class BrowserTools {
                 try BrowserOperation.deadline?.check()
             },
             observe: {
-                let probe = (try? await self.send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any]) ?? [:]
-                let quiet = probe["loading"] as? Bool == false && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
-                return WaitObservation(found: probe["loading"] as? Bool == false ? probe["found"] as? Bool : nil, settled: quiet)
+                let probe = try await self.send(browser, "probe", ["tab_id": tabID, "text": text]) as? [String: Any] ?? [:]
+                let readable = probe["loading"] as? Bool == false
+                unreadable = readable ? nil : (probe["reason"] as? String ?? "The page is loading or a frame could not be read.")
+                if probe["terminal"] as? Bool == true { throw WaitStopped(unreadable ?? "The page could not be read.") }
+                let quiet = readable && ((probe["quietMs"] as? NSNumber)?.doubleValue ?? 0) >= 500
+                return WaitObservation(found: readable ? probe["found"] as? Bool : nil, settled: quiet)
             })
         if case .cancelled = result { throw CancellationError() }
         if case .stopped(_, let reason) = result { throw ToolError(reason) }
         let met = if case .met = result { true } else { false }
         // A timed-out wait must not start another full state request or clear
         // the repeat guard. The caller can explicitly read state next.
-        guard met else { return ToolResult(text: engine.describe(result), isError: true) }
+        guard met else {
+            return ToolResult(text: unreadable.map { "Wait expired before the page could be read. \($0)" } ?? engine.describe(result), isError: true)
+        }
         var state = try await state(browser, tabID: tabID, prefix: nil, screenshot: false)
         let waited = formatNumber((result.seconds * 10).rounded() / 10)
         state.text = (!text.isEmpty ? engine.describe(result)
@@ -482,15 +528,18 @@ final class BrowserTools {
             }
             // The download caused by skfiy's latest action in a tab: one that
             // started after it. An older download is not what this wait is about.
-            let started = Date()
-            while Date().timeIntervalSince(started) < min(timeout, 10) {
-                let list = try await downloadList(browser)
+            let deadline = ProcessInfo.processInfo.systemUptime + min(timeout, BrowserOperation.deadline?.remaining ?? timeout)
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                let list: (items: [DownloadInfo], lastAct: Double)
+                do { list = try await downloadList(browser) }
+                catch is BrowserDeadlineExceeded { break }
                 if let fresh = list.items.first(where: { ($0.started ?? 0) >= list.lastAct - 1 }) {
-                    return try await waitDownload(browser, id: fresh.id, timeout: max(0.5, timeout - Date().timeIntervalSince(started)), prefix: nil)
+                    return try await waitDownload(browser, id: fresh.id, timeout: max(0.5, deadline - ProcessInfo.processInfo.systemUptime), prefix: nil)
                 }
-                try await Task.sleep(nanoseconds: 300_000_000)
+                let pause = max(0, min(0.3, deadline - ProcessInfo.processInfo.systemUptime))
+                try await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
             }
-            throw ToolError("No download started after skfiy's last action in this browser. If that was a click on a download link, the browser may have blocked it: Chrome lets a site start one download without a real user gesture, then blocks further automatic downloads. Download the link's URL with action start instead, or check the page.")
+            throw ToolError("No download attributed to skfiy appeared after the last action within \(formatNumber(timeout)) seconds. Check the page or browser_downloads action list. If the page provides a download URL, action start accepts it.")
         default:
             throw ToolError("action must be list, wait, start or cancel.")
         }
@@ -558,6 +607,7 @@ final class BrowserTools {
         }
         if ["open", "navigate", "close"].contains(method), let key {
             snapshots[key] = nil; pages[key] = nil; screenshots[key] = nil
+            backgroundCaptureTabs.remove(key)
         }
         return result
     }
@@ -637,24 +687,32 @@ final class BrowserTools {
         let page = try await send(browser, "state", ["tab_id": tabID]) as? [String: Any] ?? [:]
         var note = ""
         var image: Data?
+        var captureError: String?
         if screenshot { screenshots[BrowserTab(browser, tabID)] = nil }
         let shown = page["active"] as? Bool == true
         if screenshot, shown || background {
-            let shot = try? await send(browser, "screenshot", ["tab_id": tabID, "background": background]) as? [String: Any]
-            if let jpeg = (shot?["jpeg"] as? String).flatMap({ Data(base64Encoded: $0) }),
-               let geometry = BrowserGeometry(shot?["geometry"]), geometry == BrowserGeometry(page["geometry"]),
-               let scaled = fitForModel(jpeg) {
+            do {
+                let shot = try await send(browser, "screenshot", ["tab_id": tabID, "background": background]) as? [String: Any]
+                if let unavailable = shot?["unavailable"] as? String { throw ToolError(unavailable) }
+                guard let geometry = BrowserGeometry(shot?["geometry"]), geometry == BrowserGeometry(page["geometry"]) else {
+                    throw ToolError("The page changed between reading the controls and capturing the viewport.")
+                }
+                guard let jpeg = (shot?["jpeg"] as? String).flatMap({ Data(base64Encoded: $0) }), let scaled = fitForModel(jpeg) else {
+                    throw ToolError("The browser returned no usable screenshot image.")
+                }
                 image = scaled.data
                 screenshots[BrowserTab(browser, tabID)] = BrowserScreenshot(geometry: geometry, width: scaled.width, height: scaled.height, captured: Date())
                 note = "\n(Screenshot: \(scaled.width)×\(scaled.height) px of the viewport\(shot?["debugger"] as? Bool == true ? ", taken through Chrome's debugger" : ""); browser_click accepts x/y in these pixels.)"
-            } else if background {
-                note = "\n(No screenshot: \((shot?["unavailable"] as? String) ?? "Chrome's debugger could not capture this tab").)"
+            } catch {
+                try Task.checkCancellation()
+                captureError = "\(error)"
             }
         } else if screenshot {
-            note = "\n(No screenshot: this tab is in the background. Pass background_screenshot: true to take one through Chrome's debugger, if the page's look matters: canvas, charts, images.)"
+            captureError = "This tab is in the background. Pass background_screenshot: true to capture it through Chrome's debugger."
         }
+        if let captureError { note = "\n(No screenshot: \(captureError))" }
         let text = (prefix.map { $0 + "\n" } ?? "") + formatState(browser: browser.name, page: page) + note
-        return ToolResult(text: text, image: image, imageMimeType: "image/jpeg")
+        return ToolResult(text: text, image: image, imageMimeType: "image/jpeg", structuredContent: captureError.map { ["capture_error": $0] })
     }
 }
 
@@ -790,12 +848,13 @@ extension BrowserTools {
         var matches: [LocatorMatch]
         var chosen: LocatorMatch?
         var elsewhere: [LocatorMatch]
+        var otherRoles: [LocatorMatch]
         var screenshot: BrowserScreenshot?
     }
 
     /// The tab's elements and text blocks with their boxes, read now (which
     /// refreshes element indices, as browser_state does), matched.
-    func locate(_ locator: Locator, browser: ConnectedBrowser, tabID: Int, within scope: Locator? = nil) async throws -> Found {
+    func locate(_ locator: Locator, browser: ConnectedBrowser, tabID: Int, within scope: Locator? = nil, forTyping: Bool = false, preferControl: Bool = false) async throws -> Found {
         let page = try await send(browser, "state", ["tab_id": tabID, "locate": true, "max_chars": 200_000]) as? [String: Any] ?? [:]
         guard let raw = page["items"] as? [[String: Any]] else {
             throw ToolError("The skfiy extension in this browser is older than skfiy and cannot locate. Reload it: chrome://extensions → skfiy browser bridge → reload.")
@@ -803,12 +862,20 @@ extension BrowserTools {
         let viewport = page["viewport"] as? [String: Any]
         let bounds = CGRect(x: 0, y: 0, width: (viewport?["width"] as? NSNumber)?.doubleValue ?? 0, height: (viewport?["height"] as? NSNumber)?.doubleValue ?? 0)
         var candidates = raw.compactMap { item -> LocatorCandidate? in
-            guard let rect = (item["rect"] as? [NSNumber])?.map(\.doubleValue), rect.count == 4, rect[2] >= 1 || rect[3] >= 1 else { return nil }
+            let frameID = item["frameId"] as? Int
+            let index = item["index"] as? Int
+            let frame: CGRect
+            if let frameID, frameID > 0, index != nil {
+                frame = .null
+            } else {
+                guard let rect = (item["rect"] as? [NSNumber])?.map(\.doubleValue), rect.count == 4, rect[2] >= 1 || rect[3] >= 1 else { return nil }
+                frame = CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3])
+            }
             return LocatorCandidate(label: item["label"] as? String ?? "", role: item["kind"] as? String ?? "",
-                                    frame: CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]),
-                                    containers: item["sections"] as? [String] ?? [], index: (item["index"] as? NSNumber)?.intValue,
+                                    frame: frame, containers: item["sections"] as? [String] ?? [], index: index,
                                     identifier: item["identifier"] as? String, rowLabels: item["rowLabels"] as? [String] ?? [],
-                                    columnLabels: item["columnLabels"] as? [String] ?? [], ancestors: item["parents"] as? [Int] ?? [])
+                                    columnLabels: item["columnLabels"] as? [String] ?? [], ancestors: item["parents"] as? [Int] ?? [],
+                                    browserFrameID: frameID)
         }
         let shot = screenshots[BrowserTab(browser, tabID)]
         let pixelArea = shot.map { shot in { (rect: CGRect) in shot.rect(rect) } }
@@ -825,18 +892,45 @@ extension BrowserTools {
             }
             candidates = candidates.filter { $0.ancestors.contains(index) }
         }
-        let matches = locator.matches(candidates, bounds: bounds, pixelArea: pixelArea)
+        var matches = locator.matches(candidates, bounds: bounds, pixelArea: pixelArea)
+        if preferControl, locator.role == nil, locator.identifier == nil, locator.name != nil, matches.count > 1 {
+            // An email table can repeat one link's label on each enclosing row
+            // and cell. Only discard its actual, noninteractive DOM ancestors.
+            let buttonsAndLinks = matches.filter { $0.nameScore == 1 && ["button", "link", "submit", "reset"].contains($0.candidate.role) }
+            let ancestors = Set(buttonsAndLinks.flatMap { $0.candidate.ancestors })
+            let wrappers = Set(raw.compactMap { $0["structuralOnly"] as? Bool == true ? $0["index"] as? Int : nil }).intersection(ancestors)
+            matches.removeAll { $0.candidate.index.map(wrappers.contains) == true }
+        }
+        if forTyping, locator.role == nil {
+            // Keep all labels as spatial anchors, then disambiguate the
+            // action using the same editable predicate as pageAction.
+            let editable = Set(raw.compactMap { $0["editable"] as? Bool == true ? $0["index"] as? Int : nil })
+            let fields = matches.filter { $0.candidate.index.map(editable.contains) == true }
+            if !fields.isEmpty { matches = fields }
+        }
         let elsewhere = matches.isEmpty ? (locator.loosened.map { $0.matches(candidates, bounds: bounds) } ?? []) : []
-        return Found(viewport: bounds, matches: matches, chosen: locator.unique(matches), elsewhere: elsewhere, screenshot: shot)
+        var otherRoles: [LocatorMatch] = []
+        if matches.isEmpty, elsewhere.isEmpty, locator.role != nil, locator.name != nil {
+            var byName = locator
+            byName.role = nil
+            otherRoles = byName.matches(candidates, bounds: bounds, pixelArea: pixelArea).filter {
+                $0.candidate.index != nil && $0.nameScore == 1
+            }
+        }
+        return Found(viewport: bounds, matches: matches, chosen: locator.unique(matches), elsewhere: elsewhere, otherRoles: otherRoles, screenshot: shot)
     }
 
     func line(_ match: LocatorMatch, tabID: Int, viewport: CGRect, screenshot: BrowserScreenshot? = nil) -> String {
         let candidate = match.candidate
         var parts = [candidate.index.map { "[\($0)]" }, candidate.role + (candidate.label.isEmpty ? "" : " \(quote(candidate.label, limit: 60))")].compactMap { $0 }
-        let inView = viewport.contains(CGPoint(x: candidate.frame.midX, y: candidate.frame.midY))
-        parts.append(inView ? match.area : candidate.frame.midY < viewport.minY ? "above the visible part" : "out of view (scroll)")
-        if inView, let shot = screenshot {
-            parts.append("x=\(Int((candidate.frame.midX * Double(shot.width) / shot.geometry.width).rounded())) y=\(Int((candidate.frame.midY * Double(shot.height) / shot.geometry.height).rounded()))")
+        if let frameID = candidate.browserFrameID {
+            parts.append("in embedded frame \(frameID)")
+        } else {
+            let inView = viewport.contains(CGPoint(x: candidate.frame.midX, y: candidate.frame.midY))
+            parts.append(inView ? match.area : candidate.frame.midY < viewport.minY ? "above the visible part" : "out of view (scroll)")
+            if inView, let shot = screenshot {
+                parts.append("x=\(Int((candidate.frame.midX * Double(shot.width) / shot.geometry.width).rounded())) y=\(Int((candidate.frame.midY * Double(shot.height) / shot.geometry.height).rounded()))")
+            }
         }
         if let section = candidate.containers.first { parts.append("in \(quote(section, limit: 40))") }
         if let identifier = candidate.identifier { parts.append("identifier=\(quote(identifier, limit: 80))") }
@@ -852,6 +946,9 @@ extension BrowserTools {
             if !found.elsewhere.isEmpty {
                 text += " Matching the name/kind alone, elsewhere:\n" + found.elsewhere.prefix(10).map { "  " + line($0, tabID: tabID, viewport: found.viewport, screenshot: found.screenshot) }.joined(separator: "\n")
             }
+            if !found.otherRoles.isEmpty {
+                text += " Controls with this exact name have a different role:\n" + found.otherRoles.prefix(10).map { "  " + line($0, tabID: tabID, viewport: found.viewport, screenshot: found.screenshot) }.joined(separator: "\n")
+            }
             return text
         }
         let listed = found.matches.prefix(15).enumerated().map { "  \($0.offset + 1). " + line($0.element, tabID: tabID, viewport: found.viewport, screenshot: found.screenshot) }
@@ -865,12 +962,12 @@ extension BrowserTools {
 
     /// The index (or, for text without one, the point in viewport CSS
     /// pixels) a target means now; otherwise why not.
-    func resolve(_ locator: Locator, args: Arguments, tabID: Int, pointAllowed: Bool) async throws -> (params: [String: Any], note: String) {
+    func resolve(_ locator: Locator, args: Arguments, tabID: Int, pointAllowed: Bool, forTyping: Bool = false) async throws -> (params: [String: Any], note: String) {
         if ["index", "x", "y"].contains(where: { args.values[$0] != nil && !(args.values[$0] is NSNull) }) {
             throw ToolError("Pass either target or index / x,y — not both.")
         }
         let browser = try await browser(for: args, tabID: tabID)
-        let found = try await locate(locator, browser: browser, tabID: tabID)
+        let found = try await locate(locator, browser: browser, tabID: tabID, forTyping: forTyping, preferControl: pointAllowed)
         guard let chosen = found.chosen else { throw ToolError(describe(found, locator: locator, tabID: tabID, acting: true)) }
         let note = "Target \(locator.summary) → " + line(chosen, tabID: tabID, viewport: found.viewport, screenshot: found.screenshot) + " (found just now)."
         if let index = chosen.candidate.index { return (["index": index], note) }

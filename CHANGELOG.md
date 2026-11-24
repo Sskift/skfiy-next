@@ -1,5 +1,18 @@
 # Release notes
 
+## 0.10.5 — 2026-11-24
+
+- Browser targets can find indexed controls in cross-origin frames by name, role, section, row, column or identifier. Same-origin frames with a focusable host also expose their controls. A coordinate that hits an iframe reports how to target the control inside.
+- An embedded document navigating keeps indices for main-document controls usable. Frame targets, screenshot coordinates and focus-dependent actions require a fresh snapshot after that navigation.
+- Browser typing by name resolves matching text fields even when table headers or static labels share the same name. Multiple matching fields still require disambiguation.
+- Styled checkboxes and radio buttons with visible labels can be located and clicked offscreen. Browser targets accept the ARIA log role and show same-name controls when a role differs.
+- Uploads check the receiving input before approval, identify the receiving frame origin, and recheck the same input before attaching. A rejected upload or typing request reports whether input was sent.
+- Stale screenshot coordinates return the current view and available image. Capture failures retain their reason. Browser waits explain restricted pages and Chrome navigation errors. Download discovery uses the requested wait budget.
+- Named native actions and file panels work on a fresh session. Panels wait briefly for a sheet to appear and can select hidden items when visible. Popup readback recognizes explicit current values in accessibility labels.
+- A link or button in a layout table can be targeted by name even when several enclosing rows and cells repeat its label. Independent controls and clickable ancestor rows keep their own identities.
+- An indexed click without an effect to verify inspects its bound control directly, avoiding an extra read of every frame in a busy background tab.
+- Bundled browser extension 0.9.10.
+
 ## 0.10.4 — 2026-11-17
 
 - Background clicks move the pointer before pressing, preserve one click position, and respect cancelled pointer/mouse-down focus changes. Custom dropdown options can be chosen on the first click, including inside dialogs.

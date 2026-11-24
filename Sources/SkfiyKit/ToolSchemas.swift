@@ -56,7 +56,7 @@ public enum ToolSchemas {
         "description": "Instead of an index or x/y: describe the control, and skfiy finds it in the UI as it is now (accessibility or page elements; recognized text while locked). A name, or {\"name\": \"Save\", \"role\": \"button\", \"region\": \"bottom-right\"}; also within (a group, box or section label), near, below, right_of (another text). region: top-left, top, top-right, left, center, right, bottom-left, bottom, bottom-right, or [x, y, w, h] in screenshot pixels. Exactly one match is acted on; when several fit equally, nothing is done and they are listed",
         "properties": [
             "name": ["type": "string", "description": "Its label or text; exact beats partial"],
-            "role": ["type": "string", "description": "button, text field, checkbox, radio, link, menu item, pop-up, tab, row, cell, table, list, scroll area, toolbar, menu, slider, text, image, file input; unnamed controls can be found by role and region"],
+            "role": ["type": "string", "description": "button, text field, checkbox, radio, link, menu item, pop-up, tab, row, cell, table, list, log, scroll area, toolbar, menu, slider, text, image, file input. Unnamed controls can be found by role and region."],
             "region": ["type": ["string", "array"]],
             "within": ["type": "string"], "near": ["type": "string"], "below": ["type": "string"], "right_of": ["type": "string"],
             "identifier": ["type": "string", "description": "Exact AXIdentifier, DOM id or data-testid from locate; useful for icon-only controls"],
@@ -357,7 +357,7 @@ public enum ToolSchemas {
         ),
         tool(
             "file_dialog",
-            "Fill in the Open or Save panel (file dialog) an app is showing, in the background: goes to the path through the panel's sidebar and columns, sets the file name when saving, and presses Open/Save/Choose. Keys typed into a background app never reach these panels, so use this instead of typing a path. Only places the panel shows can be reached (not hidden folders such as /tmp or ~/Library); an existing file is not replaced unless overwrite is true.",
+            "Fill in the Open or Save panel (file dialog) an app is showing, in the background: goes to the path through the panel's sidebar and columns, sets the file name when saving, and presses Open/Save/Choose. Keys typed into a background app never reach these panels, so use this instead of typing a path. A newly opening panel gets a short time to appear. Hidden paths are selectable when the panel displays them. Web attachments can use browser_upload directly. Replacing an existing file requires overwrite.",
             properties: [
                 "app": app,
                 "path": ["type": "string", "description": "Absolute path of the file to choose, or to save as (~ is expanded)"],
@@ -510,7 +510,7 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_click",
-            "Click an element of a tab by index (scrolls it into view first), or at x/y pixels of the tab's latest screenshot for things without an index (canvas, maps). Links that open a new window open as a background tab instead. Returns the updated page state.",
+            "Click a control by target or index, including inside an embedded frame. Indexed clicks scroll the control into view. Use x/y pixels from the tab's latest screenshot for unindexed content such as a canvas. Links that open a new window open as a background tab. Returns the updated page state.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
                 "x": ["type": "number", "description": "X in the tab's latest screenshot, when not using index"],
@@ -554,12 +554,12 @@ public enum ToolSchemas {
             "Scroll the nearest container of an element (or the page); never spill into the outer page at a nested boundary. direction: to reveals a target/index. until searches a virtualized list by repeatedly re-reading and scrolling, bounded by max_scrolls; target then names the container. It never clicks the match.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
-                "direction": ["type": "string", "enum": ["up", "down", "left", "right", "to"], "description": "Scroll direction"],
+                "direction": ["type": "string", "enum": ["up", "down", "left", "right", "to"], "default": "down", "description": "Scroll direction, down by default"],
                 "pages": ["type": "number", "minimum": 0.01, "maximum": 50, "description": "Pages to scroll. Defaults to 1"],
                 "until": targetDetailed,
                 "max_scrolls": ["type": "integer", "minimum": 1, "maximum": 20, "description": "With until: maximum scroll attempts, defaults to 5; target optionally identifies the container, index is not allowed"]
             ],
-            required: ["tab_id", "direction"],
+            required: ["tab_id"],
             traits: [.target, .browserVerifiable]
         ),
         tool(
@@ -570,7 +570,7 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_upload",
-            "Attach a local file to a file input of a tab (by index), without the file picker. The index may also be the button or drop zone a site hides its file input behind. This sends the file to the website, so the user is asked to approve every upload first (unless SKFIY_APPROVE=all); uploads are refused when the client cannot ask. Up to 20 MB in all. The action receipt survives a failed follow-up page read; inspect browser_state before retrying an unknown upload.",
+            "Attach a local file to a file input of a tab (by index), without the file picker. Its label, a button linked to it or a uniquely associated upload control also works. The approval identifies the receiving frame origin. If the file input changes, attach again after inspecting the new control. This sends the file to the website, so the user is asked to approve every upload first (unless SKFIY_APPROVE=all); uploads are refused when the client cannot ask. Up to 20 MB in all. The action receipt survives a failed follow-up page read; inspect browser_state before retrying an unknown upload.",
             properties: [
                 "tab_id": tab, "index": pageIndex, "browser": browserName,
                 "path": ["type": "string", "description": "Absolute path of the file (~ is expanded)"],
@@ -593,7 +593,7 @@ public enum ToolSchemas {
         ),
         tool(
             "browser_downloads",
-            "Downloads skfiy caused in the browser (from tabs it acted on, or started here); the user's own downloads are never listed. action list shows each with its state, file path and failure reason; wait waits for download_id, or else for a download that started after skfiy's last action in a tab of that browser (looked for up to 10 s; an error when none started), until it ends, and returns its local path only when it is complete and the file exists; start downloads a URL (Chrome renames on a name clash, the result gives the real name); cancel stops one. Hand a finished file on with open_file(path) or browser_upload(download_id).",
+            "Downloads skfiy caused in the browser (from tabs it acted on, or started here); the user's own downloads are never listed. action list shows each with its state, file path and failure reason; wait waits for download_id, or else for a download that started after skfiy's last action in a tab of that browser (using the requested timeout for discovery and completion together), until it ends, and returns its local path only when it is complete and the file exists; start downloads a URL (Chrome renames on a name clash, the result gives the real name); cancel stops one. Hand a finished file on with open_file(path) or browser_upload(download_id).",
             properties: [
                 "action": ["type": "string", "enum": ["list", "wait", "start", "cancel"], "description": "Defaults to list"],
                 "download_id": ["type": "integer", "description": "Download id from list, wait or start"],

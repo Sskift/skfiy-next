@@ -52,7 +52,7 @@ function setup() {
     storage: { session: { get: async key => ({ [key]: stored[key] }), set: async value => Object.assign(stored, value) } },
     tabs: { onRemoved: event(), get: async () => ({ ...tab }), remove: async () => effects.push('close'),
       update: async () => { effects.push('navigate'); return tab; } },
-    webNavigation: { onCommitted: event() }, downloads: { onCreated: event() },
+    webNavigation: { onCommitted: event(), onBeforeNavigate: event(), onErrorOccurred: event() }, downloads: { onCreated: event() },
     windows: { get: async () => ({ state: 'normal' }), getAll: async () => [] },
     debugger: { attach: async () => { if (captureGate) await captureGate.promise; }, detach: async () => {},
       sendCommand: async (_target, method, params) => { if (method.startsWith('Input.')) effects.push([method, params]); return {}; } },
@@ -159,7 +159,7 @@ await test('snapshot does not retry terminal errors or cancelled requests', asyn
   for (const reason of ['Frame with ID 0 is showing error page', 'Cannot access a chrome:// URL', 'No tab with id: 7.']) {
     const s = setup(); let attempts = 0;
     s.chrome.scripting.executeScript = async () => { attempts++; throw new Error(reason); };
-    await assert.rejects(s.state(), error => error.message === reason); assert.equal(attempts, 1);
+    await assert.rejects(s.state(), error => error.message.startsWith(reason)); assert.equal(attempts, 1);
   }
   const s = setup(), owner = s.control(); let attempts = 0;
   s.chrome.scripting.executeScript = async () => {
@@ -210,10 +210,20 @@ await test('DOM recycling still refuses a changed element within a valid snapsho
 });
 await test('navigation invalidates both bridge and page bindings', async () => {
   const s = setup(); const state = await s.state();
-  await s.chrome.webNavigation.onCommitted.listener({ tabId: 7 });
+  await s.chrome.webNavigation.onCommitted.listener({ tabId: 7, frameId: 0 });
   await assert.rejects(s.act(state), /snapshot expired/);
   const next = await s.state(); s.page.location.href = 'https://another.invalid/';
   await assert.rejects(s.act(next), /page snapshot expired/);
+});
+await test('a late subframe commit preserves the main button but expires screenshot coordinates', async () => {
+  const s = setup(), state = await s.state();
+  await s.chrome.webNavigation.onCommitted.listener({ tabId: 7, frameId: 3 });
+  await s.act(state);
+  assert.deepEqual(s.clicks, ['Approve']);
+  await assert.rejects(s.act(state, { index: null, x: 5, y: 5, coordinate_geometry: state.geometry }), /frame|snapshot/);
+  const fresh = await s.state();
+  await assert.rejects(s.act(fresh, { index: null, x: 5, y: 5, coordinate_geometry: state.geometry }), /geometry|content changed/);
+  assert.deepEqual(s.clicks, ['Approve']);
 });
 await test('missing session protocol cannot fall back to unbound indices', async () => {
   const s = setup();
@@ -308,6 +318,20 @@ await test('changed observes checkbox state even when its text stays the same', 
   assert.equal(before.text, after.text);
   assert.notEqual(before.treeText, after.treeText);
 });
+await test('target-only inspection preserves identity without surveying unrelated frames', async () => {
+  const s = setup(), state = await s.state(), calls = [];
+  const execute = s.chrome.scripting.executeScript;
+  s.chrome.scripting.executeScript = async options => {
+    calls.push(options.func.name);
+    return execute(options);
+  };
+  const params = { tab_id: 7, session_id: state.session_id, snapshot_id: state.snapshot_id, index: 0, target_only: true, include_target: true };
+  const observed = await s.context.dispatchRequest('observe', params, s.control());
+  assert.ok(observed.identity); assert.equal(observed.label, 'Approve');
+  assert.deepEqual(calls, ['pageAction']); assert.deepEqual(s.clicks, []);
+  s.approve.isConnected = false;
+  await assert.rejects(s.context.dispatchRequest('observe', params, s.control()), /gone/);
+});
 await test('inner scrolling invalidates coordinates even before the scroll event arrives', async () => {
   const s = setup();
   s.approve.scrollHeight = 300;
@@ -337,6 +361,55 @@ await test('failed, incomplete and navigating probes never report absent text', 
     assert.equal(result.found, mode === 'readable' ? false : null);
     assert.equal(result.loading, mode !== 'readable');
   }
+});
+await test('an error page reports only the network failure for this navigation', async () => {
+  const s = setup();
+  const failure = { tabId: 7, frameId: 0, url: s.tab.url, error: 'net::ERR_CONNECTION_REFUSED' };
+  s.chrome.webNavigation.onErrorOccurred.listener(failure);
+  s.chrome.scripting.executeScript = async () => { throw new Error('Frame with ID 0 is showing error page'); };
+  const probe = () => s.context.dispatchRequest('probe', { tab_id: 7, session_id: 'A' }, s.control());
+  assert.equal((await probe()).terminal, true);
+  await assert.rejects(s.state(), /net::ERR_CONNECTION_REFUSED/);
+  s.chrome.webNavigation.onBeforeNavigate.listener(failure);
+  assert.doesNotMatch((await probe()).reason, /net::ERR_/);
+  s.chrome.webNavigation.onErrorOccurred.listener({ ...failure, frameId: 2 });
+  assert.doesNotMatch((await probe()).reason, /net::ERR_/);
+});
+await test('view-source immediately explains restricted page access without injecting', async () => {
+  const s = setup(); s.tab.url = 'view-source:' + s.tab.url;
+  let injections = 0;
+  s.chrome.scripting.executeScript = async () => { injections++; return []; };
+  await assert.rejects(s.state(), /view-source/);
+  const result = await s.context.dispatchRequest('probe', { tab_id: 7, session_id: 'A' }, s.control());
+  assert.equal(result.found, null); assert.equal(result.terminal, true); assert.equal(injections, 0);
+});
+await test('a non-editable focused control refuses typing before any input', async () => {
+  const s = setup(), state = await s.state();
+  s.page.document.activeElement = s.approve;
+  const result = await s.context.dispatchRequest('act', {
+    tab_id: 7, session_id: state.session_id, snapshot_id: state.snapshot_id, action: 'type', text: 'fixture'
+  }, s.control());
+  assert.equal(result.action_status, 'not_sent'); assert.match(result.error, /editable text field/);
+  assert.deepEqual(s.effects, []); assert.deepEqual(s.clicks, []);
+});
+await test('replacing a hidden file input after approval refuses the transfer', async () => {
+  const s = setup();
+  s.approve.getAttribute = name => name === 'aria-controls' ? 'upload' : null;
+  const input = () => Object.assign(new s.approve.constructor('INPUT'), { type: 'file' });
+  let receiver = input();
+  s.page.document.getElementById = id => id === 'upload' ? receiver : null;
+  const snapshot = await s.state();
+  const binding = { tab_id: 7, session_id: snapshot.session_id, snapshot_id: snapshot.snapshot_id, index: 0 };
+  const approved = await s.context.dispatchRequest('observe', { ...binding, upload_count: 1 }, s.control());
+  assert.ok(approved.upload_token);
+  const params = { ...binding, upload_token: approved.upload_token, token: 'file', action: 'upload-chunk', data: 'YQ==' };
+  const staged = await s.context.dispatchRequest('act', params, s.control());
+  assert.equal(staged.action_status, 'sent');
+  // Replace only the receiver after the button and the snapshot both survived.
+  receiver = input();
+  const commit = await s.context.dispatchRequest('act', { ...params, action: 'upload-commit', files: [{ token: 'file', name: 'a' }] }, s.control());
+  assert.equal(commit.action_status, 'not_sent'); assert.match(commit.error, /file input changed/);
+  assert.equal(receiver.files, undefined);
 });
 await test('expired native request cannot dispatch input', async () => {
   const s = setup(), state = await s.state();

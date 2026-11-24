@@ -7,6 +7,13 @@ import Testing
 /// window is fully covered, what kind of window cannot take pixels, remote
 /// sessions, and the facts the capability report gets from them.
 struct WindowTargetingTests {
+    @Test func currentOptionIsReadOnlyFromAnExplicitValueInThePopupLabel() {
+        #expect(ComputerUse.currentOption(in: "Select model, current: Flash") == "Flash")
+        #expect(ComputerUse.currentOption(in: "选择模型，当前值：快速") == "快速")
+        #expect(ComputerUse.currentOption(in: "Flash or Argon") == nil)
+        #expect(ComputerUse.currentOption(in: "current:  ") == nil)
+    }
+
     private func row(_ id: Int, _ rect: CGRect, layer: Int = 0, alpha: Double = 1, owner: Int = 500) -> [String: Any] {
         [kCGWindowNumber as String: id, kCGWindowLayer as String: layer, kCGWindowAlpha as String: alpha,
          kCGWindowOwnerPID as String: owner, kCGWindowBounds as String: rect.dictionaryRepresentation as NSDictionary]

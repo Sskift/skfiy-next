@@ -12,11 +12,12 @@ struct FilePanel {
     let isSave: Bool
 
     /// The panel shown by `app`, as a sheet or as a window of its own.
-    static func find(in app: AXUIElement) -> FilePanel? {
+    static func find(in app: AXUIElement, window requestedWindow: CGWindowID? = nil) -> FilePanel? {
         var candidates: [AXUIElement] = []
         for window in appWindows(app) {
+            if let requestedWindow, windowID(of: window) != requestedWindow { continue }
             candidates.append(window)
-            candidates.append(contentsOf: window.elements(kAXChildrenAttribute).filter { $0.string(kAXRoleAttribute) == kAXSheetRole })
+            candidates.append(contentsOf: window.elements("AXSheets") + window.elements(kAXChildrenAttribute).filter { $0.string(kAXRoleAttribute) == kAXSheetRole })
         }
         for candidate in candidates {
             let identifier = candidate.string("AXIdentifier") ?? ""
@@ -140,9 +141,6 @@ struct FilePanel {
     private func select(_ url: URL, column: Int) async throws {
         let names = Set([FileManager.default.displayName(atPath: url.path), url.lastPathComponent])
         let hidden = url.lastPathComponent.hasPrefix(".") || (try? url.resourceValues(forKeys: [.isHiddenKey]).isHidden) == true
-        if hidden {
-            throw ToolError("\(url.path) is hidden in file panels (like /tmp or ~/Library), so skfiy cannot reach it there. Put the file in a visible folder such as Downloads first.")
-        }
         var scrolled = 0
         for _ in 0..<60 {
             // Choosing a sidebar location or a folder can replace AXBrowser.
@@ -170,6 +168,9 @@ struct FilePanel {
                 }
             }
             await Input.pause(0.1)
+        }
+        if hidden {
+            throw ToolError("This panel does not show the hidden item \(url.path). Show hidden files in the panel or select a file in a visible folder. For a webpage attachment, browser_upload accepts the original path.")
         }
         throw ToolError("\(url.lastPathComponent) did not show up in the panel's column for \(url.deletingLastPathComponent().path).")
     }

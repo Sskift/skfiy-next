@@ -99,12 +99,40 @@ async function markOwnTab(tabId) {
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   frameIndex.delete(tabId);
+  subframeRevisions.delete(tabId);
+  navigationErrors.delete(tabId);
   const ids = await ownTabs();
   if (ids.delete(tabId)) await chrome.storage.session.set({ ownTabs: [...ids] });
 });
 
-chrome.webNavigation.onCommitted.addListener(async ({ tabId }) => {
-  frameIndex.delete(tabId);
+const navigationErrors = new Map();
+chrome.webNavigation.onBeforeNavigate.addListener(({ tabId, frameId }) => {
+  if (frameId === 0) navigationErrors.delete(tabId);
+});
+chrome.webNavigation.onErrorOccurred.addListener(({ tabId, frameId, url, error }) => {
+  if (frameId === 0 && /^net::ERR_[A-Z0-9_]+$/.test(error) && error !== 'net::ERR_ABORTED') {
+    navigationErrors.set(tabId, { url, error });
+  }
+});
+
+function pageReadError(tab, cause = '') {
+  const scheme = /^(view-source|chrome|chrome-untrusted|chrome-extension|devtools|edge|brave):/i.exec(tab.pendingUrl || tab.url || '');
+  if (scheme) return `The browser restricts page access on ${scheme[1]}: pages. Use get_app_state to inspect the browser window.`;
+  if (/Frame with ID 0 is showing error page/i.test(cause)) {
+    const failure = navigationErrors.get(tab.id);
+    return `${cause}. Chrome could not load the main page${failure?.url === tab.url ? ' (' + failure.error + ')' : ''}.`;
+  }
+  if (/Cannot access (?:a |contents of (?:the )?url)/i.test(cause)) return cause;
+  return null;
+}
+
+chrome.webNavigation.onCommitted.addListener(async ({ tabId, frameId }) => {
+  if (frameId === 0) {
+    frameIndex.delete(tabId);
+    subframeRevisions.delete(tabId);
+  } else if (subframeRevisions.has(tabId)) {
+    subframeRevisions.set(tabId, subframeRevisions.get(tabId) + 1);
+  }
   if ((await ownTabs()).has(tabId)) await hookDialogs(tabId);
 });
 
@@ -322,7 +350,7 @@ async function waitForLoad(tabId, timeout = 15000, control) {
   while (Date.now() - started < timeout) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     control?.check();
-    if (!tab || tab.status === 'complete') return;
+    if (!tab || tab.status === 'complete' || pageReadError(tab)) return;
     await delay(150);
   }
 }
@@ -339,23 +367,31 @@ async function run(tabId, func, args, frameId = 0) {
 // top frame reads same-origin frames itself; cross-origin frames report
 // their own elements, which are numbered after the page's.
 const frameIndex = new Map();
+const subframeRevisions = new Map();
 
 async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id }, control) {
   const tab = await tabById(tabId);
+  const restricted = pageReadError(tab);
+  if (restricted) throw new Error(restricted);
   const deadline = Date.now() + 5000;
   await waitForLoad(tab.id, 5000, control);
   const binding = { session_id, snapshot_id: crypto.randomUUID() };
   let frames;
+  let subframeRevision;
   for (;;) {
     control.check();
+    if (!subframeRevisions.has(tab.id)) subframeRevisions.set(tab.id, 0);
+    subframeRevision = subframeRevisions.get(tab.id);
     try {
       frames = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding], world: 'ISOLATED', injectImmediately: true
+        target: { tabId: tab.id, allFrames: true }, func: pageSnapshot, args: [maxChars || 30000, Boolean(locate), binding, subframeRevision], world: 'ISOLATED', injectImmediately: true
       });
       control.check();
       break;
     } catch (error) {
       control.check();
+      const terminal = pageReadError(tab, error.message || String(error));
+      if (terminal) throw new Error(terminal);
       // A committed navigation can still lack an injectable frame even
       // when tabs.get says complete. Retry only this read, never input or
       // the navigation that already opened the tab. Error pages and access
@@ -375,15 +411,28 @@ async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id
   for (const { frameId, result } of [top, ...frames.filter((f) => f.frameId !== 0)]) {
     if (!result || !result.ownFrame) continue;
     const base = map.length;
-    // Positions are known for the top frame (and same-origin frames inside it) only.
-    if (frameId === 0) for (const item of result.items || []) items.push(item.index == null ? item : { ...item, index: item.index + base, parents: (item.parents || []).map((n) => n + base) });
+    for (const item of result.items || []) {
+      if (item.index == null) {
+        if (frameId === 0) items.push(item); // Unindexed text needs a point in the top viewport.
+        continue;
+      }
+      const indexed = { ...item, index: item.index + base, parents: item.parents.map(n => n + base) };
+      if (frameId !== 0) {
+        // The index still routes to the exact element in its frame. Its local
+        // rectangle cannot be used as a position in the tab screenshot.
+        delete indexed.rect;
+        indexed.frameId = frameId;
+      }
+      items.push(indexed);
+    }
     if (frameId !== 0) lines.push(`--- frame ${result.url} ---`);
     for (const line of result.lines) lines.push(line.replace(/^\[(\d+)\]/, (_, n) => `[${Number(n) + base}]`));
-    for (let local = 0; local < result.count; local++) map.push({ frameId, local });
+    const nested = new Set(result.nestedIndices);
+    for (let local = 0; local < result.count; local++) map.push({ frameId, local, topDocument: frameId === 0 && !nested.has(local) });
     dialogs.push(...result.dialogs);
     truncated = truncated || result.truncated;
   }
-  frameIndex.set(tab.id, { ...binding, map });
+  frameIndex.set(tab.id, { ...binding, map, subframeRevision });
   const notes = dialogs.map((d) => d.type === 'alert'
     ? `(page dialog) alert ${JSON.stringify(d.message)}, dismissed`
     : `(page dialog) ${d.type} ${JSON.stringify(d.message)}, answered ${JSON.stringify(d.answer)}`);
@@ -397,9 +446,14 @@ function locateIndex(tabId, index, binding) {
   if (!snapshot || snapshot.session_id !== binding.session_id || snapshot.snapshot_id !== binding.snapshot_id) {
     throw new Error('The tab snapshot expired or was replaced by another session. Call browser_state again; nothing was sent.');
   }
-  if (index == null) return { frameId: 0, local: null };
-  const entry = snapshot.map[Number(index)];
+  const entry = index == null ? { frameId: 0, local: null } : snapshot.map[Number(index)];
   if (!entry) throw new Error(`no element ${index}; call browser_state again`);
+  // An embedded document can navigate long after the main page is ready.
+  // Only main-document indices and an untargeted page scroll are independent
+  // of it. Focus, coordinates and both kinds of child references need a read.
+  if (snapshot.subframeRevision !== subframeRevisions.get(tabId) && !entry.topDocument && !(index == null && binding.action === 'scroll')) {
+    throw new Error('An embedded frame navigated since this snapshot. Call browser_state again; nothing was sent.');
+  }
   return entry;
 }
 
@@ -441,6 +495,16 @@ async function observePage(params) {
   }
   let target;
   if (snapshot) target = locateIndex(tab.id, params.index, params);
+  if (params.upload_count != null) {
+    if (!target || target.local == null) throw new Error('Read the upload control again before attaching files.');
+    return run(tab.id, pageAction, [{ ...params, action: 'upload-target', index: target.local }], target.frameId);
+  }
+  // A plain indexed click needs the bound control's identity for repeat
+  // protection. Reading all other renderers here adds no verification.
+  if (params.target_only) {
+    if (!target || target.local == null) throw new Error('The selected element expired. Read browser_state again.');
+    return run(tab.id, pageAction, [{ ...params, action: 'inspect', index: target.local }], target.frameId);
+  }
   const frames = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true },
     func: pageObservation, args: [], world: 'ISOLATED', injectImmediately: true });
   frames.sort((a, b) => a.frameId - b.frameId);
@@ -465,9 +529,18 @@ function pageObservation() {
 // page has gone without DOM changes.
 async function probe({ tab_id: tabId, text }) {
   const tab = await tabById(tabId);
-  const frames = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true }, func: pageProbe, args: [String(text || '').toLowerCase()], world: 'ISOLATED', injectImmediately: true
-  }).catch(() => []);
+  const restricted = pageReadError(tab);
+  if (restricted) return { loading: true, found: null, terminal: true, reason: restricted };
+  let frames;
+  try {
+    frames = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true }, func: pageProbe, args: [String(text || '').toLowerCase()], world: 'ISOLATED', injectImmediately: true
+    });
+  } catch (error) {
+    const cause = error.message || String(error);
+    const terminal = pageReadError(tab, cause);
+    return { loading: true, found: null, reason: terminal || cause, terminal: Boolean(terminal) };
+  }
   const answers = frames.map((f) => f.result).filter(Boolean);
   const latest = await tabById(tab.id);
   const readable = tab.status === 'complete' && latest.status === 'complete' && tab.url === latest.url
@@ -475,7 +548,8 @@ async function probe({ tab_id: tabId, text }) {
   return {
     loading: !readable,
     found: readable ? answers.some((a) => a.found) : null,
-    quietMs: answers.length ? Math.min(...answers.map((a) => a.quietMs)) : 0
+    quietMs: answers.length ? Math.min(...answers.map((a) => a.quietMs)) : 0,
+    reason: readable ? null : 'The page was loading or a frame could not be read.'
   };
 }
 
@@ -502,18 +576,29 @@ async function act(params, control) {
 
 async function sendAction(params, control, execution) {
   const tab = await tabById(params.tab_id);
-  await noteAct(tab);
-  const { frameId, local } = locateIndex(tab.id, params.index, params);
+  const { frameId, local, topDocument } = locateIndex(tab.id, params.index, params);
   if ((await ownTabs()).has(tab.id)) await hookDialogs(tab.id);
-  if (params.trusted && frameId !== 0) throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
+  if (params.trusted && (frameId !== 0 || (params.action === 'click' && local != null && !topDocument))) {
+    throw new Error('trusted input only reaches the page itself, not elements inside a frame; use the default events');
+  }
   const inFrame = { ...params, index: local };
   if (params.action === 'hover') inFrame.css = await foreignStyles(tab.id, frameId);
   control.check();
-  await run(tab.id, pageAction, [{ ...inFrame, action: 'validate' }], frameId);
-  control.check();
+  await run(tab.id, pageAction, [{ ...inFrame, action: 'validate', requested_action: params.action }], frameId);
+  const checkTarget = () => {
+    control.check();
+    locateIndex(tab.id, params.index, params);
+  };
+  if (params.action !== 'upload-chunk') await noteAct(tab);
+  checkTarget();
   if (!params.trusted) execution.status = 'unknown';
-  const result = params.trusted ? await trustedAct(tab.id, inFrame, control, execution) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
+  const result = params.trusted ? await trustedAct(tab.id, inFrame, { check: checkTarget }, execution) : await run(tab.id, pageAction, [inFrame, KEY_ALIASES], frameId);
+  if (result.refused) {
+    execution.status = 'not_sent';
+    throw new Error(result.refused);
+  }
   execution.status = 'sent';
+  if (params.action === 'upload-chunk') return result;
   if (params.action === 'scroll') {
     // Hidden/occluded Chromium defers scroll events and animation frames. A
     // compositor capture delivers a frame so virtual lists can render their
@@ -715,8 +800,12 @@ async function trustedAct(tabId, params, control, execution) {
 // page, installDialogHooks (below) in the page's own. Each must be
 // self-contained: executeScript serializes only the function body.
 
-function pageSnapshot(maxChars, locate, binding) {
+function pageSnapshot(maxChars, locate, binding, subframeRevision) {
   const context = globalThis.__skfiyDocument ||= { id: crypto.randomUUID(), revision: 0 };
+  if (context.subframeRevision !== subframeRevision) {
+    context.subframeRevision = subframeRevision;
+    context.revision++;
+  }
   if (!context.observer) {
     context.changed = records => {
       if (records.some(r => r.type !== 'attributes' || !r.attributeName?.startsWith('data-skfiy-'))) context.revision++;
@@ -754,6 +843,8 @@ function pageSnapshot(maxChars, locate, binding) {
   const previous = globalThis.__skfiy;
   const state = globalThis.__skfiy = { ...binding, url: location.href, elements: [], identities: [],
     hovered: previous?.hovered };
+  state.editable = el => el && !el.readOnly && !el.matches(':disabled') && (el.isContentEditable || el.tagName === 'TEXTAREA'
+    || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'range', 'color'].includes(el.type)));
   const lines = [];
   let chars = 0;
   let truncated = false;
@@ -762,6 +853,7 @@ function pageSnapshot(maxChars, locate, binding) {
   // pixels of the top frame) and the labels of the sections it is in.
   const items = [];
   const parents = [];
+  const nestedIndices = [];
   let blockNodes = [];
   // Inside a button or link, text is the control's label, already on its line;
   // lists, rows and scroll areas keep their text.
@@ -891,6 +983,20 @@ function pageSnapshot(maxChars, locate, binding) {
     const style = getComputedStyle(el);
     return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) !== 0;
   };
+  // Keep the input's role, identity and value. Styled native controls may
+  // expose only their associated label as the visible pointer target.
+  const surface = el => {
+    const shown = visible(el);
+    if (el.tagName === 'INPUT' && ['checkbox', 'radio', 'file'].includes(el.type)) {
+      const rect = el.getBoundingClientRect();
+      if (!shown || rect.width <= 1 || rect.height <= 1) {
+        const label = Array.from(el.labels || []).find(label => visible(label) && !label.closest('[aria-hidden="true"], [inert]'));
+        if (label) return label;
+      }
+    }
+    return shown ? el : null;
+  };
+  state.surface = surface;
   const interactive = (el) => {
     const tag = el.tagName;
     if (tag === 'A' && el.hasAttribute('href')) return true;
@@ -914,9 +1020,11 @@ function pageSnapshot(maxChars, locate, binding) {
     }
     if (el.labels && el.labels.length) {
       // A label wrapping its control would otherwise swallow the control's text (e.g. every option).
-      const text = Array.from(el.labels).map((label) => Array.from(label.childNodes)
-        .filter((n) => !(n.nodeType === 1 && (n === el || n.contains(el) || ['SELECT', 'INPUT', 'TEXTAREA', 'BUTTON'].includes(n.tagName))))
-        .map((n) => n.textContent).join(' ')).join(' ');
+      const text = Array.from(el.labels).map(label => {
+        const copy = label.cloneNode(true);
+        for (const control of copy.querySelectorAll('select, input, textarea, button, script, style, [aria-hidden="true"]')) control.remove();
+        return copy.textContent;
+      }).join(' ');
       if (text.trim()) return text;
     }
     if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return el.value;
@@ -958,6 +1066,10 @@ function pageSnapshot(maxChars, locate, binding) {
   };
   state.identity = (el) => JSON.stringify([kindOf(el), clip(labelOf(el), 120), structural(el)]);
 
+  const walkFrame = el => {
+    // Cross-origin contentDocument is null and is indexed by its own injection.
+    if (el.tagName === 'IFRAME' && el.contentDocument?.body) walk(el.contentDocument.body);
+  };
   const walk = (node) => {
     if (truncated) return;
     if (node.nodeType === Node.TEXT_NODE) {
@@ -974,17 +1086,21 @@ function pageSnapshot(maxChars, locate, binding) {
     }
     const tag = el.tagName;
     if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD'].includes(tag)) return;
-    if (!visible(el) && el.children.length === 0) return;
-    if (el.getAttribute('aria-hidden') === 'true') return;
-    if ((interactive(el) || (locate && ['cell', 'gridcell', 'row', 'table', 'grid', 'list', 'listbox'].includes(kindOf(el)))) && visible(el)) {
+    if (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('inert')) return;
+    const shown = surface(el);
+    if (!shown && el.children.length === 0) return;
+    const isControl = shown && interactive(el);
+    if (shown && (isControl || (locate && ['cell', 'gridcell', 'row', 'table', 'grid', 'list', 'listbox', 'log'].includes(kindOf(el))))) {
       flush();
       const index = state.elements.length;
+      if (el.ownerDocument !== document) nestedIndices.push(index);
       state.elements.push(el);
       state.identities.push(state.identity(el));
       push(describe(el, index));
       if (locate && items.length < 3000) {
-        items.push({ index, kind: kindOf(el), label: clip(labelOf(el), 120), rect: box(el.getBoundingClientRect(), el.ownerDocument),
-          sections: sectionsOf(el), ...structural(el), parents: [...parents] });
+        items.push({ index, kind: kindOf(el), label: clip(labelOf(el), 120), rect: box(shown.getBoundingClientRect(), shown.ownerDocument),
+          sections: sectionsOf(el), ...structural(el), parents: [...parents], editable: Boolean(state.editable(el)),
+          ...(!isControl ? { structuralOnly: true } : {}) });
       }
       if (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable) return;
       // Nested controls (a button inside a link) still get their own index.
@@ -993,6 +1109,7 @@ function pageSnapshot(maxChars, locate, binding) {
       inControl = LABELLED_BY_TEXT.has(kindOf(el));
       for (const child of el.children) walk(child);
       if (el.shadowRoot) for (const child of el.shadowRoot.childNodes) walk(child);
+      walkFrame(el);
       inControl = outer;
       parents.pop();
       return;
@@ -1006,11 +1123,7 @@ function pageSnapshot(maxChars, locate, binding) {
     if (tag === 'IMG' && el.alt && visible(el)) text += ` [image: ${clip(el.alt, 60)}] `;
     for (const child of el.childNodes) walk(child);
     if (el.shadowRoot) for (const child of el.shadowRoot.childNodes) walk(child);
-    if (tag === 'IFRAME') {
-      try {
-        if (el.contentDocument && el.contentDocument.body) walk(el.contentDocument.body);
-      } catch { /* cross-origin frame */ }
-    }
+    walkFrame(el);
     if (block) flush();
   };
   walk(document.body || document.documentElement);
@@ -1028,6 +1141,7 @@ function pageSnapshot(maxChars, locate, binding) {
   if (root) root.removeAttribute('data-skfiy-dialogs');
   return {
     count: state.elements.length,
+    nestedIndices,
     items: locate ? items : undefined,
     ownFrame,
     url: location.href,
@@ -1044,27 +1158,40 @@ function pageSnapshot(maxChars, locate, binding) {
 
 function pageAction(params, keyAliases = {}) {
   const state = globalThis.__skfiy || { elements: [] };
+  const refused = reason => ['click', 'hover', 'type', 'key', 'select', 'scroll', 'upload-chunk', 'upload-commit'].includes(params.action)
+    ? { refused: reason } : { skfiyError: reason };
   if (!params.session_id || !params.snapshot_id || state.session_id !== params.session_id || state.snapshot_id !== params.snapshot_id || state.url !== location.href) {
-    return { skfiyError: 'The page snapshot expired or belongs to another session. Call browser_state again; nothing was sent.' };
+    return refused('The page snapshot expired or belongs to another session. Call browser_state again. Nothing was sent.');
   }
   if (params.coordinate_geometry && JSON.stringify(params.coordinate_geometry) !== JSON.stringify(globalThis.__skfiyDocument?.geometry())) {
     // Compare fields, not object-key order: the native JSON encoder sorts independently.
     const now = globalThis.__skfiyDocument?.geometry();
     if (!now || Object.keys(now).some(key => now[key] !== params.coordinate_geometry[key])) {
-      return { skfiyError: 'The screenshot geometry or page content changed. Read browser_state with a screenshot again; nothing was sent.' };
+      return refused('The screenshot geometry or page content changed. Read browser_state with a screenshot again. Nothing was sent.');
     }
   }
-  if (params.coordinate_target != null) {
-    const at = document.elementFromPoint(Number(params.x), Number(params.y));
-    if (!at || state.identity?.(at) !== params.coordinate_target)
-      return { skfiyError: 'The target at the screenshot coordinate changed. Read browser_state again; nothing was sent.' };
+  let outer, hit;
+  if (params.index == null && params.x != null && params.y != null) {
+    const x = Number(params.x), y = Number(params.y);
+    outer = hit = document.elementFromPoint(x, y);
+    // Inspect and dispatch on the same control, including inside shadow DOM.
+    while (hit) {
+      let root = hit.shadowRoot;
+      if (!root && hit instanceof HTMLElement) {
+        try { root = globalThis.chrome?.dom?.openOrClosedShadowRoot?.(hit); } catch { /* no accessible root */ }
+      }
+      const inner = root?.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    if (!params.trusted && ['IFRAME', 'FRAME'].includes(hit?.tagName)) {
+      return refused('This point lands on an embedded frame. Use browser_locate with the name and role of the control inside it, or use its index from browser_state. No input was sent.');
+    }
+    if (params.coordinate_target != null && (!hit || state.identity?.(hit) !== params.coordinate_target)) {
+      return refused('The target at the screenshot coordinate changed. Read browser_state again. Nothing was sent.');
+    }
   }
   const { action } = params;
-  // How the page's next confirm() or prompt() is answered (see installDialogHooks).
-  if (params.dialog) {
-    document.documentElement.setAttribute('data-skfiy-dialog-answer',
-      JSON.stringify({ accept: params.dialog !== 'dismiss', text: params.prompt_text }));
-  }
   const pick = () => {
     if (params.index == null) return null;
     const el = state.elements[Number(params.index)];
@@ -1093,8 +1220,53 @@ function pageAction(params, keyAliases = {}) {
     if (down) pointer(el, 'mouseup', { ...at, buttons: 0 });
     if (nativeClick && typeof el.click === 'function') el.click(); else pointer(el, 'click', { ...at, detail: 1 });
   };
-  const editable = (el) => el && (el.isContentEditable || el.tagName === 'TEXTAREA'
-    || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'range', 'color'].includes(el.type)));
+  const editable = state.editable;
+  const fileInputFor = start => {
+    const isFile = el => el?.tagName === 'INPUT' && el.type === 'file';
+    if (isFile(start)) return start;
+    const labelled = start?.closest('label')?.control;
+    if (isFile(labelled)) return labelled;
+    const controlled = (start?.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean)
+      .map(id => start.getRootNode().getElementById(id)).filter(isFile);
+    if (controlled.length) return controlled.length === 1 ? controlled[0] : null;
+    const boundary = 'form, fieldset, section, dialog, [role=form], [role=dialog], [role=group]';
+    const group = start?.closest(boundary);
+    for (let node = start, depth = 0; node && !['BODY', 'HTML', 'MAIN'].includes(node.tagName); node = node.parentElement, depth++) {
+      if (!group && depth > 4) break;
+      const inputs = Array.from(node.querySelectorAll('input[type=file]')).filter(input => input.closest(boundary) === group);
+      if (inputs.length) return inputs.length === 1 ? inputs[0] : null;
+      if (node === group) break;
+    }
+    return null;
+  };
+  const requested = action === 'validate' ? params.requested_action : action;
+  let picked, fileInput;
+  // The first validation catches ordinary refusals. Repeat it in the same
+  // page turn as dispatch because frameworks can replace a control between RPCs.
+  try {
+    picked = pick();
+    if (requested === 'type' && !editable(picked || document.activeElement)) {
+      throw new Error('The target is not an editable text field. Use browser_locate to select an input, textarea or editable element.');
+    }
+    if (requested === 'click' && picked && (picked.matches(':disabled') || picked.closest('[aria-disabled="true"], [inert]') || !state.surface(picked))) {
+      throw new Error('The selected control is disabled or no longer visible. Read browser_state again.');
+    }
+    if (['upload-target', 'upload-chunk', 'upload-commit'].includes(requested)) {
+      fileInput = fileInputFor(picked);
+      if (!fileInput) throw new Error(`No single file input belongs to element ${params.index}. Locate the file input, its label or its upload button.`);
+      if (fileInput.matches(':disabled') || fileInput.closest('[inert]')) throw new Error('The file input is disabled.');
+      if ((params.upload_count ?? params.files?.length ?? 1) > 1 && !fileInput.multiple) throw new Error('This file input takes one file at a time.');
+      if (params.upload_token != null && (state.uploadTarget?.token !== params.upload_token || state.uploadTarget.input !== fileInput)) {
+        throw new Error('The file input changed after it was selected. Locate it again before uploading.');
+      }
+    }
+  } catch (error) {
+    return refused(error.message || String(error));
+  }
+  if (action === 'click' && params.dialog) {
+    document.documentElement.setAttribute('data-skfiy-dialog-answer',
+      JSON.stringify({ accept: params.dialog !== 'dismiss', text: params.prompt_text }));
+  }
   const setNativeValue = (el, value) => {
     const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
@@ -1177,7 +1349,7 @@ function pageAction(params, keyAliases = {}) {
 
   try { switch (action) {
     case 'hover': {
-      const el = params.index != null ? pick() : document.elementFromPoint(Number(params.x), Number(params.y));
+      const el = picked ? state.surface(picked) : hit;
       if (!el) throw new Error(params.index != null || params.x == null ? 'index (or x and y) is required' : 'nothing at that point of the viewport');
       if (params.index != null) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
       const at = params.index != null ? center(el) : { clientX: Number(params.x), clientY: Number(params.y) };
@@ -1207,18 +1379,17 @@ function pageAction(params, keyAliases = {}) {
       return { message: params.index != null ? `Hovered [${params.index}]` : `Hovered at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${el.tagName.toLowerCase()}>` };
     }
     case 'inspect': {
-      const el = pick() || (params.x != null ? document.elementFromPoint(Number(params.x), Number(params.y)) : document.activeElement);
+      const el = pick() || (params.x != null ? hit : document.activeElement);
       const secret = el?.type === 'password';
       return { label: el?.getAttribute('aria-label') || el?.innerText || el?.getAttribute('placeholder') || '',
         identity: el && state.identity ? state.identity(el) : '',
         value: secret ? null : (el?.value ?? (el?.isContentEditable ? el.innerText : null)), secret };
     }
     case 'validate': {
-      if (params.index != null) pick();
       return { message: 'snapshot valid' };
     }
     case 'locate': {
-      const el = pick();
+      const el = picked && state.surface(picked);
       if (!el) throw new Error('index is required');
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
       const { clientX: x, clientY: y } = center(el);
@@ -1241,29 +1412,14 @@ function pageAction(params, keyAliases = {}) {
     case 'click': {
       if (params.index == null && params.x != null && params.y != null) {
         // Coordinates in CSS pixels of the viewport (canvas, maps, custom widgets).
-        // Down through shadow roots: on pages built from web components the element at the point
-        // is only a host, and events dispatched on it never reach the button inside. Extensions may
-        // open closed roots too (chrome.dom).
-        const rootOf = (el) => {
-          if (el.shadowRoot) return el.shadowRoot;
-          // Only HTML elements can host one; the API throws for SVG and the like.
-          if (!(el instanceof HTMLElement)) return null;
-          try { return globalThis.chrome?.dom?.openOrClosedShadowRoot?.(el) ?? null; } catch { return null; }
-        };
-        let target = document.elementFromPoint(Number(params.x), Number(params.y));
-        const outer = target;
-        for (let root = target && rootOf(target); root; root = rootOf(target)) {
-          const inner = root.elementFromPoint(Number(params.x), Number(params.y));
-          if (!inner || inner === target) break;
-          target = inner;
-        }
+        const target = hit;
         if (!target) throw new Error('nothing at that point of the viewport');
         const at = { clientX: Number(params.x), clientY: Number(params.y) };
         clickPointer(target, at, false);
         const inside = target === outer ? '' : ` inside <${outer.tagName.toLowerCase()}>`;
         return { message: `Clicked at (${Math.round(at.clientX)}, ${Math.round(at.clientY)}) on <${target.tagName.toLowerCase()}>${inside}` };
       }
-      const el = pick();
+      const el = picked && state.surface(picked);
       if (!el) throw new Error('index (or x and y) is required');
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
       const anchor = el.closest('a[href]');
@@ -1356,7 +1512,7 @@ function pageAction(params, keyAliases = {}) {
       return { message: `Pressed ${combo}` };
     }
     case 'scroll': {
-      const el = pick();
+      const el = picked && state.surface(picked);
       if (params.direction === 'to') {
         if (!el) throw new Error('scroll-to needs an element');
         el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
@@ -1382,6 +1538,11 @@ function pageAction(params, keyAliases = {}) {
       return { message: after === before ? `Scroll boundary reached (${params.direction}); position stayed ${Math.round(after)}`
         : `Scrolled ${params.direction}: ${Math.round(before)} → ${Math.round(after)} px` };
     }
+    case 'upload-target': {
+      const token = crypto.randomUUID();
+      state.uploadTarget = { token, input: fileInput };
+      return { upload_token: token, origin: fileInput.ownerDocument.defaultView.origin };
+    }
     case 'upload-chunk': {
       // Files arrive in base64 pieces, since native messages are size-limited.
       state.uploads = state.uploads || {};
@@ -1389,29 +1550,10 @@ function pageAction(params, keyAliases = {}) {
       return { message: `received ${state.uploads[params.token].length} characters` };
     }
     case 'upload-commit': {
-      // Sites often hide the real <input type=file> behind a styled button or drop zone, and hidden
-      // inputs get no index: take the input the element is, labels, or shares a container with.
-      const isFile = (node) => node && node.tagName === 'INPUT' && node.type === 'file';
-      const fileInputFor = (start) => {
-        if (isFile(start)) return start;
-        if (isFile(start.control)) return start.control;
-        for (let node = start, depth = 0; node && depth < 5; node = node.parentElement, depth++) {
-          const inputs = node.querySelectorAll('input[type=file]');
-          if (inputs.length) return inputs.length === 1 ? inputs[0] : null;
-        }
-        return null;
-      };
-      // Failures come back as { error } rather than a throw, so they reach skfiy even where the
-      // page script's exception would be lost.
-      let picked;
-      try { picked = pick(); } catch (error) { return { error: String(error.message || error) }; }
-      const el = picked && fileInputFor(picked);
-      if (!el) {
-        const near = picked ? picked.closest('form, section, [role=dialog], body').querySelectorAll('input[type=file]').length : 0;
-        return { error: `element ${params.index} is not a file input, and no single file input belongs to it (${near} file inputs around it)` };
-      }
       const files = params.files || [{ token: params.token, name: params.name, mime: params.mime }];
-      if (files.length > 1 && !el.multiple) return { error: `the file input behind [${params.index}] takes one file at a time` };
+      if (params.upload_token && files.some(file => typeof state.uploads?.[file.token] !== 'string')) {
+        return { refused: 'The staged file data is missing. No file was attached.' };
+      }
       const transfer = new DataTransfer();
       let total = 0;
       for (const file of files) {
@@ -1423,10 +1565,10 @@ function pageAction(params, keyAliases = {}) {
         total += bytes.length;
         transfer.items.add(new File([bytes], file.name, { type: file.mime || 'application/octet-stream' }));
       }
-      el.files = transfer.files;
-      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      const behind = el === picked ? '' : ' (the file input behind it)';
+      fileInput.files = transfer.files;
+      fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      const behind = fileInput === picked ? '' : ' (the file input behind it)';
       return { message: `Attached ${files.map((f) => f.name).join(', ')} (${total} bytes) to [${params.index}]${behind}` };
     }
     default:

@@ -220,6 +220,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
+        if CommandLine.arguments.contains("--fixture-show-hidden-files") { panel.showsHiddenFiles = true }
         panel.beginSheetModal(for: window) { [self] response in
             status.stringValue = response == .OK ? "status: chosen \(panel.url?.path ?? "?")" : "status: choosing cancelled"
         }

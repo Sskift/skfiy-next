@@ -62,8 +62,11 @@ struct BrowserReliabilityTests {
                 case "state":
                     if commits > 0 { throw ToolError("state unavailable") }
                     return page
-                case "tabs": return [["tabs": [["id": 7, "url": "https://fixture.invalid/"]]]]
+                case "observe":
+                    #expect(params["upload_count"] as? Int == 1)
+                    return ["upload_token": "owned-input", "origin": "https://upload.fixture.invalid"]
                 case "act":
+                    #expect(params["upload_token"] as? String == "owned-input")
                     guard params["action"] as? String == "upload-commit" else { return ["action_status": "sent"] }
                     if mode == "not-sent" { throw BrowserActionFailure(status: "not_sent", description: "stale target") }
                     commits += 1
@@ -73,7 +76,10 @@ struct BrowserReliabilityTests {
                 default: throw ToolError("unexpected method")
                 }
             })
-            tools.askUser = { _ in true }
+            tools.askUser = { prompt in
+                #expect(prompt.contains("https://upload.fixture.invalid"))
+                return true
+            }
             _ = try await tools.call("browser_state", Arguments(["tab_id": 7, "screenshot": false]))
             let result = try await tools.call("browser_upload", Arguments(["tab_id": 7, "index": 0, "path": file.path]))
             let status = (result.structuredContent?["action"] as? [String: String])?["status"]
@@ -81,6 +87,7 @@ struct BrowserReliabilityTests {
             #expect(commits == (mode == "not-sent" ? 0 : 1))
             #expect(status == (mode == "state-error" ? "sent" : mode == "not-sent" ? "not_sent" : "unknown"))
             if mode == "state-error" { #expect(result.text.contains("Attached fixture") && result.structuredContent?["state_error"] != nil) }
+            if mode == "not-sent" { #expect(result.text.contains("No file was attached") && !result.text.contains("may already be attached")) }
         }
     }
 
@@ -102,6 +109,39 @@ struct BrowserReliabilityTests {
         #expect(result.isError && states == 0)
         #expect(probeLimit > 0 && probeLimit < 1.9)
         #expect(ProcessInfo.processInfo.systemUptime - start < 3)
+    }
+
+    @Test @MainActor func downloadDiscoveredAfterTenSecondsCanUseTheRemainingBudget() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("skfiy-delayed-\(UUID()).txt")
+        try Data().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let start = ProcessInfo.processInfo.systemUptime
+        let lastAction = Date()
+        let item: [String: Any] = ["id": 3, "state": "complete", "path": file.path, "exists": true,
+                                   "started": ISO8601DateFormatter().string(from: lastAction.addingTimeInterval(10.2))]
+        let tools = BrowserTools(discover: { [browser] }, request: { _, method, _, _ in
+            if method == "download_get" { return item }
+            #expect(method == "downloads")
+            return ["downloads": ProcessInfo.processInfo.systemUptime - start >= 10.2 ? [item] : [], "lastAct": lastAction.timeIntervalSince1970 * 1000]
+        })
+        let result = try await tools.call("browser_downloads", Arguments(["action": "wait", "timeout": 15]))
+        #expect(!result.isError && result.text.contains(file.path))
+    }
+
+    @Test @MainActor func failedCaptureIncludesTheReasonAndNeverDispatchesOldCoordinates() async throws {
+        var captures = 0
+        let tools = BrowserTools(discover: { [browser] }, request: { _, method, _, _ in
+            if method == "state" { return ["snapshot_id": "fresh", "tabId": 7, "active": true, "lines": ["[0] button Pick"]] as [String: Any] }
+            #expect(method == "screenshot")
+            captures += 1
+            throw ToolError("fixture capture unavailable")
+        })
+        let state = try await tools.call("browser_state", Arguments(["tab_id": 7]))
+        #expect(!state.isError && state.structuredContent?["capture_error"] as? String == "fixture capture unavailable")
+        let refused = try await tools.call("browser_click", Arguments(["tab_id": 7, "x": 1, "y": 1]))
+        #expect(refused.isError && refused.text.contains("button Pick") && refused.image == nil && captures == 2)
+        #expect((refused.structuredContent?["action"] as? [String: String])?["status"] == "not_sent")
+        #expect(refused.structuredContent?["capture_error"] as? String == "fixture capture unavailable")
     }
 
     @Test @MainActor func shortExpectationBoundsObservationAndPreservesSentReceipt() async throws {

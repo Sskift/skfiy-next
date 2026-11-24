@@ -58,6 +58,7 @@ struct Locator: Equatable {
         "cell": ["AXCell", "cell", "gridcell", "td", "th"],
         "table": ["AXTable", "AXOutline", "table", "grid", "treegrid"],
         "list": ["AXList", "list", "listbox", "ul", "ol"],
+        "log": ["log"],
         "scroll area": ["AXScrollArea", "scrollarea"],
         "toolbar": ["AXToolbar", "toolbar"],
         "menu": ["AXMenu", "menu"]
@@ -159,7 +160,8 @@ struct Locator: Equatable {
 
 /// Something on screen a locator may mean: an AX element, a DOM element, or
 /// recognized text. Frames are in the same space as `bounds` (screen points,
-/// or viewport pixels for a tab).
+/// or viewport pixels for a tab). A cross-origin browser element has an
+/// index but no known rectangle in the top viewport.
 struct LocatorCandidate: Equatable {
     var label: String
     var role: String
@@ -173,6 +175,7 @@ struct LocatorCandidate: Equatable {
     var rowLabels: [String] = []
     var columnLabels: [String] = []
     var ancestors: [Int] = []
+    var browserFrameID: Int?
 }
 
 struct LocatorMatch: Equatable {
@@ -232,11 +235,12 @@ extension Locator {
     /// flat layouts).
     static func sectionLabel(of candidate: LocatorCandidate, among candidates: [LocatorCandidate]) -> String? {
         let frame = candidate.frame
+        guard !frame.isNull else { return nil }
         let reach = max(80, frame.width * 2)
         let gap = { (other: CGRect) in max(0, other.minX - frame.maxX, frame.minX - other.maxX) }
         let cost = { (other: CGRect) in frame.minY - other.maxY + 2 * gap(other) }
         return candidates.filter { other in
-            other != candidate && (!other.roleKnown || textRoles.contains(other.role))
+            other != candidate && !other.frame.isNull && (!other.roleKnown || textRoles.contains(other.role))
                 && other.frame.maxY <= frame.minY + 2 && gap(other.frame) <= reach
         }.min { cost($0.frame) < cost($1.frame) }?.label
     }
@@ -272,12 +276,13 @@ extension Locator {
     /// window (or viewport) the areas refer to; `pixelArea` converts a
     /// screenshot-pixel region into the candidates' space.
     func matches(_ candidates: [LocatorCandidate], bounds: CGRect, pixelArea: ((CGRect) -> CGRect)? = nil) -> [LocatorMatch] {
-        let anchors = { (text: String) in candidates.filter { Self.textScore($0.label, text) != nil } }
+        let anchors = { (text: String) in candidates.filter { !$0.frame.isNull && Self.textScore($0.label, text) != nil } }
         let nearAnchors = near.map(anchors) ?? []
         let belowAnchors = below.map(anchors) ?? []
         let rightAnchors = rightOf.map(anchors) ?? []
         var matches: [LocatorMatch] = []
         for candidate in candidates {
+            if candidate.frame.isNull, area != nil || near != nil || below != nil || rightOf != nil { continue }
             if let identifier, candidate.identifier != identifier { continue }
             if let row, !candidate.rowLabels.contains(where: { Self.textScore($0, row) != nil }) { continue }
             if let column, !candidate.columnLabels.contains(where: { Self.textScore($0, column) != nil }) { continue }
@@ -310,7 +315,8 @@ extension Locator {
             if rightOf != nil {
                 guard others(rightAnchors).contains(where: { $0.frame.maxX <= candidate.frame.minX + 2 && abs($0.frame.midY - center.y) < max($0.frame.height, 12) }) else { continue }
             }
-            matches.append(LocatorMatch(candidate: candidate, nameScore: nameScore, distance: distance, area: Self.area(of: center, in: bounds)))
+            matches.append(LocatorMatch(candidate: candidate, nameScore: nameScore, distance: distance,
+                                        area: candidate.frame.isNull ? "" : Self.area(of: center, in: bounds)))
         }
         return matches.sorted {
             if $0.nameScore != $1.nameScore { return $0.nameScore > $1.nameScore }
