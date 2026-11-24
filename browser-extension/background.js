@@ -116,14 +116,22 @@ chrome.webNavigation.onErrorOccurred.addListener(({ tabId, frameId, url, error }
 });
 
 function pageReadError(tab, cause = '') {
-  const scheme = /^(view-source|chrome|chrome-untrusted|chrome-extension|devtools|edge|brave):/i.exec(tab.pendingUrl || tab.url || '');
+  const destination = tab.pendingUrl || tab.url || '';
+  const scheme = /^(view-source|chrome|chrome-untrusted|chrome-extension|devtools|edge|brave):/i.exec(destination);
   if (scheme) return `The browser restricts page access on ${scheme[1]}: pages. Use get_app_state to inspect the browser window.`;
-  if (/Frame with ID 0 is showing error page/i.test(cause)) {
-    const failure = navigationErrors.get(tab.id);
-    return `${cause}. Chrome could not load the main page${failure?.url === tab.url ? ' (' + failure.error + ')' : ''}.`;
+  const errorPage = /Frame with ID 0 is showing error page/i.test(cause);
+  const accessDenied = /Cannot access (?:a |contents of (?:the )?url)/i.test(cause);
+  const failure = navigationErrors.get(tab.id);
+  if (failure?.url === destination && (tab.pendingUrl || errorPage || accessDenied)) {
+    return `Chrome could not load the main page (${failure.error}).`;
   }
-  if (/Cannot access (?:a |contents of (?:the )?url)/i.test(cause)) return cause;
+  if (errorPage) return `${cause}. Chrome could not load the main page.`;
+  if (accessDenied && !tab.pendingUrl) return cause;
   return null;
+}
+
+function pendingNavigation(tab) {
+  return tab.pendingUrl ? 'Chrome is still navigating. The destination document is not available yet.' : null;
 }
 
 chrome.webNavigation.onCommitted.addListener(async ({ tabId, frameId }) => {
@@ -350,7 +358,7 @@ async function waitForLoad(tabId, timeout = 15000, control) {
   while (Date.now() - started < timeout) {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     control?.check();
-    if (!tab || tab.status === 'complete' || pageReadError(tab)) return;
+    if (!tab || (tab.status === 'complete' && !tab.pendingUrl) || pageReadError(tab)) return;
     await delay(150);
   }
 }
@@ -370,11 +378,11 @@ const frameIndex = new Map();
 const subframeRevisions = new Map();
 
 async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id }, control) {
-  const tab = await tabById(tabId);
-  const restricted = pageReadError(tab);
-  if (restricted) throw new Error(restricted);
   const deadline = Date.now() + 5000;
-  await waitForLoad(tab.id, 5000, control);
+  await waitForLoad(Number(tabId), 5000, control);
+  const tab = await tabById(tabId);
+  const restricted = pageReadError(tab) || pendingNavigation(tab);
+  if (restricted) throw new Error(restricted);
   const binding = { session_id, snapshot_id: crypto.randomUUID() };
   let frames;
   let subframeRevision;
@@ -390,7 +398,8 @@ async function tabState({ tab_id: tabId, max_chars: maxChars, locate, session_id
       break;
     } catch (error) {
       control.check();
-      const terminal = pageReadError(tab, error.message || String(error));
+      const current = await tabById(tab.id);
+      const terminal = pageReadError(current, error.message || String(error)) || pendingNavigation(current);
       if (terminal) throw new Error(terminal);
       // A committed navigation can still lack an injectable frame even
       // when tabs.get says complete. Retry only this read, never input or
@@ -531,6 +540,8 @@ async function probe({ tab_id: tabId, text }) {
   const tab = await tabById(tabId);
   const restricted = pageReadError(tab);
   if (restricted) return { loading: true, found: null, terminal: true, reason: restricted };
+  const pending = pendingNavigation(tab);
+  if (pending) return { loading: true, found: null, reason: pending };
   let frames;
   try {
     frames = await chrome.scripting.executeScript({
@@ -538,12 +549,13 @@ async function probe({ tab_id: tabId, text }) {
     });
   } catch (error) {
     const cause = error.message || String(error);
-    const terminal = pageReadError(tab, cause);
-    return { loading: true, found: null, reason: terminal || cause, terminal: Boolean(terminal) };
+    const current = await tabById(tab.id);
+    const terminal = pageReadError(current, cause);
+    return { loading: true, found: null, reason: terminal || pendingNavigation(current) || cause, terminal: Boolean(terminal) };
   }
   const answers = frames.map((f) => f.result).filter(Boolean);
   const latest = await tabById(tab.id);
-  const readable = tab.status === 'complete' && latest.status === 'complete' && tab.url === latest.url
+  const readable = tab.status === 'complete' && latest.status === 'complete' && !latest.pendingUrl && tab.url === latest.url
     && frames.some(f => f.frameId === 0 && f.result) && answers.length === frames.length;
   return {
     loading: !readable,

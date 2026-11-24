@@ -383,6 +383,27 @@ await test('view-source immediately explains restricted page access without inje
   const result = await s.context.dispatchRequest('probe', { tab_id: 7, session_id: 'A' }, s.control());
   assert.equal(result.found, null); assert.equal(result.terminal, true); assert.equal(injections, 0);
 });
+await test('a pending destination never reads the old document or inherits its network error', async () => {
+  const s = setup();
+  let clock = 0;
+  s.context.Date = { now: () => (clock += 250) };
+  s.tab.url = 'about:blank';
+  s.tab.pendingUrl = 'https://fixture.invalid/next';
+  let injections = 0;
+  s.chrome.scripting.executeScript = async () => { injections++; return []; };
+  const probe = () => s.context.dispatchRequest('probe', { tab_id: 7, session_id: 'A' }, s.control());
+  const failure = { tabId: 7, frameId: 0, url: s.tab.url, error: 'net::ERR_CONNECTION_RESET' };
+  s.chrome.webNavigation.onErrorOccurred.listener(failure);
+  const pending = await probe();
+  assert.equal(pending.found, null); assert.ok(pending.loading && !pending.terminal);
+  assert.match(pending.reason, /still navigating/);
+  await assert.rejects(s.state(), /still navigating/);
+  s.chrome.webNavigation.onErrorOccurred.listener({ ...failure, url: s.tab.pendingUrl });
+  const failed = await probe();
+  assert.equal(failed.terminal, true); assert.match(failed.reason, /net::ERR_CONNECTION_RESET/);
+  await assert.rejects(s.state(), /net::ERR_CONNECTION_RESET/);
+  assert.equal(injections, 0);
+});
 await test('a non-editable focused control refuses typing before any input', async () => {
   const s = setup(), state = await s.state();
   s.page.document.activeElement = s.approve;

@@ -11,7 +11,8 @@
 - Named native actions and file panels work on a fresh session. Panels wait briefly for a sheet to appear and can select hidden items when visible. Popup readback recognizes explicit current values in accessibility labels.
 - A link or button in a layout table can be targeted by name even when several enclosing rows and cells repeat its label. Independent controls and clickable ancestor rows keep their own identities.
 - An indexed click without an effect to verify inspects its bound control directly, avoiding an extra read of every frame in a busy background tab.
-- Bundled browser extension 0.9.10.
+- While a destination is still loading, page reads and text waits report the pending navigation. A main-frame network error is shown when Chrome reports one for that destination.
+- Bundled browser extension 0.9.11.
 
 ## 0.10.4 — 2026-11-17
 

@@ -59,6 +59,11 @@ pane.scrollTop=50;moved=true;fetch('/receipt?name=inner-scrolled')}},30)</script
             body = b'''<label>Upload<input type="file" onchange="fetch('/receipt?name=upload-destroy');document.documentElement.remove()"></label>'''
         elif route.path == '/probe-unavailable':
             body = b'<div>Processing</div>'
+        elif route.path == '/empty-response':
+            # Deliver a real, immediate network error even on runners that
+            # silently drop connections to ports without a listener.
+            self.close_connection = True
+            return
         elif route.path == '/popup':
             body = (ROOT/'scripts/fixtures/popup.html').read_bytes()
         elif route.path == '/destroy':
@@ -222,18 +227,16 @@ chrome.scripting.executeScript = async options => {
                   unreadable['is_error'] and unreadable_tab is not None and unreadable['structured']['action']['status'] == 'sent'
                   and 'state_error' in unreadable['structured'] and navigation_hits.get('/snapshot-error') == 1)
             a.call('browser_close_tab', tab_id=unreadable_tab, **browser)
-            with socket.socket() as unused:
-                unused.bind(('127.0.0.1', 0))
-                failed = a.call('browser_open', url=f'http://127.0.0.1:{unused.getsockname()[1]}/', allow_error=True, **browser)
-                failed_tab = {**browser, 'tab_id': failed['structured']['tab_id']}
-                network_error = re.search(r'net::ERR_[A-Z0-9_]+', failed['text'])
-                check('real Chrome reports the connection failure for the destination', failed['structured']['action']['status'] == 'sent'
-                      and network_error, failed['text'])
-                started = time.monotonic()
-                stopped = a.call('browser_wait', text='Loaded', timeout=15, allow_error=True, **failed_tab)
-                check('a real network error ends a text wait promptly', stopped['is_error'] and network_error[0] in stopped['text']
-                      and time.monotonic() - started < 5, stopped['text'])
-                a.call('browser_close_tab', **failed_tab)
+            failed = a.call('browser_open', url=f'http://127.0.0.1:{server.server_port}/empty-response', allow_error=True, **browser)
+            failed_tab = {**browser, 'tab_id': failed['structured']['tab_id']}
+            network_error = 'net::ERR_EMPTY_RESPONSE'
+            check('real Chrome reports the connection failure for the destination', failed['is_error']
+                  and failed['structured']['action']['status'] == 'sent' and network_error in failed['text'], failed['text'])
+            started = time.monotonic()
+            stopped = a.call('browser_wait', text='Loaded', timeout=15, allow_error=True, **failed_tab)
+            check('a real network error ends a text wait promptly', stopped['is_error'] and network_error in stopped['text']
+                  and time.monotonic() - started < 5, stopped['text'])
+            a.call('browser_close_tab', **failed_tab)
             source = a.call('browser_open', url=f'view-source:http://127.0.0.1:{server.server_port}/', allow_error=True, **browser)
             check('source navigation retains its tab and explains the restriction', source['is_error'] and source['structured']['action']['status'] == 'sent'
                   and 'view-source' in source['structured']['state_error'], source['text'])
