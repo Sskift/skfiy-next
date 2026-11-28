@@ -89,10 +89,9 @@ public final class ComputerUse {
     /// What cmd+c / cmd+x copied (or read_clipboard took, with the user's
     /// approval). The system clipboard belongs to the user.
     var clipboard: ClipboardContents?
-    /// Asks the user a yes/no question through the client; nil when it cannot.
-    public var askUser: ((String) async -> Bool?)? {
-        didSet { browser.askUser = askUser }
-    }
+    public let approvalMode: ApprovalMode
+    /// Client callback used for interactive approvals in ask mode.
+    public var askUser: ((String) async -> Bool?)?
     /// Like askUser, but waits long enough for the user to do something
     /// themselves (sign in, enter a code); nil when the client cannot ask.
     public var waitForUser: ((String) async -> Bool?)?
@@ -139,8 +138,20 @@ public final class ComputerUse {
         focusApproved.removeAll()
     }
 
-    public init() {
+    public init(approvalMode: ApprovalMode = .current) {
+        self.approvalMode = approvalMode
         settleDelay = Double(ProcessInfo.processInfo.environment["SKFIY_SETTLE_SECONDS"] ?? "") ?? 0.4
+        browser.approve = { [weak self] message in await self?.approve(message) }
+    }
+
+    func approve(_ message: String) async -> Bool? {
+        switch approvalMode {
+        case .ask:
+            return await askUser?(message)
+        case .all:
+            FileHandle.standardError.write(Data("Approved without asking (SKFIY_APPROVE=all): \(message)\n".utf8))
+            return true
+        }
     }
 
     nonisolated public static let toolNames = (ToolSchemas.all + ToolSchemas.browser).map(\.name)
@@ -279,7 +290,7 @@ public final class ComputerUse {
             case "flow_start": return try await flowStart(args)
             case "flow_record": return try await flowRecord(args)
             case "flow_status": return try await flowStatus(args)
-            case "read_clipboard": return try await readClipboard(args)
+            case "read_clipboard": return try await readClipboard(args, contents: SystemClipboard().read())
             case "hand_over": return try await handOver(args)
             case "file_dialog": return try await keepingFront(args) { try await self.fileDialog(args) }
             case let browserTool where browserTool.hasPrefix("browser_"): return try await browser.call(browserTool, args)

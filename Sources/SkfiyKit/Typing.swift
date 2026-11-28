@@ -129,7 +129,7 @@ extension ComputerUse {
         await Input.press(chord, repeat: count, to: pid)
         var message = "Pressed \(key)" + (count > 1 ? " ×\(count)" : "") + " (sent to the app in the background)." + keyboard.note
         if let disabledItem {
-            message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut did nothing. Commands that act on the current selection or document (formatting, Save, Undo…) only work in the frontmost app, and toolbar buttons for them are ignored in the background too. skfiy does not bring apps forward on its own; use run_in_front, which asks the user first, or say what is left to do instead of retrying."
+            message += " Its menu item \(quote(disabledItem, limit: 60)) is disabled while the app is in the background, so the shortcut did nothing. Commands that act on the current selection or document (formatting, Save, Undo…) only work in the frontmost app, and toolbar buttons for them are ignored in the background too. skfiy does not bring apps forward on its own; use run_in_front, or say what is left to do instead of retrying."
         }
         return try await afterAction(app, message)
     }

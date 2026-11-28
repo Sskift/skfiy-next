@@ -45,7 +45,7 @@ enum ScreenSharing {
         }
     }
 
-    static let guidance = "This is an Apple Screen Sharing remote screen. Its pixels have no remote accessibility controls; use screenshot x/y for click, right-click, vertical scroll and drag. ASCII text and plain keys go directly to the shared screen, without local menu shortcuts or skfiy clipboard emulation. Unicode text is refused before any input. Modifier shortcuts need run_in_front (user approval, local focus/window order changes). The client must be in Control mode and the shared screen must be its keyboard target; skfiy never activates it or switches modes automatically. Inspect the returned screenshot to verify the remote effect. Client clipboard synchronization, if enabled by the user, still follows Screen Sharing's settings."
+    static let guidance = "This is an Apple Screen Sharing remote screen. Its pixels have no remote accessibility controls; use screenshot x/y for click, right-click, vertical scroll and drag. ASCII text and plain keys go directly to the shared screen, without local menu shortcuts or skfiy clipboard emulation. Unicode text is refused before any input. Modifier shortcuts need run_in_front (changes local focus and window order). The client must be in Control mode and the shared screen must be its keyboard target; skfiy never activates it or switches modes automatically. Inspect the returned screenshot to verify the remote effect. Client clipboard synchronization, if enabled by the user, still follows Screen Sharing's settings."
 }
 
 extension ComputerUse {
@@ -101,7 +101,7 @@ extension ComputerUse {
 
     func checkSharedScreenModifiers(_ modifiers: Modifiers, foreground: Bool) throws {
         guard modifiers.isEmpty || foreground else {
-            throw ToolError("Apple Screen Sharing does not forward modifier transitions reliably in the background. Nothing was sent. For a remote shortcut use run_in_front with key (asks the user and changes local focus/window order); plain keys, ASCII text and unmodified pointer actions work in the background.")
+            throw ToolError("Apple Screen Sharing does not forward modifier transitions reliably in the background. Nothing was sent. For a remote shortcut use run_in_front with key (changes local focus and window order); plain keys, ASCII text and unmodified pointer actions work in the background.")
         }
     }
 

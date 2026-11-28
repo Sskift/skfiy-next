@@ -180,7 +180,7 @@ struct KeyboardTarget {
             + " Nothing was sent. "
             + (clickCanMakeKey
                 ? "Click a text field of that window first (element_index: skfiy then makes it the app's key window, without raising it), or use element actions (set_value, click by element_index), which work in any window."
-                : "Use element actions (set_value, click by element_index), which work in any window; keys there need the window shown (ask the user, or run_in_front, which asks them).")
+                : "Use element actions (set_value, click by element_index), which work in any window; keys there need the window shown. Use run_in_front when foreground input is appropriate.")
     }
 
     /// The app made another window key after the latest screenshot.
@@ -353,7 +353,7 @@ extension ComputerUse {
     func frozenNote(_ app: NSRunningApplication) -> String {
         let browser = Self.isBrowserBundle(app.bundleIdentifier)
         return "This window is completely covered by other windows. Chromium may stop drawing it and updating its accessibility tree: the screenshot and tree may be out of date, and wheel input may be ignored. Coverage alone does not prove a freeze; live rendering could not be confirmed. "
-            + (browser ? "Use the browser_* tools for its pages (they work in covered and background tabs)." : "Automatic background rendering requires an available Electron main-process inspector. This app's rendering could not be verified through that interface; no window was raised or activated. Ask the user to uncover any corner of the window, or use run_in_front (asks the user).")
+            + (browser ? "Use the browser_* tools for its pages (they work in covered and background tabs)." : "Automatic background rendering requires an available Electron main-process inspector. This app's rendering could not be verified through that interface; no window was raised or activated. Uncovering any corner allows the window to draw again. Use run_in_front for actions that need the foreground.")
     }
 
     /// A capture of `rect` as the model was shown it: with `window` (one

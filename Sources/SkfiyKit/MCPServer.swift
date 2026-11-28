@@ -6,11 +6,15 @@ public let skfiyVersion = "0.10.5"
 /// Executes tools for the MCP server; the real one is `ComputerUse`.
 @MainActor
 public protocol ToolExecutor: AnyObject {
+    var approvalMode: ApprovalMode { get }
     func call(_ name: String, _ arguments: [String: Any]) async -> ToolResult
     func disconnect()
 }
 
-extension ToolExecutor { public func disconnect() {} }
+extension ToolExecutor {
+    public var approvalMode: ApprovalMode { .ask }
+    public func disconnect() {}
+}
 
 extension ComputerUse: ToolExecutor {}
 
@@ -53,7 +57,7 @@ public final class MCPServer {
         let missing = (accessibility ? [] : ["Accessibility"]) + (screenRecording ? [] : ["Screen Recording"])
         guard !missing.isEmpty else { return "" }
         let host = host()
-        return "Setup incomplete: macOS has not granted \(missing.joined(separator: " and ")) to \(host), the app running skfiy. Before using the tools, ask the user to enable it in System Settings → Privacy & Security (or run `skfiy doctor` in \(host)), then quit and reopen \(host) and Claude Code.\n\n"
+        return "Setup incomplete: macOS has not granted \(missing.joined(separator: " and ")) to \(host), the app running skfiy. Tools that need this access require the user to enable it in System Settings → Privacy & Security (or run `skfiy doctor` in \(host)), then quit and reopen \(host) and the MCP client.\n\n"
     }
 
     nonisolated public static func writeToStdout(_ data: Data) {
@@ -167,7 +171,7 @@ public final class MCPServer {
                 "protocolVersion": version,
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "skfiy", "title": "skfiy computer use", "version": skfiyVersion],
-                "instructions": Self.setupNote() + ToolSchemas.instructions
+                "instructions": Self.setupNote() + ToolSchemas.instructions(for: executor.approvalMode)
             ])
         case "ping":
             return result([:])
@@ -216,8 +220,8 @@ public final class MCPServer {
 
     // MARK: Asking the user
 
-    /// Whether the client announced that it can ask the user (MCP elicitation).
-    public var clientCanAsk: Bool { clientCapabilities["elicitation"] != nil }
+    /// Elicitation is available only in interactive sessions with client support.
+    public var clientCanAsk: Bool { executor.approvalMode == .ask && clientCapabilities["elicitation"] != nil }
 
     /// Asks the user a yes/no question through the client (MCP elicitation).
     /// nil when the client cannot ask or no answer came in time.

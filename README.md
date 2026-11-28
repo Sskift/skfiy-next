@@ -1,6 +1,6 @@
 # skfiy
 
-让 Claude Code、Codex 等 MCP 客户端在后台查看和操作 Mac 应用。普通操作不抢焦点、不移动你的鼠标；需要前台操作时先征得同意。
+让 Claude Code、Codex 等 MCP 客户端在后台查看和操作 Mac 应用。普通操作不抢焦点、不移动你的鼠标。需要前台操作时，skfiy 默认先征得同意。
 
 **单个 Swift 二进制 · 无额外运行时依赖 · macOS 14+ · Apple 芯片与 Intel**
 
@@ -33,6 +33,8 @@ curl -fsSL https://raw.githubusercontent.com/Sskift/skfiy-next/main/install.sh |
 ```
 
 按提示给**宿主应用**（例如 Terminal、Ghostty、VS Code 或桌面客户端）授予“辅助功能”和“屏幕录制”权限，然后退出并重新打开宿主应用与客户端。
+
+如果希望 skfiy 的所有工具直接执行，运行 `skfiy setup -e SKFIY_APPROVE=all`，然后重新连接 MCP。这个设置关闭 skfiy 的逐次审批。遇到必须本人完成的扫码或验证码，工具会直接返回待办步骤。
 
 ## 3. 验证
 

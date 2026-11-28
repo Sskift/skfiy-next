@@ -1,5 +1,9 @@
 # Release notes
 
+## Unreleased
+
+- `SKFIY_APPROVE=all` (also accepted as `bypass`) now covers both MCP and `skfiy call`. In this mode skfiy preapproves tool actions and tells the agent to proceed within the user's request. A human-only `hand_over` immediately returns `manual_input_required` with the outstanding step.
+
 ## 0.10.5 — 2026-11-24
 
 - Browser targets can find indexed controls in cross-origin frames by name, role, section, row, column or identifier. Same-origin frames with a focusable host also expose their controls. A coordinate that hits an iframe reports how to target the control inside.

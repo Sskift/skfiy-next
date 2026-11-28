@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Two real MCP sessions sharing a disposable headless Chrome.
-Checks independent page receipts; no user tabs, profiles, or windows.
+"""Real MCP sessions and CLI tool calls sharing a disposable headless Chrome.
+Checks page receipts using isolated tabs and profiles.
 Usage: python3 scripts/test_browser_lifecycle.py .build/debug/skfiy [all|lifecycle|outcomes]
 """
 from contextlib import contextmanager
@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from compat_baseline import chrome_app
-from harness import APPROVE, Client, Evidence, ROOT, require, wait_until
+from harness import APPROVE, DECLINE, Client, Evidence, ROOT, require, wait_until
 
 HTML = b'''<!doctype html><meta charset="utf-8"><title>Lifecycle fixture</title>
 <div id="buttons"><button id="approve" onclick="report('approve')">Approve</button><button id="delete" onclick="report('delete')">Delete</button></div>
@@ -384,6 +384,22 @@ chrome.scripting.executeScript = async options => {
                 # The same upload is still supported when it is intentionally approved.
                 a.call('browser_upload', target='Upload', path=str(upload), **target)
                 check('approved upload still commits exactly once', wait_until(lambda: receipts.get('upload') == 1))
+
+                preapproved = Client(binary, evidence=evidence('preapproved'), env={**env, 'SKFIY_APPROVE': 'bypass'}, answer=DECLINE)
+                clients.append(preapproved)
+                upload_args = {**target, 'target': 'Upload', 'path': str(upload)}
+                preapproved.call('browser_upload', **upload_args)
+                handoff = preapproved.call('hand_over', message='Scan the fixture QR code.', allow_error=True)
+                check('preapproved MCP upload commits and handoff returns pending without any prompts',
+                      wait_until(lambda: receipts.get('upload') == 2) and not preapproved.asked
+                      and handoff['is_error'] and handoff['structured']['status'] == 'manual_input_required')
+
+                cli = subprocess.run([str(binary), 'call', 'browser_upload', json.dumps(upload_args)],
+                                     env={**os.environ, **env, 'SKFIY_APPROVE': 'all', 'SKFIY_ACTION_LOG': 'off',
+                                          'SKFIY_STOP_FILE': str(root/'cli-stopped'), 'SKFIY_SCREENSHOT_OUT': str(root/'cli-upload.jpg')},
+                                     capture_output=True, text=True, timeout=30)
+                check('preapproved CLI upload commits without an interactive client',
+                      cli.returncode == 0 and wait_until(lambda: receipts.get('upload') == 3), cli.stdout)
                 before = receipts.copy()
                 send_call(b, 301, 'browser_wait', {**target, 'text': 'never appears', 'timeout': 30})
                 send_call(b, 302, 'browser_click', {**target, 'target': 'Delete'})

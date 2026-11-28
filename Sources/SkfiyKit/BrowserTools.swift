@@ -25,8 +25,8 @@ final class BrowserTools {
         self.discover = discover; self.request = request
     }
 
-    /// Asks the user a yes/no question through the client; nil when it cannot.
-    var askUser: ((String) async -> Bool?)?
+    /// Applies the session's approval policy to an upload.
+    var approve: ((String) async -> Bool?)?
     /// The last typing went into a password field (for the action log).
     var lastInputWasSecret = false
 
@@ -412,7 +412,7 @@ final class BrowserTools {
         let size = ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)
         let from = files.count == 1 ? files[0].path : (files[0].path as NSString).deletingLastPathComponent
         let approvalStarted = ProcessInfo.processInfo.systemUptime
-        let allowed = await askUser?("skfiy wants to upload \(names) (\(size), from \(from)) to \(site).")
+        let allowed = await approve?("skfiy wants to upload \(names) (\(size), from \(from)) to \(site).")
         BrowserOperation.deadline?.exclude(ProcessInfo.processInfo.systemUptime - approvalStarted)
         switch allowed {
         case nil: throw ToolError("Uploading sends a file to a website, so the user must approve it, and this client cannot ask them. Tell the user which file to attach.")
@@ -446,8 +446,7 @@ final class BrowserTools {
         let attached = result["message"] as? String
         let receipt = BrowserActionOutcome(status: result["action_status"] as? String ?? "unknown",
             verification: attached == nil ? "unknown" : "not_requested",
-            detail: attached.map { $0 + ", with the user's approval." }
-                ?? "The page did not confirm attachment. Inspect browser_state before retrying.").result
+            detail: attached ?? "The page did not confirm attachment. Inspect browser_state before retrying.").result
         return await followingState(receipt, browser: browser, tabID: tabID)
     }
 

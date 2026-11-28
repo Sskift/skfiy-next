@@ -137,7 +137,9 @@ struct MCPServerTests {
     @Test func instructionsAndToolsStayWithinWhatClientsCarry() throws {
         // Claude Code shows the first 2048 characters of a server's
         // instructions; the rest would be dropped without a word.
-        #expect(ToolSchemas.instructions.count <= 2048)
+        for mode in [ApprovalMode.ask, .all] {
+            #expect(ToolSchemas.instructions(for: mode).count <= 2048)
+        }
         // Each tool's definition enters the model's context when it is used.
         for tool in ToolSchemas.all {
             let size = try JSONSerialization.data(withJSONObject: tool.definition).count

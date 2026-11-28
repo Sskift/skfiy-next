@@ -1,6 +1,6 @@
 # skfiy
 
-Let Claude Code, Codex and other MCP clients see and operate Mac apps in the background. Normal operations keep your focus and pointer in place; operations that need the foreground ask for approval first.
+Let Claude Code, Codex and other MCP clients see and operate Mac apps in the background. Normal operations keep your focus and pointer in place. By default, skfiy asks before bringing an app forward.
 
 **One Swift binary · No extra runtime dependencies · macOS 14+ · Apple silicon and Intel**
 
@@ -33,6 +33,8 @@ In the app that actually runs your MCP client:
 ```
 
 Follow the prompts to grant **the host app** (Terminal, Ghostty, VS Code or your desktop client) Accessibility and Screen Recording access. Quit and reopen the host app and your MCP client afterward.
+
+To preapprove every skfiy tool action, run `skfiy setup -e SKFIY_APPROVE=all` and reconnect MCP. If a step requires a person, such as scanning a sign-in QR code, the tool reports the pending step immediately.
 
 ## 3. Verify
 

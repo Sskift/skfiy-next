@@ -76,7 +76,7 @@ struct BrowserReliabilityTests {
                 default: throw ToolError("unexpected method")
                 }
             })
-            tools.askUser = { prompt in
+            tools.approve = { prompt in
                 #expect(prompt.contains("https://upload.fixture.invalid"))
                 return true
             }

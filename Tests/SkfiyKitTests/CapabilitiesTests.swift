@@ -14,7 +14,7 @@ struct CapabilitiesTests {
         facts.accessibilityElements = 30
         facts.hasFocusedElement = true
         facts.keyboardWindows = windows
-        facts.clientCanAsk = true
+        facts.approvalAvailable = true
         configure(&facts)
         return facts
     }
@@ -130,7 +130,7 @@ struct CapabilitiesTests {
     @Test func emergencyStopAndClientWithoutQuestions() {
         let stopped = CapabilityReport.evaluate(facts { $0.emergencyStopped = true })
         #expect(available(stopped).values.allSatisfy { !$0 })
-        let silent = CapabilityReport.evaluate(facts { $0.clientCanAsk = false })
+        let silent = CapabilityReport.evaluate(facts { $0.approvalAvailable = false })
         #expect(silent["foreground"]?.available == false && !silent.tools.contains("run_in_front"))
         let front = CapabilityReport.evaluate(facts { $0.frontmost = true })
         #expect(front["foreground"]?.detail.contains("already frontmost") == true)

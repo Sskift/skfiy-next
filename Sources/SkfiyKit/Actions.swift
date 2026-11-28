@@ -20,7 +20,7 @@ extension ComputerUse {
         "AXTab", "AXSegment"
     ]
     static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
-    static let menuAlternatives = "Its commands are usually in the menu bar (click a menu bar item to list its items without opening it) or have keyboard shortcuts; to open a file, use open_file. A command found only in this menu can be run with run_in_front, element_index and menu_item, which asks the user first."
+    static let menuAlternatives = "Its commands are usually in the menu bar (click a menu bar item to list its items without opening it) or have keyboard shortcuts; to open a file, use open_file. A command found only in this menu can be run with run_in_front, element_index and menu_item."
     static let backgroundMenuRefusal = "A context menu of a background app would be drawn over the user's screen, so skfiy does not open one. " + menuAlternatives
 
     func click(_ args: Arguments) async throws -> ToolResult {
@@ -242,7 +242,7 @@ extension ComputerUse {
             guard await Input.click(at: point, pid: receiver, windowID: window, button: button, count: count, modifiers: modifiers) else {
                 throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
             }
-            return "sent a background mouse click, but Flutter apps (such as RustDesk) ignore mouse clicks while they are in the background, so expect no effect. Click their controls by element_index instead (get_app_state lists them), or use run_in_front with the same x/y (asks the user)."
+            return "sent a background mouse click, but Flutter apps (such as RustDesk) ignore mouse clicks while they are in the background, so expect no effect. Click their controls by element_index instead (get_app_state lists them), or use run_in_front with the same x/y."
         }
         if frontmostProcessID() != pid, briefFocusEnabled || focus {
             switch await briefFocusPermission(app) {
@@ -252,7 +252,7 @@ extension ComputerUse {
                         await Input.click(at: point, pid: receiver, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium)
                     }
                     if delivered {
-                        return "sent a mouse click while \(app.localizedName ?? "the app") had keyboard focus for a moment (it did not come forward; the user's front app kept its place). If the screenshot shows no change, this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
+                        return "sent a mouse click while \(app.localizedName ?? "the app") had keyboard focus for a moment (it did not come forward; the user's front app kept its place). If the screenshot shows no change, this view only takes clicks while its app is in front: run_in_front with the same x/y."
                     }
                 } else {
                     note = " The user kept typing, so it went without focus; try again in a moment."
@@ -267,17 +267,17 @@ extension ComputerUse {
         guard await Input.click(at: point, pid: receiver, windowID: window, button: button, count: count, modifiers: modifiers, chromium: chromium) else {
             throw ToolError(axMutationRefusal() ?? "The click could not be sent, so nothing was clicked.")
         }
-        let inFront = " this view only takes clicks while its app is in front: run_in_front with the same x/y (asks the user)."
+        let inFront = " this view only takes clicks while its app is in front: run_in_front with the same x/y."
         if isInWebContentAt(pid: pid, point: point) {
             // Chromium takes a click during a moment of focus; WebKit only in the front app.
             let retry = chromium && !focus
-                ? " Click again with focus: true (asks the user once for this app)."
+                ? " Click again with focus: true."
                 : " If the screenshot shows no change," + inFront
             return "sent a background mouse click, but web content ignores pointer input in background windows; for browser tabs prefer the browser_* tools." + retry + note
         }
         let retry = focus
             ? " If the screenshot still shows no change," + inFront
-            : " If the screenshot shows no change, click again with focus: true (asks the user once for this app), or use an element_index or the keyboard; failing that," + inFront
+            : " If the screenshot shows no change, click again with focus: true, or use an element_index or the keyboard; failing that," + inFront
         return "sent a background mouse click." + retry + note
     }
 
@@ -287,9 +287,8 @@ extension ComputerUse {
     private func briefFocusPermission(_ app: NSRunningApplication) async -> Bool? {
         let pid = app.processIdentifier
         if briefFocusEnabled || focusApproved.contains(pid) { return true }
-        guard let askUser else { return nil }
         let name = app.localizedName ?? "the app"
-        let answer = await askUser("\(name) may ignore background pointer or key input. Allow skfiy to give it keyboard focus briefly when sending input — only while you are not typing, without bringing it forward? (Asked once for \(name) this session.)")
+        let answer = await approve("\(name) may ignore background pointer or key input. Allow skfiy to give it keyboard focus briefly when sending input — only while you are not typing, without bringing it forward? (Asked once for \(name) this session.)")
         if answer == true {
             focusApproved.insert(pid)
         }

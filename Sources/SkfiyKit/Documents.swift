@@ -150,7 +150,7 @@ extension ComputerUse {
                 let shortcut = saveAs != nil ? "cmd+alt+shift+s" : (untitled ? "cmd+s" : "cmd+shift+s")
                 throw ToolError(candidates.isEmpty
                     ? "\(why) It has no Save menu item that opens a Save panel. Tell the user what is left to do."
-                    : "\(why) Its \(quote(candidates[0].title, limit: 40)) menu item is disabled while it is in the background. Open the Save panel with run_in_front (key \"\(shortcut)\", which asks the user), then call file_dialog with this path.")
+                    : "\(why) Its \(quote(candidates[0].title, limit: 40)) menu item is disabled while it is in the background. Open the Save panel with run_in_front (key \"\(shortcut)\"), then call file_dialog with this path.")
             }
             try throwIfRefused(guardedAXPerformAction(item.element, kAXPressAction as CFString))
             for _ in 0..<20 where FilePanel.find(in: appElement) == nil {

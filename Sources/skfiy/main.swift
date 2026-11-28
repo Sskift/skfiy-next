@@ -26,7 +26,7 @@ Setup options:
   --codex             also add skfiy to Codex (an existing Codex entry is always kept up to date)
   --no-claude, --no-codex, --no-browser   leave that part alone
   --user-data-dir <dir>                   register the bridge for a custom browser profile too
-  -e KEY=VALUE        a setting for the MCP server, e.g. -e SKFIY_LOCKED_USE=direct
+  -e KEY=VALUE        a setting for the MCP server, e.g. -e SKFIY_APPROVE=all to preapprove tool actions
 
 Locked computer use (the Mac stays locked): SKFIY_LOCKED_USE=direct in the server's environment.
 
@@ -129,18 +129,8 @@ case "mcp":
     Task { @MainActor in
         let computerUse = ComputerUse()
         let server = MCPServer(executor: computerUse)
-        switch ApprovalMode.current {
-        case .ask:
-            computerUse.askUser = { [weak server] message in await server?.confirm(message) }
-            computerUse.clientCanAsk = { [weak server] in server?.clientCanAsk ?? false }
-        case .all:
-            computerUse.askUser = { message in
-                FileHandle.standardError.write(Data("Approved without asking (SKFIY_APPROVE=all): \(message)\n".utf8))
-                return true
-            }
-            computerUse.clientCanAsk = { true }
-        }
-        // A step only the user can do (signing in, a code), so it always waits for them.
+        computerUse.askUser = { [weak server] message in await server?.confirm(message) }
+        computerUse.clientCanAsk = { [weak server] in server?.clientCanAsk ?? false }
         computerUse.waitForUser = { [weak server] message in await server?.confirm(message, field: "Done", timeout: 1800) }
         server.start()
         // The emergency stop shortcut needs an event loop; another skfiy may

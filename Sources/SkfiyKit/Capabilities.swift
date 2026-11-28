@@ -22,7 +22,7 @@ struct CapabilityInputs: Equatable {
     var emergencyStopped = false
     var accessibility = true
     var screenRecording = true
-    var clientCanAsk = false
+    var approvalAvailable = false
 
     var appName: String
     var bundleID: String?
@@ -256,12 +256,12 @@ struct CapabilityReport {
                                        detail: "Apple Screen Sharing framebuffer: PID/window-scoped click, right-click, vertical scroll and drag using the latest screenshot pixels.",
                                        limits: ["Requires Control mode, a visible window and a screenshot from the last 30 seconds. No automatic activation or brief focus.", "Horizontal wheel input is refused; use the remote scrollbar. Remote delivery is not proof of effect: inspect the returned screenshot."]))
         } else if facts.remoteSession {
-            channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks, drags and the wheel there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
+            channels.append(Capability(name: "pointer", available: false, detail: "This window is a RustDesk remote session: clicks, drags and the wheel there go to the remote computer, and skfiy sends none in the background.",
                                        limits: ["Screenshots and text recognition of it work.", RemoteSurface.foregroundCaveat]))
         } else {
             var limits: [String] = []
             if facts.chromium || facts.webContent {
-                limits.append("Web content ignores pointer events in background windows: prefer element_index or the browser_* tools; click with focus: true (asks once) or run_in_front for pixels.")
+                limits.append("Web content ignores pointer events in background windows: prefer element_index or the browser_* tools; click with focus: true or run_in_front for pixels.")
             }
             if facts.coveredChromium {
                 limits.append("The window is completely covered: once Chromium stops drawing it, it also ignores wheel input, and the screenshot cannot show whether a scroll worked.")
@@ -292,12 +292,12 @@ struct CapabilityReport {
         } else if facts.screenSharingSession {
             channels.append(Capability(name: "keyboard", available: screenshot.available && facts.screenSharingKeyboard,
                                        detail: "Direct remote keys/text through Apple Screen Sharing, bypassing local menu and clipboard emulation.",
-                                       limits: ["Requires the inspected SharedScreen to be the client's keyboard target, in Control mode, with a screenshot from the last 30 seconds.", "Printable ASCII, newline, tab and plain keys work in the background; Unicode is refused. Modifier shortcuts require run_in_front (approval and local focus/window order changes).", "Text and key arguments are redacted. The client's own clipboard synchronization setting still applies."]))
+                                       limits: ["Requires the inspected SharedScreen to be the client's keyboard target, in Control mode, with a screenshot from the last 30 seconds.", "Printable ASCII, newline, tab and plain keys work in the background; Unicode is refused. Modifier shortcuts require run_in_front (changes local focus and window order).", "Text and key arguments are redacted. The client's own clipboard synchronization setting still applies."]))
         } else if facts.screenSharingKeyWindow {
             channels.append(Capability(name: "keyboard", available: false, detail: "Screen Sharing's keyboard target is a remote screen that is not the inspected window. Inspect that connection by window id first."))
         } else if facts.remoteSession || facts.remoteKeyWindow {
             channels.append(Capability(name: "keyboard", available: false,
-                                       detail: (facts.remoteSession ? "This window is" : "The app's key window, where key events go, is") + " a RustDesk remote session: keys there go to the remote computer, and skfiy sends none in the background (run_in_front asks the user).",
+                                       detail: (facts.remoteSession ? "This window is" : "The app's key window, where key events go, is") + " a RustDesk remote session: keys there go to the remote computer, and skfiy sends none in the background.",
                                        limits: facts.remoteSession ? [RemoteSurface.foregroundCaveat] : ["Click a text field of the app's main window by element_index first: skfiy then makes that window the key window, without raising it."]))
         } else {
             var limits: [String] = []
@@ -341,13 +341,13 @@ struct CapabilityReport {
                 channels.append(Capability(name: "foreground", available: false, detail: "RustDesk is already frontmost, but background input tools still refuse remote sessions; focus alone does not establish remote input support."))
             } else if facts.frontmost {
                 channels.append(Capability(name: "foreground", available: false, detail: "The app is already frontmost: press_key reaches it directly."))
-            } else if !facts.clientCanAsk {
+            } else if !facts.approvalAvailable {
                 channels.append(Capability(name: "foreground", available: false, detail: "run_in_front needs the user's approval, and this client cannot ask them."))
             } else {
-                channels.append(Capability(name: "foreground", available: true, detail: "run_in_front brings the app forward for about a second after the user approves."))
+                channels.append(Capability(name: "foreground", available: true, detail: "run_in_front brings the app forward for about a second, then restores focus."))
             }
             channels.append(Capability(name: "file_dialog", available: protectionNote == nil, detail: protectionNote ?? "file_dialog fills Open/Save panels through accessibility; open_file and save_document need none."))
-            channels.append(Capability(name: "clipboard", available: protectionNote == nil, detail: protectionNote ?? "skfiy's own clipboard for cmd+c/x/v; read_clipboard asks the user."))
+            channels.append(Capability(name: "clipboard", available: protectionNote == nil, detail: protectionNote ?? "cmd+c/x/v uses skfiy's own clipboard. read_clipboard imports what the user copied."))
         }
 
         // Tools usable now, from the same decisions.
@@ -414,7 +414,7 @@ extension ComputerUse {
         facts.emergencyStopped = EmergencyStop.isStopped
         facts.accessibility = AXIsProcessTrusted()
         facts.screenRecording = CGPreflightScreenCaptureAccess()
-        facts.clientCanAsk = clientCanAsk?() ?? (askUser != nil)
+        facts.approvalAvailable = approvalMode == .all || (clientCanAsk?() ?? (askUser != nil))
         facts.displayAsleep = DisplayWake.anyAsleep
         facts.wakeDisplay = DisplayWake.enabled
 

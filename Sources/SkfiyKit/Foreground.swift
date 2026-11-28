@@ -80,9 +80,6 @@ extension ComputerUse {
         guard userApp != pid else {
             throw ToolError("\(name) is already the front app; use press_key.")
         }
-        guard let askUser else {
-            throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them. Tell the user what needs doing instead.")
-        }
         let user = NSRunningApplication(processIdentifier: userApp)?.localizedName ?? "your app"
         let reason = args.string("reason").map { " (\($0))" } ?? ""
         var message = "skfiy wants to bring \(name) to the front for about a second to \(action)\(reason). \(user) and your window order are restored right after; it waits until you stop typing."
@@ -92,7 +89,7 @@ extension ComputerUse {
         let approvalKey = "\(pid)|\(app.launchDate?.timeIntervalSince1970 ?? 0)|\(app.bundleIdentifier ?? "")"
         if remoteTitle != nil || !frontApproved.contains(approvalKey) {
             if remoteTitle == nil { message += " Allow this for this app for the rest of this MCP session? Each action restores your app afterwards." }
-            switch await askUser(message) {
+            switch await approve(message) {
             case nil:
                 throw ToolError("skfiy can only bring \(name) forward after the user approves it, and this client cannot ask them (or no answer came). Tell the user what needs doing instead.")
             case false?:
@@ -217,7 +214,7 @@ extension ComputerUse {
         }
         await restore()
         let restored = front() == userApp ? "gave the front back to \(user)" : "could not give the front back to \(user)"
-        return try await afterAction(app, "With the user's approval, brought \(name) forward for a moment, \(how), and \(restored).")
+        return try await afterAction(app, "Brought \(name) forward for a moment, \(how), and \(restored).")
     }
 
     /// Opens the context menu of `element` (or the menu of a menu button) in
@@ -301,7 +298,7 @@ extension ComputerUse {
             return "\(verb) \(quote(selected, limit: 60)) to skfiy's own clipboard (the user's clipboard is untouched); cmd+v pastes it in any app"
         default:
             guard let clipboard else {
-                throw ToolError("skfiy's clipboard is empty. Copy with cmd+c first, type with type_text, or take what the user copied with read_clipboard (they are asked).")
+                throw ToolError("skfiy's clipboard is empty. Copy with cmd+c first, type with type_text, or take what the user copied with read_clipboard.")
             }
             if let text, !clipboard.isRich, let string = clipboard.text {
                 try text.set(kAXSelectedTextAttribute, string as CFString)
@@ -320,7 +317,7 @@ extension ComputerUse {
             throw ToolError("The focused element is not text, and the app has no menu command for \(key) to copy it with.")
         }
         guard item.enabled else {
-            throw ToolError("\(quote(item.title, limit: 30)) is disabled while the app is in the background (nothing selected, or the command only works in the front app). run_in_front with key \"\(key)\" runs it with the user's approval; skfiy then keeps what was copied and puts the user's clipboard back.")
+            throw ToolError("\(quote(item.title, limit: 30)) is disabled while the app is in the background (nothing selected, or the command only works in the front app). run_in_front with key \"\(key)\" runs it. skfiy then keeps what was copied and restores the user's clipboard.")
         }
         let system = SystemClipboard()
         let saved = system.read()
@@ -343,7 +340,7 @@ extension ComputerUse {
             throw ToolError("skfiy's clipboard holds \(contents.summary), which only the app's Paste command can paste, and the app has none for cmd+v.")
         }
         guard item.enabled else {
-            throw ToolError("\(quote(item.title, limit: 30)) is disabled while the app is in the background. run_in_front with key \"cmd+v\" pastes skfiy's clipboard with the user's approval.")
+            throw ToolError("\(quote(item.title, limit: 30)) is disabled while the app is in the background. run_in_front with key \"cmd+v\" pastes skfiy's clipboard.")
         }
         let system = SystemClipboard()
         let saved = system.read()
@@ -364,12 +361,16 @@ extension ComputerUse {
 
     // MARK: - hand_over
 
-    /// Hands a step to the user (signing in, a code, a confirmation) and
-    /// waits until they say it is done, then optionally checks the app.
+    /// In ask mode a human handoff waits for completion and optionally checks
+    /// the app. Noninteractive sessions report the pending step to the caller.
     func handOver(_ args: Arguments) async throws -> ToolResult {
         let message = try args.requiredText("message").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else {
             throw ToolError("\"message\" must say what the user should do.")
+        }
+        if approvalMode == .all {
+            return ToolResult(text: "Manual input required: \(message)", isError: true,
+                              structuredContent: ["status": "manual_input_required", "message": message])
         }
         guard let waitForUser else {
             throw ToolError("This client cannot ask the user. Tell them in the conversation what to do, and wait for their reply.")
@@ -398,19 +399,15 @@ extension ComputerUse {
     // MARK: - read_clipboard
 
     /// Takes what the user copied into skfiy's clipboard, once they approve.
-    func readClipboard(_ args: Arguments) async throws -> ToolResult {
-        let contents = SystemClipboard().read()
+    func readClipboard(_ args: Arguments, contents: ClipboardContents) async throws -> ToolResult {
         guard !contents.isEmpty else {
             throw ToolError("The user's clipboard is empty.")
         }
         guard !contents.isConcealed else {
             throw ToolError("The user's clipboard holds something their password manager marked as secret; skfiy does not read it.")
         }
-        guard let askUser else {
-            throw ToolError("Reading the user's clipboard needs their approval, and this client cannot ask them. Ask the user to paste it into the conversation instead.")
-        }
         let reason = args.string("reason").map { " (\($0))" } ?? ""
-        switch await askUser("skfiy wants to use what you copied (\(contents.summary))\(reason).") {
+        switch await approve("skfiy wants to use what you copied (\(contents.summary))\(reason).") {
         case nil:
             throw ToolError("Reading the user's clipboard needs their approval, and this client cannot ask them (or no answer came). Ask the user to paste it into the conversation instead.")
         case false?:
@@ -419,7 +416,7 @@ extension ComputerUse {
             break
         }
         clipboard = contents
-        var text = "With the user's approval, took what they copied (\(contents.summary)) into skfiy's own clipboard; cmd+v pastes it in any app."
+        var text = "Copied \(contents.summary) into skfiy's own clipboard. Use cmd+v to paste it."
         if let string = contents.text {
             text += "\nIts text:\n" + String(string.prefix(20_000))
         }

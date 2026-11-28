@@ -205,6 +205,8 @@ struct SetupChecksTests {
         #expect(MCPServer.setupNote(accessibility: true, screenRecording: true, host: "Ghostty") == "")
         let note = MCPServer.setupNote(accessibility: false, screenRecording: true, host: "Visual Studio Code")
         #expect(note.contains("Accessibility") && !note.contains("Screen Recording") && note.contains("Visual Studio Code"))
-        #expect(note.count + ToolSchemas.instructions.count < 2400)
+        for mode in [ApprovalMode.ask, .all] {
+            #expect(note.count + ToolSchemas.instructions(for: mode).count < 2400)
+        }
     }
 }
