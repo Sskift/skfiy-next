@@ -73,12 +73,31 @@ public enum ToolSchemas {
     ]
 
     /// Outcome checking, offered on every action that changes something.
-    private static let verification: [String: Any] = [
-        "expect": ["type": "object", "description": "Check the outcome, e.g. {\"text\": \"Saved\"}: text appears, text_gone, value_changes or value (of the element or focused field), window_closed, window_opened (a title or true), changed; timeout in seconds (default 5). The result says verified, already_satisfied (condition held before input; effect unproven), no_effect, target_changed or timeout"],
-        "idempotent": ["type": "boolean", "description": "false: must not happen twice (submit, send, pay); such buttons and Return already count"],
-        "confirm_repeat": ["type": "boolean", "description": "Repeat an unverified risky action after the state showed it did nothing"],
-        "window_id": ["type": "string", "description": "The window id from get_app_state; refused if the latest screenshot is of another window, or it moved, closed or was recreated"]
-    ]
+    private static func verification(native: Bool) -> [String: Any] {
+        var conditions: [String: Any] = [
+            "text": ["type": "string", "minLength": 1, "description": "Text to appear"],
+            "text_gone": ["type": "string", "minLength": 1, "description": "Text to disappear, e.g. Loading"],
+            "value": ["type": "string", "description": "Expected field value, including an empty string"],
+            "value_changes": ["type": "boolean"], "changed": ["type": "boolean"],
+            "timeout": ["type": "number", "minimum": 0.2, "maximum": 30, "default": 5]
+        ]
+        var options: [String: Any] = [
+            "idempotent": ["type": "boolean", "description": "false: must not happen twice (submit, send, pay); such buttons and Return already count"],
+            "confirm_repeat": ["type": "boolean", "description": "Repeat an unverified risky action after the state showed it did nothing"]
+        ]
+        if native {
+            conditions["window_closed"] = ["type": "boolean"]
+            conditions["window_opened"] = ["type": ["string", "boolean"], "description": "A window title, or true for any new window"]
+            options["window_id"] = ["type": "string", "description": "The window id from get_app_state; refused if the latest screenshot is of another window, or it moved, closed or was recreated"]
+        }
+        options["expect"] = [
+            "type": ["object", "string"], "minLength": 1, "additionalProperties": false, "properties": conditions,
+            "description": "Check all given conditions or pass the text to appear as a string. " + (native
+                ? "Reports verified, already_satisfied, no_effect, target_changed or timeout."
+                : "Inspect action.status and verification.status before retrying. Password values cannot be verified.")
+        ] as [String: Any]
+        return options
+    }
 
     private static func tool(
         _ name: String,
@@ -92,20 +111,15 @@ public enum ToolSchemas {
         var traits = traits
         if recorded ?? !readOnly { traits.insert(.recorded) }
         var properties = properties
-        if traits.contains(.browserVerifiable) {
-            var browserVerification = verification
-            browserVerification.removeValue(forKey: "window_id")
-            browserVerification["expect"] = ["type": ["object", "string"], "description": "Verify text, text_gone, value, value_changes or changed in the page; optional timeout 0.2–30 s. The result separates action.status (sent/not_sent/unknown) from verification.status. Unknown effects must be inspected before retrying; passwords cannot be verified by value."]
-            properties.merge(browserVerification) { current, _ in current }
+        if !traits.isDisjoint(with: [.verifiable, .browserVerifiable]) {
+            properties.merge(verification(native: traits.contains(.verifiable))) { current, _ in current }
         }
         return Tool(name: name, traits: traits, definition: [
             "name": name,
             "description": description,
             "inputSchema": [
                 "type": "object",
-                "properties": (traits.contains(.verifiable)
-                    ? properties.merging(verification) { current, _ in current } : properties)
-                    .merging(traits.contains(.target) ? ["target": target] : [:]) { current, _ in current },
+                "properties": properties.merging(traits.contains(.target) ? ["target": target] : [:]) { current, _ in current },
                 "required": required,
                 "additionalProperties": false
             ] as [String: Any],

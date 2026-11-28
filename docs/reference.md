@@ -32,7 +32,7 @@ direct 模式在真正的 macOS 锁定会话内截取目标应用的单个窗口
 | `click` | 按元素编号或截图像素坐标点击；支持右键、中键、双击/三击、修饰键 |
 | `target`（参数） | `click`、`scroll`、`set_value`、`perform_secondary_action`、`select_text` 和网页的 `browser_click` / `browser_type` / `browser_select` / `browser_press_key` / `browser_scroll` / `browser_hover` / `browser_upload` 可以不给编号或坐标，而是描述控件：名称、类型（button、text field…）、窗口区域（`bottom-right`、`右下角`…或截图像素矩形）、所在分组（`within`：分组框、fieldset、标题下的区块）、邻近文字（`near` / `below` / `right_of`），以及精确的 `identifier`（AXIdentifier、DOM id 或 data-testid）、`row`（同一行中的文字）、`column`（列标题）。行列条件只使用实际公开的表格结构，不用视觉距离猜测。执行时按当下的界面重新查找（解锁用辅助功能树，树里没有时补上截图识别文字；锁屏用当场截图的识别文字及其位置；网页用页面元素），恰好一个时才操作；几个同样符合时不挑，什么都不做并列出候选 |
 | `locate` | 只查找不操作：按同样的描述列出当下符合的控件，各带元素编号（以及最新截图里的 x/y）、区域、所在分组；没有符合的时说明名称相同的控件现在在哪里；没有唯一结果时附窗口截图，方便区分无文字图标，也可传 `screenshot: true`。未命名控件保留为候选，工具提示可作为名称；完全遮挡的 Chromium 截图仍会提示可能过期 |
-| `expect`（参数） | `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag` 等操作都可带 `expect`：文字出现/消失、值改变、窗口打开/关闭、有变化。结果首行给出“已验证完成（verified）／操作前条件已满足、效果待确认（already_satisfied）／未观察到效果（no_effect）／目标变化（target_changed）／超时（timeout）”，未验证时附当前状态。提交、发送、付款等只能发生一次的操作 skfiy 从不自动重试；上一次未验证时，再原样重复会被拒绝，直到重新查看过状态（或明确 `confirm_repeat`） |
+| `expect`（参数） | `click`、`type_text`、`press_key`、`set_value`、`scroll`、`drag` 等操作都可带 `expect`：例如 `{"text_gone":"加载中"}` 检查这段文字消失，`{"value":""}` 检查输入框清空。文字验证也会读取目标窗口画面中绘制的文字。还可以检查值改变、窗口打开或关闭、画面变化。传入多个条件时，每个条件都必须有效才会发送操作。结果首行给出“已验证完成（verified）／操作前条件已满足、效果待确认（already_satisfied）／未观察到效果（no_effect）／目标变化（target_changed）／超时（timeout）”，未验证时附当前状态。提交、发送、付款等只能发生一次的操作 skfiy 从不自动重试；上一次未验证时，再原样重复会被拒绝，直到重新查看过状态（或明确 `confirm_repeat`） |
 | `perform_secondary_action` | 执行元素的辅助功能动作（Increment、ShowMenu、Confirm…） |
 | `set_value` | 直接设置文本框、滑块等可设值元素 |
 | `select_text` | 在文本元素中选中文字或把光标放在其前后（可用 prefix/suffix 消歧） |

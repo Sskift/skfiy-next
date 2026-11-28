@@ -80,6 +80,6 @@ public struct Arguments {
     }
 }
 
-private func isBoolean(_ number: NSNumber) -> Bool {
+func isBoolean(_ number: NSNumber) -> Bool {
     CFGetTypeID(number) == CFBooleanGetTypeID()
 }

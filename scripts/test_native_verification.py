@@ -66,8 +66,39 @@ def main():
             check('pixel-only change is verified with an unchanged AX tree',
                   not result['is_error'] and result['structured']['verification']['status'] == 'verified')
 
+            def click(button, expect):
+                view = state(client)
+                return client.call('click', app=app, element_index=index(view['text'], f'Button "{button}"'),
+                                   window_id=str(main_window), expect=expect, allow_error=True)
+
+            count = fixture.state()['counters']['paint']
+            result = click('Paint pixels', {'changed': True, 'text_gone': True})
+            check('malformed mixed expectation identifies the field before delivering a click',
+                  result['is_error'] and 'expect.text_gone' in result['text'] and fixture.state()['counters']['paint'] == count)
+            old, new = ('Preview stored', 'Preview pending') if count % 2 else ('Preview pending', 'Preview stored')
+            check('drawn label is absent from the accessibility tree', old not in state(client)['text'])
+            result = click('Paint pixels', {'text': new, 'text_gone': old, 'timeout': 5})
+            check('visible-only text appears and disappears in a window that also publishes controls',
+                  result['structured']['verification']['status'] == 'verified' and fixture.state()['counters']['paint'] == count + 1)
+            result = click('Noop', {'text': new, 'timeout': 5})
+            check('preexisting drawn text cannot verify a no-op', result['structured']['verification']['status'] == 'already_satisfied')
+            result = click('Noop', {'text_gone': new, 'timeout': 1.5})
+            check('unchanged drawn text cannot verify disappearance',
+                  result['is_error'] and result['structured']['verification']['status'] in ('no_effect', 'timeout'))
+
             other = 'Other ' + fixture.nonce
             fixture.command('open_window', title=other, input=True)
+            result = click('Noop', {'text': other, 'timeout': 1.5})
+            check('a sibling window title cannot satisfy a text expectation',
+                  result['is_error'] and result['structured']['verification']['status'] in ('no_effect', 'timeout'))
+            missing = {'app': app, 'target': 'Absent control ' + fixture.nonce}
+            counters = fixture.state()['counters']
+            result = client.call('click', **missing, window_id=str(main_window), allow_error=True)
+            check('a missing target sends no input and explains how to inspect it',
+                  result['is_error'] and 'Call locate' in result['text'] and fixture.state()['counters'] == counters)
+            recovery = client.call('locate', **missing, allow_error=True)
+            check('locate returns a fresh image of the same window for a missing label',
+                  recovery['is_error'] and recovery['images'] and main_title in recovery['text'])
             if args.baseline:
                 baseline = Client(Path(args.baseline).resolve(), env={'SKFIY_CURSOR': '0'})
                 try:

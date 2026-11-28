@@ -3,6 +3,8 @@
 ## Unreleased
 
 - `SKFIY_APPROVE=all` (also accepted as `bypass`) now covers both MCP and `skfiy call`. In this mode skfiy preapproves tool actions and tells the agent to proceed within the user's request. A human-only `hand_over` immediately returns `manual_input_required` with the outstanding step.
+- Native actions verify text drawn inside the selected window, including windows that also expose accessibility controls. Verification reports an unknown effect if the state before input could not be observed.
+- Native and browser action schemas describe the type of each `expect` condition. A malformed condition identifies the offending field and prevents input even when another condition is valid.
 
 ## 0.10.5 — 2026-11-24
 

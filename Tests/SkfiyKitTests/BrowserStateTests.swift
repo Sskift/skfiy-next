@@ -101,6 +101,10 @@ struct BrowserStateTests {
                 }
             })
             _ = try await tools.call("browser_state", Arguments(["tab_id": 7, "screenshot": false]))
+            let malformed: [String: Any] = ["changed": true, "text_gone": true]
+            let refused = try await tools.call("browser_click", Arguments(["tab_id": 7, "index": 0, "expect": malformed]))
+            #expect(refused.isError && refused.text.contains("expect.text_gone") && !sent)
+            #expect((refused.structuredContent?["action"] as? [String: String])?["status"] == "not_sent")
             let expectation: [String: Any] = loading ? ["text_gone": "Ready", "timeout": 0.2] : ["changed": true, "timeout": 0.2]
             let result = try await tools.call("browser_click", Arguments(["tab_id": 7, "index": 0, "expect": expectation]))
             #expect(result.isError && sent)

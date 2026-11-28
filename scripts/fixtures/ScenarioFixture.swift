@@ -69,6 +69,7 @@ final class RecordingWindow: NSWindow {
 final class Canvas: NSView {
     var tiny = "tiny" { didSet { needsDisplay = true } }
     var phase: Double? { didSet { needsDisplay = true } }
+    var painted = false { didSet { needsDisplay = true } }
     var clicked: ((CGPoint, Bool) -> Void)?
     let target = NSRect(x: 230, y: 20, width: 10, height: 10)
 
@@ -82,6 +83,8 @@ final class Canvas: NSView {
         NSColor.black.setStroke()
         NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5)).stroke()
         ("CANVAS" as NSString).draw(at: NSPoint(x: 10, y: 8), withAttributes: [.font: NSFont.boldSystemFont(ofSize: 18)])
+        ((painted ? "Preview stored" : "Preview pending") as NSString).draw(at: NSPoint(x: 10, y: 115),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 20), .foregroundColor: NSColor.black])
         (tiny.replacingOccurrences(of: "tiny", with: "tiny6") as NSString).draw(at: NSPoint(x: 10, y: 40), withAttributes: [.font: NSFont.systemFont(ofSize: 6), .foregroundColor: NSColor.darkGray])
         (tiny.replacingOccurrences(of: "tiny", with: "tiny7") as NSString).draw(at: NSPoint(x: 10, y: 52), withAttributes: [.font: NSFont.systemFont(ofSize: 7), .foregroundColor: NSColor.darkGray])
         NSColor.systemRed.setFill()
@@ -217,6 +220,7 @@ final class Scenario: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         switch name {
         case "paint":
             // Change only pixels, leaving all AX labels and values unchanged.
+            canvas.painted = !count.isMultiple(of: 2)
             canvas.phase = count.isMultiple(of: 2) ? 0.1 : 0.8
         case "noop": break  // deliberately nothing visible
         case "submit":

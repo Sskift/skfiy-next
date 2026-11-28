@@ -61,7 +61,7 @@ extension ComputerUse {
                 cache = updated
                 return observation
             }
-            return await unlockedObservation(target, wantText: wantText, wantPixels: expectation.anyChange, windowsOnly: !wantText && !expectation.anyChange && !expectation.valueChanges && expectation.value == nil)
+            return await unlockedObservation(target, expectation: expectation)
         }
         let before = await observe()
         if Task.isCancelled { return ToolResult(text: "The request was cancelled. Nothing was sent.", isError: true) }
@@ -139,7 +139,7 @@ extension ComputerUse {
                             element: index.flatMap { session?.elements[safe: $0] })
     }
 
-    private func unlockedObservation(_ target: ActionTarget, wantText: Bool, wantPixels: Bool, windowsOnly: Bool = false) async -> VerifyObservation {
+    private func unlockedObservation(_ target: ActionTarget, expectation: ActionExpectation) async -> VerifyObservation {
         var observation = VerifyObservation(text: "", windows: [:], targetPresent: true)
         guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else {
             observation.interruption = "the app quit"
@@ -167,35 +167,35 @@ extension ComputerUse {
             observation.windows[windowID(of: window).map(String.init) ?? "title:" + title] = title
         }
         if let id = target.window { observation.targetPresent = observation.windows[String(id)] != nil }
-        if windowsOnly { return observation }
+        let requestedText = [expectation.text, expectation.textGone].compactMap { $0 }
+        if requestedText.isEmpty && !expectation.anyChange && !expectation.valueChanges && expectation.value == nil { return observation }
         // The window the action was aimed at (an inspected one is not the
         // app's focused window), read on its own.
         let query = target.window.map(String.init)
         if let snapshot = try? buildSnapshot(app: app, appElement: appElement, windowQuery: query) {
-            observation.text = snapshot.text
-            observation.treeText = snapshot.body.joined(separator: "\n")
-            if wantPixels, observation.targetPresent {
-                // A canvas/remote framebuffer may change with an identical
-                // AX tree. Capture only this window, never the app's current
-                // key window or the composited desktop.
-                if let shown = snapshot.shownWindow, let window = independentWindow(shown, pid: target.pid) {
-                    do {
-                        let (image, _) = try await captureDirectLockedImage(window, children: true)
-                        observation.pixels = PixelFingerprint(image, region: nil)
-                    } catch {
-                        observation.changeUnavailable = "the window's pixels could not be captured: \(error)"
+            observation.text = snapshot.body.prefix(snapshot.contentLineCount).joined(separator: "\n")
+            observation.treeText = observation.text
+            // A window can publish its buttons through AX and paint the result
+            // on a canvas. A missing AX label alone cannot establish absence.
+            let needsOCR = requestedText.contains { !TextMatch.contains(observation.text, $0) }
+            if observation.targetPresent, needsOCR || expectation.anyChange {
+                do {
+                    guard let shown = snapshot.shownWindow, !appIsHidden(app), shown.bool(kAXMinimizedAttribute) != true,
+                          let window = independentWindow(shown, pid: target.pid) else {
+                        throw ToolError("the window is hidden, minimized or unavailable for capture")
                     }
+                    let (image, geometry) = try await captureDirectLockedImage(window,
+                        maxScale: needsOCR ? backingScale(for: window.frame) : 1, modelLimits: !needsOCR, children: true)
+                    observation.pixels = PixelFingerprint(image)
+                    if observation.pixels == nil { observation.changeUnavailable = "the window's pixels could not be compared" }
+                    if needsOCR {
+                        let lines = try await TextRecognition.recognizeBoth(image, showing: geometry.rect)
+                        observation.text += "\n" + TextRecognition.sorted(lines).map(\.text).joined(separator: "\n")
+                    }
+                } catch {
+                    if needsOCR { observation.unobservable = "the window's visible text could not be checked (\(error))" }
+                    else { observation.changeUnavailable = "the window's pixels could not be captured (\(error))" }
                 }
-                if observation.pixels == nil, observation.changeUnavailable == nil {
-                    observation.changeUnavailable = "the window's pixels were unavailable"
-                }
-            }
-            if wantText, snapshot.opaque, let region = snapshot.chosenWindow?.frame ?? appRegion(pid: target.pid, focusedWindow: snapshot.focusedWindowFrame),
-               let lines = try? await recognizeView(pid: target.pid, window: snapshot.chosenWindow, rect: region) {
-                observation.text += "\n" + lines.map(\.text).joined(separator: "\n")
-            }
-            if wantText, snapshot.opaque, observation.text == snapshot.text {
-                observation.unobservable = "the window's text could not be recognized"
             }
         } else if observation.targetPresent {
             observation.unobservable = "the window's accessibility state could not be read"

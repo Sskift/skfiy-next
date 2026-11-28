@@ -416,6 +416,10 @@ chrome.scripting.executeScript = async options => {
             a.call('browser_state', screenshot=False, **target)
             verified = a.call('browser_click', target='Submit', expect={'text': 'Saved 2'}, **target)
             check('browser expect verifies a new success message', verified['structured']['verification']['status'] == 'verified' and receipts.get('submit') == 2)
+            malformed = a.call('browser_click', target='Submit', expect={'text_gone': True, 'changed': True}, allow_error=True, **target)
+            check('a malformed condition alongside a valid one never submits',
+                  malformed['is_error'] and malformed['structured']['action']['status'] == 'not_sent'
+                  and 'expect.text_gone' in malformed['text'] and receipts.get('submit') == 2)
             existing = a.call('browser_click', target='Noop', expect={'text': 'Saved 2'}, allow_error=True, **target)
             check('browser preexisting condition stays unverified', existing['is_error'] and existing['structured']['verification']['status'] == 'already_satisfied')
             # A late final observation now times out instead of overrunning the budget.

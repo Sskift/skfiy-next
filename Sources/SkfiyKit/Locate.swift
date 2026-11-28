@@ -231,6 +231,7 @@ extension ComputerUse {
             if !outcome.elsewhere.isEmpty {
                 text += " Matching the name/kind alone, elsewhere:\n" + outcome.elsewhere.prefix(10).map { "  " + line($0.0, $0.1, index: index($0.1)) }.joined(separator: "\n")
             }
+            if acting { text += "\nCall locate with the same app and target to inspect the window's current screenshot and choose a visible label." }
             return text
         }
         let listed = outcome.matches.prefix(15).enumerated().map { "  \($0.offset + 1). " + line($0.element.0, $0.element.1, index: index($0.element.1)) }

@@ -20,30 +20,53 @@ struct ActionExpectation: Equatable {
 
     init?(_ raw: Any?) throws {
         guard let raw else { return nil }
-        if let text = raw as? String {
-            self.text = text
-            return
-        }
-        guard let object = raw as? [String: Any] else {
+        let object: [String: Any]
+        if let shorthand = raw as? String {
+            object = ["text": shorthand]
+        } else if let fields = raw as? [String: Any] {
+            object = fields
+        } else {
             throw ToolError("expect is an object such as {\"text\": \"Saved\"}, {\"text_gone\": \"Loading\"}, {\"value_changes\": true}, {\"window_closed\": true}, {\"window_opened\": \"Settings\"} or {\"changed\": true}, with an optional timeout in seconds.")
         }
         let known: Set<String> = ["text", "text_gone", "value_changes", "value", "window_closed", "window_opened", "changed", "timeout"]
         if let unknown = object.keys.first(where: { !known.contains($0) }) {
             throw ToolError("expect has no \"\(unknown)\"; use text, text_gone, value_changes, value, window_closed, window_opened, changed, timeout.")
         }
-        let string = { (key: String) -> String? in (object[key] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
-        text = string("text")
-        textGone = string("text_gone")
-        valueChanges = object["value_changes"] as? Bool ?? false
-        value = object["value"] as? String
-        windowClosed = object["window_closed"] as? Bool ?? false
-        if let opened = object["window_opened"] {
-            windowOpened = (opened as? String) ?? ((opened as? Bool) == true ? "" : nil)
+        func textCondition(_ key: String, example: String) throws -> String? {
+            guard let raw = object[key] else { return nil }
+            guard let string = raw as? String, !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ToolError("expect.\(key) must be a non-empty string, for example {\"\(key)\": \"\(example)\"}.")
+            }
+            return string
         }
-        anyChange = object["changed"] as? Bool ?? false
-        if let seconds = (object["timeout"] as? NSNumber)?.doubleValue {
-            guard seconds.isFinite, (0.2...30).contains(seconds) else { throw ToolError("expect.timeout must be between 0.2 and 30 seconds.") }
-            timeout = seconds
+        func flag(_ key: String) throws -> Bool {
+            guard let raw = object[key] else { return false }
+            guard let number = raw as? NSNumber, isBoolean(number) else {
+                throw ToolError("expect.\(key) must be true or false.")
+            }
+            return number.boolValue
+        }
+        text = try textCondition("text", example: "Saved")
+        textGone = try textCondition("text_gone", example: "Loading")
+        if let raw = object["value"] {
+            guard let string = raw as? String else {
+                throw ToolError("expect.value must be a string. Use an empty string to check that a field was cleared.")
+            }
+            value = string
+        }
+        valueChanges = try flag("value_changes")
+        windowClosed = try flag("window_closed")
+        if let raw = object["window_opened"] {
+            if let title = raw as? String { windowOpened = title }
+            else if let number = raw as? NSNumber, isBoolean(number) { windowOpened = number.boolValue ? "" : nil }
+            else { throw ToolError("expect.window_opened must be a window title or a boolean.") }
+        }
+        anyChange = try flag("changed")
+        if let raw = object["timeout"] {
+            guard let number = raw as? NSNumber, !isBoolean(number), (0.2...30).contains(number.doubleValue) else {
+                throw ToolError("expect.timeout must be a number between 0.2 and 30 seconds.")
+            }
+            timeout = number.doubleValue
         }
         guard !isEmpty else { throw ToolError("expect needs at least one condition.") }
     }
@@ -62,7 +85,7 @@ struct ActionExpectation: Equatable {
 
 /// One look at the target after (or before) an action, in either mode.
 struct VerifyObservation {
-    /// Accessibility text of the window (unlocked), or text recognized in it (locked).
+    /// Accessibility text and any text recognized in the target window.
     var text: String
     /// Pixels for visual changes; unlocked observations also compare the AX tree.
     var pixels: PixelFingerprint?
@@ -137,7 +160,7 @@ extension ActionExpectation {
         if let interruption = before.interruption {
             return Verdict(status: .targetChanged, detail: interruption, seconds: 0)
         }
-        let satisfiedBefore = before.unobservable == nil && met(before: before, now: before)
+        let satisfiedBefore = met(before: before, now: before)
         func expired(_ current: VerifyObservation, changed: Bool) -> Verdict {
             if changed {
                 let stale = current.unobservable.map { "; but \($0), so what it shows may be out of date" } ?? ""
@@ -176,6 +199,9 @@ extension ActionExpectation {
             }
             changed = changed || current.differs(from: before)
             if current.unobservable == nil, met(before: before, now: current) {
+                if let reason = before.unobservable {
+                    return Verdict(status: .timeout, detail: "the condition holds now, but the state before the action could not be confirmed (\(reason)). The action's effect is unknown", seconds: now() - started)
+                }
                 return Verdict(status: satisfiedBefore ? .alreadySatisfied : .verified,
                                detail: satisfiedBefore ? "the expected condition was already satisfied before the action; this does not prove the action took effect" : summary,
                                seconds: now() - started)

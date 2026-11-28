@@ -54,6 +54,10 @@ struct VerificationTests {
             return observation
         }
         #expect(verdict.status == .timeout)
+        var unreadable = look("")
+        unreadable.unobservable = "capture unavailable"
+        let recovered = await run(gone, before: unreadable) { _ in look("") }
+        #expect(recovered.status == .timeout && recovered.detail.contains("before the action"))
     }
 
     @Test func preexistingConditionDoesNotVerifyTheAction() async {
@@ -75,6 +79,41 @@ struct VerificationTests {
         #expect(throws: ToolError.self) { try ActionExpectation(["timeout": 99, "text": "x"]) }
         #expect(throws: ToolError.self) { try ActionExpectation(["timeout": 2]) }
         #expect(full.summary == "\"Loading\" disappears and a window opens")
+        let emptyField = try #require(try ActionExpectation(["value": "", "changed": false, "window_opened": false]))
+        #expect(emptyField.value == "" && !emptyField.anyChange && emptyField.windowOpened == nil)
+    }
+
+    @Test func invalidConditionsAreRejectedEvenAlongsideAValidOne() throws {
+        let invalid: [(String, Any)] = [
+            ("text", "  "), ("text_gone", true), ("text_gone", NSNull()), ("value", 7),
+            ("value_changes", "true"), ("changed", NSNumber(value: 1)), ("window_closed", 0),
+            ("window_opened", [true]), ("timeout", "2"), ("timeout", true), ("timeout", Double.nan)
+        ]
+        for (key, value) in invalid {
+            var fields: [String: Any] = ["text": "Saved", "changed": true]
+            fields[key] = value
+            do {
+                _ = try ActionExpectation(fields)
+                Issue.record("Accepted invalid expect.\(key)")
+            } catch let error as ToolError {
+                #expect(error.description.contains("expect.\(key)"))
+            }
+        }
+        #expect(throws: ToolError.self) { try ActionExpectation(" \n") }
+    }
+
+    @Test func toolSchemasDescribeNativeAndBrowserConditions() throws {
+        for tool in ToolSchemas.all + ToolSchemas.browser where !tool.traits.isDisjoint(with: [.verifiable, .browserVerifiable]) {
+            let schema = try #require(tool.definition["inputSchema"] as? [String: Any])
+            let properties = try #require(schema["properties"] as? [String: Any])
+            let expect = try #require(properties["expect"] as? [String: Any])
+            let fields = try #require(expect["properties"] as? [String: [String: Any]])
+            #expect(expect["type"] as? [String] == ["object", "string"])
+            #expect(expect["additionalProperties"] as? Bool == false)
+            #expect(fields["text_gone"]?["type"] as? String == "string")
+            #expect(fields["value_changes"]?["type"] as? String == "boolean")
+            #expect((fields["window_opened"] != nil) == tool.traits.contains(.verifiable))
+        }
     }
 
     private func run(_ expectation: ActionExpectation, before: VerifyObservation, script: @escaping (Double) -> VerifyObservation) async -> Verdict {

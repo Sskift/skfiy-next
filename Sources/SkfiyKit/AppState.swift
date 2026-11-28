@@ -304,6 +304,8 @@ extension ComputerUse {
     struct Snapshot {
         var header: [String]
         var body: [String]
+        /// Accessibility lines for the inspected window and menus, before the list of other windows.
+        var contentLineCount: Int
         var elements: [AXUIElement]
         var focusedWindowFrame: CGRect?
         var chosenWindow: AXUIElement?
@@ -431,6 +433,7 @@ extension ComputerUse {
 
         // Other windows, so the model can inspect one with get_app_state(window:).
         // AXWindows can include non-windows, e.g. Finder's desktop scroll area.
+        let contentLineCount = renderer.lines.count
         let otherWindows = windows.filter { window in
             window.string(kAXRoleAttribute) == kAXWindowRole
                 && (focusedWindow.map { !CFEqual($0, window) } ?? true)
@@ -494,7 +497,7 @@ extension ComputerUse {
         } else if opaqueWindow {
             header.append("This window publishes no accessibility elements (custom-drawn UI or an embedded web view). Its text is recognized from the screenshot below, with positions for x/y clicks; also use the menu bar and keyboard shortcuts.")
         }
-        return Snapshot(header: header, body: renderer.lines, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow,
+        return Snapshot(header: header, body: renderer.lines, contentLineCount: contentLineCount, elements: elements, focusedWindowFrame: focusedFrame, chosenWindow: chosenWindow,
                         windows: windowTitles, opaque: opaqueWindow, shownWindow: focusedWindow)
     }
 
